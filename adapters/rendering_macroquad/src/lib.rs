@@ -142,7 +142,7 @@ impl RenderingBackend for MacroquadBackend {
                     wall_color,
                 );
 
-                let bug_radius = tile_step * 0.5;
+                let bug_radius = subcell_step * 0.5;
                 for BugPresentation { column, row, color } in &scene.bugs {
                     let bug_center_x = grid_offset_x + (*column as f32 + 0.5) * tile_step;
                     let bug_center_y = grid_offset_y + (*row as f32 + 0.5) * tile_step;
