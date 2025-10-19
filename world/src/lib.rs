@@ -11,9 +11,9 @@
 
 use maze_defence_core::WELCOME_BANNER;
 
-const GRID_COLUMNS: u32 = 100;
-const GRID_ROWS: u32 = 100;
-const TILE_LENGTH: f32 = 100.0;
+const DEFAULT_GRID_COLUMNS: u32 = 10;
+const DEFAULT_GRID_ROWS: u32 = 10;
+const DEFAULT_TILE_LENGTH: f32 = 100.0;
 
 /// Describes the discrete tile layout of the world.
 #[derive(Debug)]
@@ -76,9 +76,15 @@ impl World {
     /// Creates a new Maze Defence world ready for simulation.
     #[must_use]
     pub fn new() -> Self {
+        Self::with_tile_grid(DEFAULT_GRID_COLUMNS, DEFAULT_GRID_ROWS, DEFAULT_TILE_LENGTH)
+    }
+
+    /// Creates a Maze Defence world with the provided tile grid definition.
+    #[must_use]
+    pub fn with_tile_grid(columns: u32, rows: u32, tile_length: f32) -> Self {
         Self {
             banner: WELCOME_BANNER,
-            tile_grid: TileGrid::new(GRID_COLUMNS, GRID_ROWS, TILE_LENGTH),
+            tile_grid: TileGrid::new(columns, rows, tile_length),
         }
     }
 }

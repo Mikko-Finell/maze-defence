@@ -5,6 +5,7 @@ edition.workspace = true
 
 [dependencies]
 anyhow.workspace = true
+clap = { version = "4.4", features = ["derive"] }
 maze-defence-system-bootstrap = { path = "../../systems/bootstrap" }
 maze-defence-world = { path = "../../world" }
 maze-defence-rendering = { path = "../rendering" }
