@@ -3,6 +3,8 @@ members = [
     "core",
     "world",
     "systems/bootstrap",
+    "adapters/rendering",
+    "adapters/rendering_macroquad",
     "adapters/cli",
 ]
 resolver = "2"
