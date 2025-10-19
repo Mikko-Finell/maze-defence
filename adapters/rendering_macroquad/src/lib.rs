@@ -10,6 +10,7 @@
 //! Macroquad-backed rendering adapter for Maze Defence.
 
 use anyhow::Result;
+use macroquad::input::{is_key_pressed, KeyCode};
 use maze_defence_rendering::{Presentation, RenderingBackend};
 
 /// Rendering backend implemented on top of macroquad.
@@ -33,6 +34,10 @@ impl RenderingBackend for MacroquadBackend {
             let background = to_macroquad_color(clear_color);
 
             loop {
+                if is_key_pressed(KeyCode::Escape) || is_key_pressed(KeyCode::Q) {
+                    break;
+                }
+
                 macroquad::window::clear_background(background);
 
                 let screen_width = macroquad::window::screen_width();
