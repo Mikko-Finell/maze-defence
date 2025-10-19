@@ -11,13 +11,13 @@
 
 use std::{collections::VecDeque, time::Duration};
 
-use maze_defence_core::{BugId, Command, Direction, Event, GridCell, WELCOME_BANNER};
+use maze_defence_core::{BugId, CellCoord, Command, Direction, Event, TileCoord, WELCOME_BANNER};
 
 const BUG_GENERATION_SEED: u64 = 0x42f0_e1eb_d4a5_3c21;
 const BUG_COUNT: usize = 4;
 
-const DEFAULT_GRID_COLUMNS: u32 = 10;
-const DEFAULT_GRID_ROWS: u32 = 10;
+const DEFAULT_GRID_COLUMNS: TileCoord = TileCoord::new(10);
+const DEFAULT_GRID_ROWS: TileCoord = TileCoord::new(10);
 const DEFAULT_TILE_LENGTH: f32 = 100.0;
 
 const STEP_QUANTUM: Duration = Duration::from_secs(1);
@@ -25,15 +25,15 @@ const STEP_QUANTUM: Duration = Duration::from_secs(1);
 /// Describes the discrete tile layout of the world.
 #[derive(Debug)]
 pub struct TileGrid {
-    columns: u32,
-    rows: u32,
+    columns: TileCoord,
+    rows: TileCoord,
     tile_length: f32,
 }
 
 impl TileGrid {
     /// Creates a new tile grid description.
     #[must_use]
-    pub(crate) const fn new(columns: u32, rows: u32, tile_length: f32) -> Self {
+    pub(crate) const fn new(columns: TileCoord, rows: TileCoord, tile_length: f32) -> Self {
         Self {
             columns,
             rows,
@@ -43,13 +43,13 @@ impl TileGrid {
 
     /// Number of columns contained in the grid.
     #[must_use]
-    pub const fn columns(&self) -> u32 {
+    pub const fn columns(&self) -> TileCoord {
         self.columns
     }
 
     /// Number of rows contained in the grid.
     #[must_use]
-    pub const fn rows(&self) -> u32 {
+    pub const fn rows(&self) -> TileCoord {
         self.rows
     }
 
@@ -62,13 +62,13 @@ impl TileGrid {
     /// Total width of the grid measured in world units.
     #[must_use]
     pub const fn width(&self) -> f32 {
-        self.columns as f32 * self.tile_length
+        self.columns.get() as f32 * self.tile_length
     }
 
     /// Total height of the grid measured in world units.
     #[must_use]
     pub const fn height(&self) -> f32 {
-        self.rows as f32 * self.tile_length
+        self.rows.get() as f32 * self.tile_length
     }
 }
 
@@ -81,7 +81,7 @@ pub struct Wall {
 impl Wall {
     /// Creates a new wall aligned with the provided grid dimensions.
     #[must_use]
-    pub(crate) fn new(columns: u32, rows: u32) -> Self {
+    pub(crate) fn new(columns: TileCoord, rows: TileCoord) -> Self {
         Self {
             hole: WallHole::aligned_with_grid(columns, rows),
         }
@@ -101,7 +101,7 @@ pub struct WallHole {
 }
 
 impl WallHole {
-    fn aligned_with_grid(columns: u32, rows: u32) -> Self {
+    fn aligned_with_grid(columns: TileCoord, rows: TileCoord) -> Self {
         Self {
             cells: hole_cells(columns, rows),
         }
@@ -117,26 +117,26 @@ impl WallHole {
 /// Discrete cell that composes part of the wall hole.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct WallCell {
-    column: u32,
-    row: u32,
+    column: TileCoord,
+    row: TileCoord,
 }
 
 impl WallCell {
     /// Creates a new wall cell located at the provided column and row.
     #[must_use]
-    pub const fn new(column: u32, row: u32) -> Self {
+    pub const fn new(column: TileCoord, row: TileCoord) -> Self {
         Self { column, row }
     }
 
     /// Column that contains the cell relative to the tile grid.
     #[must_use]
-    pub const fn column(&self) -> u32 {
+    pub const fn column(&self) -> TileCoord {
         self.column
     }
 
     /// Row that contains the cell relative to the tile grid.
     #[must_use]
-    pub const fn row(&self) -> u32 {
+    pub const fn row(&self) -> TileCoord {
         self.row
     }
 }
@@ -147,7 +147,7 @@ pub struct World {
     banner: &'static str,
     tile_grid: TileGrid,
     wall: Wall,
-    wall_targets: Vec<GridCell>,
+    wall_targets: Vec<CellCoord>,
     bugs: Vec<Bug>,
     occupancy: OccupancyGrid,
     reservations: ReservationFrame,
@@ -159,12 +159,12 @@ impl World {
     #[must_use]
     pub fn new() -> Self {
         let tile_grid = TileGrid::new(DEFAULT_GRID_COLUMNS, DEFAULT_GRID_ROWS, DEFAULT_TILE_LENGTH);
-        let wall = Wall::new(tile_grid.columns, tile_grid.rows);
+        let wall = Wall::new(tile_grid.columns(), tile_grid.rows());
         let wall_targets = wall_target_cells(&wall);
         let mut world = Self {
             banner: WELCOME_BANNER,
             bugs: Vec::new(),
-            occupancy: OccupancyGrid::new(tile_grid.columns, tile_grid.rows),
+            occupancy: OccupancyGrid::new(tile_grid.columns().get(), tile_grid.rows().get()),
             reservations: ReservationFrame::new(),
             wall,
             wall_targets,
@@ -176,7 +176,7 @@ impl World {
     }
 
     fn reset_bugs(&mut self) {
-        let generated = generate_bugs(self.tile_grid.columns, self.tile_grid.rows);
+        let generated = generate_bugs(self.tile_grid.columns(), self.tile_grid.rows());
         self.bugs = generated
             .into_iter()
             .map(|seed| Bug::from_seed(seed.id, seed.cell, seed.color))
@@ -279,7 +279,7 @@ pub fn apply(world: &mut World, command: Command, out_events: &mut Vec<Event>) {
             world.tile_grid = TileGrid::new(columns, rows, tile_length);
             world.wall = Wall::new(columns, rows);
             world.wall_targets = wall_target_cells(&world.wall);
-            world.occupancy = OccupancyGrid::new(columns, rows);
+            world.occupancy = OccupancyGrid::new(columns.get(), rows.get());
             world.reset_bugs();
 
             for bug in world.bugs.iter_mut() {
@@ -300,8 +300,8 @@ pub fn apply(world: &mut World, command: Command, out_events: &mut Vec<Event>) {
             }
         }
         Command::SetBugPath { bug_id, path } => {
-            let columns = world.tile_grid.columns;
-            let rows = world.tile_grid.rows;
+            let columns = world.tile_grid.columns();
+            let rows = world.tile_grid.rows();
             if let Some(bug) = world.bug_mut(bug_id) {
                 if bug.assign_path(path, columns, rows) {
                     if bug.next_step().is_some() {
@@ -328,7 +328,7 @@ pub mod query {
     use std::time::Duration;
 
     use super::{OccupancyGrid, TileGrid, Wall, WallHole, World};
-    use maze_defence_core::{BugId, GridCell};
+    use maze_defence_core::{BugId, CellCoord};
 
     /// Retrieves the welcome banner that adapters may display to players.
     #[must_use]
@@ -384,7 +384,7 @@ pub mod query {
 
     /// Enumerates the wall-hole cells that are currently unoccupied.
     #[must_use]
-    pub fn available_wall_cells(world: &World) -> Vec<GridCell> {
+    pub fn available_wall_cells(world: &World) -> Vec<CellCoord> {
         world
             .wall_targets
             .iter()
@@ -417,11 +417,11 @@ pub mod query {
         /// Unique identifier assigned to the bug.
         pub id: BugId,
         /// Grid cell currently occupied by the bug.
-        pub cell: GridCell,
+        pub cell: CellCoord,
         /// Appearance assigned to the bug.
         pub color: super::BugColor,
         /// Head of the queued path, if any.
-        pub next_hop: Option<GridCell>,
+        pub next_hop: Option<CellCoord>,
         /// Indicates whether the bug accrued enough time to advance.
         pub ready_for_step: bool,
         /// Indicates whether the world awaits a new path for the bug.
@@ -439,7 +439,7 @@ pub mod query {
     impl<'a> OccupancyView<'a> {
         /// Returns the bug occupying the provided cell, if any.
         #[must_use]
-        pub fn occupant(&self, cell: GridCell) -> Option<BugId> {
+        pub fn occupant(&self, cell: CellCoord) -> Option<BugId> {
             self.grid
                 .index(cell)
                 .and_then(|index| self.grid.cells().get(index).copied().flatten())
@@ -447,7 +447,7 @@ pub mod query {
 
         /// Reports whether the cell is currently free for traversal.
         #[must_use]
-        pub fn is_free(&self, cell: GridCell) -> bool {
+        pub fn is_free(&self, cell: CellCoord) -> bool {
             self.grid.can_enter(cell)
         }
 
@@ -501,15 +501,15 @@ impl BugColor {
 #[derive(Clone, Debug)]
 struct Bug {
     id: BugId,
-    cell: GridCell,
+    cell: CellCoord,
     color: BugColor,
-    path: VecDeque<GridCell>,
+    path: VecDeque<CellCoord>,
     accumulator: Duration,
     path_needed: bool,
 }
 
 impl Bug {
-    fn from_seed(id: BugId, cell: GridCell, color: BugColor) -> Self {
+    fn from_seed(id: BugId, cell: CellCoord, color: BugColor) -> Self {
         Self {
             id,
             cell,
@@ -520,10 +520,12 @@ impl Bug {
         }
     }
 
-    fn assign_path(&mut self, path: Vec<GridCell>, columns: u32, rows: u32) -> bool {
-        let deque: VecDeque<GridCell> = path.into();
+    fn assign_path(&mut self, path: Vec<CellCoord>, columns: TileCoord, rows: TileCoord) -> bool {
+        let deque: VecDeque<CellCoord> = path.into();
         if let Some(first) = deque.front().copied() {
-            if !is_valid_cell(first, columns, rows.saturating_add(1)) {
+            let column_bound = columns.get();
+            let row_bound = rows.get().saturating_add(1);
+            if !is_valid_cell(first, column_bound, row_bound) {
                 return false;
             }
 
@@ -536,11 +538,11 @@ impl Bug {
         true
     }
 
-    fn next_step(&self) -> Option<GridCell> {
+    fn next_step(&self) -> Option<CellCoord> {
         self.path.front().copied()
     }
 
-    fn advance(&mut self, destination: GridCell) {
+    fn advance(&mut self, destination: CellCoord) {
         let _ = self.path.pop_front();
         self.cell = destination;
     }
@@ -568,7 +570,7 @@ impl Bug {
 #[derive(Clone, Copy, Debug)]
 struct BugSeed {
     id: BugId,
-    cell: GridCell,
+    cell: CellCoord,
     color: BugColor,
 }
 
@@ -638,13 +640,13 @@ impl OccupancyGrid {
         }
     }
 
-    pub(crate) fn can_enter(&self, cell: GridCell) -> bool {
+    pub(crate) fn can_enter(&self, cell: CellCoord) -> bool {
         self.index(cell).map_or(true, |index| {
             self.cells.get(index).copied().unwrap_or(None).is_none()
         })
     }
 
-    fn occupy(&mut self, bug_id: BugId, cell: GridCell) {
+    fn occupy(&mut self, bug_id: BugId, cell: CellCoord) {
         if let Some(index) = self.index(cell) {
             if let Some(slot) = self.cells.get_mut(index) {
                 *slot = Some(bug_id);
@@ -652,7 +654,7 @@ impl OccupancyGrid {
         }
     }
 
-    fn vacate(&mut self, cell: GridCell) {
+    fn vacate(&mut self, cell: CellCoord) {
         if let Some(index) = self.index(cell) {
             if let Some(slot) = self.cells.get_mut(index) {
                 *slot = None;
@@ -660,7 +662,7 @@ impl OccupancyGrid {
         }
     }
 
-    pub(crate) fn index(&self, cell: GridCell) -> Option<usize> {
+    pub(crate) fn index(&self, cell: CellCoord) -> Option<usize> {
         if cell.column() < self.columns && cell.row() < self.rows {
             let row = usize::try_from(cell.row()).ok()?;
             let column = usize::try_from(cell.column()).ok()?;
@@ -680,25 +682,31 @@ impl OccupancyGrid {
     }
 }
 
-fn is_valid_cell(cell: GridCell, columns: u32, rows: u32) -> bool {
+fn is_valid_cell(cell: CellCoord, columns: u32, rows: u32) -> bool {
     cell.column() < columns && cell.row() < rows
 }
 
-fn hole_cells(columns: u32, rows: u32) -> Vec<WallCell> {
-    if columns == 0 || rows == 0 {
+fn hole_cells(columns: TileCoord, rows: TileCoord) -> Vec<WallCell> {
+    let column_count = columns.get();
+    let row_count = rows.get();
+
+    if column_count == 0 || row_count == 0 {
         return Vec::new();
     }
 
-    let center_column = if columns % 2 == 0 {
-        (columns - 1) / 2
+    let center_column = if column_count % 2 == 0 {
+        (column_count - 1) / 2
     } else {
-        columns / 2
+        column_count / 2
     };
 
-    vec![WallCell::new(center_column, rows)]
+    vec![WallCell::new(
+        TileCoord::new(center_column),
+        TileCoord::new(row_count),
+    )]
 }
 
-fn direction_between(from: GridCell, to: GridCell) -> Option<Direction> {
+fn direction_between(from: CellCoord, to: CellCoord) -> Option<Direction> {
     let column_diff = from.column().abs_diff(to.column());
     let row_diff = from.row().abs_diff(to.row());
 
@@ -719,20 +727,23 @@ fn direction_between(from: GridCell, to: GridCell) -> Option<Direction> {
     }
 }
 
-fn wall_target_cells(wall: &Wall) -> Vec<GridCell> {
+fn wall_target_cells(wall: &Wall) -> Vec<CellCoord> {
     wall.hole()
         .cells()
         .iter()
-        .map(|cell| GridCell::new(cell.column(), cell.row()))
+        .map(|cell| CellCoord::new(cell.column().get(), cell.row().get()))
         .collect()
 }
 
-fn generate_bugs(columns: u32, rows: u32) -> Vec<BugSeed> {
-    if columns == 0 || rows == 0 {
+fn generate_bugs(columns: TileCoord, rows: TileCoord) -> Vec<BugSeed> {
+    let column_count = columns.get();
+    let row_count = rows.get();
+
+    if column_count == 0 || row_count == 0 {
         return Vec::new();
     }
 
-    let available_cells_u64 = u64::from(columns) * u64::from(rows);
+    let available_cells_u64 = u64::from(column_count) * u64::from(row_count);
     let available_cells = match usize::try_from(available_cells_u64) {
         Ok(value) => value,
         Err(_) => usize::MAX,
@@ -748,10 +759,10 @@ fn generate_bugs(columns: u32, rows: u32) -> Vec<BugSeed> {
 
         loop {
             rng_state = next_random(rng_state);
-            let column = (rng_state as u32) % columns;
+            let column = (rng_state as u32) % column_count;
             rng_state = next_random(rng_state);
-            let row = (rng_state as u32) % rows;
-            let cell = GridCell::new(column, row);
+            let row = (rng_state as u32) % row_count;
+            let cell = CellCoord::new(column, row);
 
             if bugs.iter().any(|bug| bug.cell == cell) {
                 continue;
@@ -789,8 +800,8 @@ mod tests {
         let mut world = World::new();
         let mut events = Vec::new();
 
-        let expected_columns = 12;
-        let expected_rows = 8;
+        let expected_columns = TileCoord::new(12);
+        let expected_rows = TileCoord::new(8);
         let expected_tile_length = 75.0;
 
         apply(
@@ -815,8 +826,8 @@ mod tests {
     fn bugs_are_generated_within_configured_grid() {
         let mut world = World::new();
         let mut events = Vec::new();
-        let columns = 8;
-        let rows = 6;
+        let columns = TileCoord::new(8);
+        let rows = TileCoord::new(6);
 
         apply(
             &mut world,
@@ -829,10 +840,11 @@ mod tests {
         );
 
         for bug in query::bug_view(&world).iter() {
-            assert!(bug.cell.column() < columns);
-            assert!(bug.cell.row() < rows);
+            assert!(bug.cell.column() < columns.get());
+            assert!(bug.cell.row() < rows.get());
         }
-        assert_eq!(events.len(), BUG_COUNT.min((columns * rows) as usize));
+        let cell_capacity = columns.get() * rows.get();
+        assert_eq!(events.len(), BUG_COUNT.min(cell_capacity as usize));
     }
 
     #[test]
@@ -843,8 +855,8 @@ mod tests {
         apply(
             &mut world,
             Command::ConfigureTileGrid {
-                columns: 1,
-                rows: 1,
+                columns: TileCoord::new(1),
+                rows: TileCoord::new(1),
                 tile_length: 25.0,
             },
             &mut events,
@@ -868,8 +880,8 @@ mod tests {
         apply(
             &mut first_world,
             Command::ConfigureTileGrid {
-                columns: 12,
-                rows: 9,
+                columns: TileCoord::new(12),
+                rows: TileCoord::new(9),
                 tile_length: 50.0,
             },
             &mut first_events,
@@ -878,8 +890,8 @@ mod tests {
         apply(
             &mut second_world,
             Command::ConfigureTileGrid {
-                columns: 12,
-                rows: 9,
+                columns: TileCoord::new(12),
+                rows: TileCoord::new(9),
                 tile_length: 50.0,
             },
             &mut second_events,
@@ -900,8 +912,8 @@ mod tests {
         apply(
             &mut world,
             Command::ConfigureTileGrid {
-                columns: 9,
-                rows: 7,
+                columns: TileCoord::new(9),
+                rows: TileCoord::new(7),
                 tile_length: 64.0,
             },
             &mut events,
@@ -911,8 +923,8 @@ mod tests {
 
         assert_eq!(hole_cells.len(), 1);
         let cell = hole_cells[0];
-        assert_eq!(cell.column(), 4);
-        assert_eq!(cell.row(), 7);
+        assert_eq!(cell.column().get(), 4);
+        assert_eq!(cell.row().get(), 7);
         assert_eq!(events.len(), BUG_COUNT);
     }
 
@@ -924,8 +936,8 @@ mod tests {
         apply(
             &mut world,
             Command::ConfigureTileGrid {
-                columns: 12,
-                rows: 6,
+                columns: TileCoord::new(12),
+                rows: TileCoord::new(6),
                 tile_length: 64.0,
             },
             &mut events,
@@ -935,8 +947,8 @@ mod tests {
 
         assert_eq!(hole_cells.len(), 1);
         let cell = hole_cells[0];
-        assert_eq!(cell.column(), 5);
-        assert_eq!(cell.row(), 6);
+        assert_eq!(cell.column().get(), 5);
+        assert_eq!(cell.row().get(), 6);
         assert_eq!(events.len(), BUG_COUNT);
     }
 
@@ -948,8 +960,8 @@ mod tests {
         apply(
             &mut world,
             Command::ConfigureTileGrid {
-                columns: 0,
-                rows: 0,
+                columns: TileCoord::new(0),
+                rows: TileCoord::new(0),
                 tile_length: 32.0,
             },
             &mut events,

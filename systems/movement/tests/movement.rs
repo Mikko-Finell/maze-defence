@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use maze_defence_core::{BugId, Command, Direction, Event};
+use maze_defence_core::{BugId, CellCoord, Command, Direction, Event, TileCoord};
 use maze_defence_system_movement::Movement;
 use maze_defence_world::{self as world, query, World};
 
@@ -11,8 +11,8 @@ fn assigns_paths_for_all_bugs() {
     world::apply(
         &mut world,
         Command::ConfigureTileGrid {
-            columns: 5,
-            rows: 4,
+            columns: TileCoord::new(5),
+            rows: TileCoord::new(4),
             tile_length: 1.0,
         },
         &mut events,
@@ -37,8 +37,8 @@ fn step_commands_target_free_cells() {
     world::apply(
         &mut world,
         Command::ConfigureTileGrid {
-            columns: 5,
-            rows: 4,
+            columns: TileCoord::new(5),
+            rows: TileCoord::new(4),
             tile_length: 1.0,
         },
         &mut events,
@@ -86,8 +86,8 @@ fn replans_when_world_requests_new_path() {
     world::apply(
         &mut world,
         Command::ConfigureTileGrid {
-            columns: 3,
-            rows: 3,
+            columns: TileCoord::new(3),
+            rows: TileCoord::new(3),
             tile_length: 1.0,
         },
         &mut events,
@@ -154,18 +154,11 @@ fn pump_system(world: &mut World, movement: &mut Movement, mut events: Vec<Event
     }
 }
 
-fn advance_cell(
-    cell: maze_defence_core::GridCell,
-    direction: Direction,
-) -> maze_defence_core::GridCell {
+fn advance_cell(cell: CellCoord, direction: Direction) -> CellCoord {
     match direction {
-        Direction::North => {
-            maze_defence_core::GridCell::new(cell.column(), cell.row().saturating_sub(1))
-        }
-        Direction::East => maze_defence_core::GridCell::new(cell.column() + 1, cell.row()),
-        Direction::South => maze_defence_core::GridCell::new(cell.column(), cell.row() + 1),
-        Direction::West => {
-            maze_defence_core::GridCell::new(cell.column().saturating_sub(1), cell.row())
-        }
+        Direction::North => CellCoord::new(cell.column(), cell.row().saturating_sub(1)),
+        Direction::East => CellCoord::new(cell.column() + 1, cell.row()),
+        Direction::South => CellCoord::new(cell.column(), cell.row() + 1),
+        Direction::West => CellCoord::new(cell.column().saturating_sub(1), cell.row()),
     }
 }

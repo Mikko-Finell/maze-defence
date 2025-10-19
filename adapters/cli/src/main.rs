@@ -13,7 +13,7 @@ use std::{str::FromStr, time::Duration};
 
 use anyhow::Result;
 use clap::Parser;
-use maze_defence_core::{Command, Event};
+use maze_defence_core::{Command, Event, TileCoord};
 use maze_defence_rendering::{
     BugPresentation, Color, Presentation, RenderingBackend, Scene, TileGridPresentation,
     WallHoleCellPresentation, WallHolePresentation, WallPresentation,
@@ -113,8 +113,8 @@ fn main() -> Result<()> {
         let tile_grid = bootstrap.tile_grid(world);
         let wall_hole = bootstrap.wall_hole(world);
         let grid_scene = TileGridPresentation::new(
-            tile_grid.columns(),
-            tile_grid.rows(),
+            tile_grid.columns().get(),
+            tile_grid.rows().get(),
             tile_grid.tile_length(),
             args.cells_per_tile,
             Color::from_rgb_u8(31, 54, 22),
@@ -122,7 +122,7 @@ fn main() -> Result<()> {
         let wall_hole_cells: Vec<WallHoleCellPresentation> = wall_hole
             .cells()
             .iter()
-            .map(|cell| WallHoleCellPresentation::new(cell.column(), cell.row()))
+            .map(|cell| WallHoleCellPresentation::new(cell.column().get(), cell.row().get()))
             .collect();
         let wall_scene = WallPresentation::new(
             args.wall_thickness,
@@ -158,8 +158,8 @@ impl Simulation {
         world::apply(
             &mut world,
             Command::ConfigureTileGrid {
-                columns,
-                rows,
+                columns: TileCoord::new(columns),
+                rows: TileCoord::new(rows),
                 tile_length,
             },
             &mut pending_events,
