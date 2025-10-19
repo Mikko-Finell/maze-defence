@@ -123,7 +123,7 @@ fn main() -> Result<()> {
         tile_grid.tile_length(),
         args.cells_per_tile,
         Color::from_rgb_u8(31, 54, 22),
-    );
+    )?;
 
     let wall_scene = WallPresentation::new(args.wall_thickness, Color::from_rgb_u8(68, 45, 15));
 
