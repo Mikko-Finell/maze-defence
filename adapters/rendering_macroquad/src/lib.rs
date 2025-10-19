@@ -53,7 +53,7 @@ impl RenderingBackend for MacroquadBackend {
                 let screen_height = macroquad::window::screen_height();
 
                 let tile_grid = scene.tile_grid;
-                let wall = scene.wall;
+                let wall = &scene.wall;
 
                 let world_width = tile_grid.bordered_width();
                 let world_height = scene.total_height();
@@ -134,13 +134,99 @@ impl RenderingBackend for MacroquadBackend {
                 let wall_color = to_macroquad_color(wall.color);
                 let wall_height = wall.thickness * scale;
                 let wall_y = offset_y + bordered_grid_height_scaled;
-                macroquad::shapes::draw_rectangle(
-                    offset_x,
-                    wall_y,
-                    bordered_grid_width_scaled,
-                    wall_height,
-                    wall_color,
-                );
+                let wall_left = offset_x;
+                let wall_right = offset_x + bordered_grid_width_scaled;
+
+                let hole = &wall.hole;
+                let hole_cells = &hole.cells;
+
+                if hole.is_empty() {
+                    macroquad::shapes::draw_rectangle(
+                        wall_left,
+                        wall_y,
+                        bordered_grid_width_scaled,
+                        wall_height,
+                        wall_color,
+                    );
+                } else {
+                    let mut hole_columns: Vec<u32> =
+                        hole_cells.iter().map(|cell| cell.column).collect();
+                    hole_columns.sort_unstable();
+                    hole_columns.dedup();
+
+                    if let (Some(&first_column), Some(&last_column)) =
+                        (hole_columns.first(), hole_columns.last())
+                    {
+                        let hole_left = grid_offset_x + first_column as f32 * tile_step;
+                        let hole_right = grid_offset_x + (last_column + 1) as f32 * tile_step;
+
+                        if hole_left > wall_left {
+                            macroquad::shapes::draw_rectangle(
+                                wall_left,
+                                wall_y,
+                                hole_left - wall_left,
+                                wall_height,
+                                wall_color,
+                            );
+                        }
+
+                        if hole_right < wall_right {
+                            macroquad::shapes::draw_rectangle(
+                                hole_right,
+                                wall_y,
+                                wall_right - hole_right,
+                                wall_height,
+                                wall_color,
+                            );
+                        }
+
+                        let walkway_top = wall_y;
+                        let walkway_bottom = wall_y + wall_height;
+
+                        for column in hole_columns {
+                            let start_x = grid_offset_x + column as f32 * tile_step;
+                            macroquad::shapes::draw_line(
+                                start_x,
+                                walkway_top,
+                                start_x,
+                                walkway_bottom,
+                                1.0,
+                                grid_color,
+                            );
+
+                            let end_x = grid_offset_x + (column + 1) as f32 * tile_step;
+                            macroquad::shapes::draw_line(
+                                end_x,
+                                walkway_top,
+                                end_x,
+                                walkway_bottom,
+                                1.0,
+                                grid_color,
+                            );
+
+                            for subdivision in 1..tile_grid.subdivisions_per_tile {
+                                let subdivision_x = start_x + subdivision as f32 * subcell_step;
+                                macroquad::shapes::draw_line(
+                                    subdivision_x,
+                                    walkway_top,
+                                    subdivision_x,
+                                    walkway_bottom,
+                                    0.5,
+                                    subgrid_color,
+                                );
+                            }
+                        }
+
+                        macroquad::shapes::draw_line(
+                            hole_left,
+                            walkway_bottom,
+                            hole_right,
+                            walkway_bottom,
+                            1.0,
+                            grid_color,
+                        );
+                    }
+                }
 
                 let bug_radius = tile_step * 0.5;
                 for BugPresentation { column, row, color } in &scene.bugs {

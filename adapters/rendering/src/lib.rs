@@ -154,19 +154,63 @@ impl TileGridPresentation {
 }
 
 /// Describes an outer wall that should be rendered near the grid.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct WallPresentation {
     /// Thickness of the wall measured in world units.
     pub thickness: f32,
     /// Color used for the wall fill.
     pub color: Color,
+    /// Hole carved into the wall if one exists.
+    pub hole: WallHolePresentation,
 }
 
 impl WallPresentation {
     /// Creates a new wall descriptor.
     #[must_use]
-    pub const fn new(thickness: f32, color: Color) -> Self {
-        Self { thickness, color }
+    pub fn new(thickness: f32, color: Color, hole: WallHolePresentation) -> Self {
+        Self {
+            thickness,
+            color,
+            hole,
+        }
+    }
+}
+
+/// Hole carved into the perimeter wall aligned with the grid cells.
+#[derive(Clone, Debug, PartialEq)]
+pub struct WallHolePresentation {
+    /// Cells that compose the hole region.
+    pub cells: Vec<WallHoleCellPresentation>,
+}
+
+impl WallHolePresentation {
+    /// Creates a new wall hole descriptor.
+    #[must_use]
+    pub fn new(cells: Vec<WallHoleCellPresentation>) -> Self {
+        Self { cells }
+    }
+
+    /// Determines whether the hole contains any cells.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.cells.is_empty()
+    }
+}
+
+/// Single cell composing part of a wall hole.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct WallHoleCellPresentation {
+    /// Column of the cell aligned with the main grid.
+    pub column: u32,
+    /// Row of the cell relative to the main grid.
+    pub row: u32,
+}
+
+impl WallHoleCellPresentation {
+    /// Creates a new wall hole cell descriptor.
+    #[must_use]
+    pub const fn new(column: u32, row: u32) -> Self {
+        Self { column, row }
     }
 }
 

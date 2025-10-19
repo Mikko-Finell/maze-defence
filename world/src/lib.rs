@@ -68,11 +68,81 @@ impl TileGrid {
     }
 }
 
+/// Describes the perimeter wall that surrounds the tile grid.
+#[derive(Debug)]
+pub struct Wall {
+    hole: WallHole,
+}
+
+impl Wall {
+    /// Creates a new wall aligned with the provided grid dimensions.
+    #[must_use]
+    pub(crate) fn new(columns: u32, rows: u32) -> Self {
+        Self {
+            hole: WallHole::aligned_with_grid(columns, rows),
+        }
+    }
+
+    /// Retrieves the hole carved into the perimeter wall.
+    #[must_use]
+    pub fn hole(&self) -> &WallHole {
+        &self.hole
+    }
+}
+
+/// Opening carved into the wall to connect the maze with the outside world.
+#[derive(Debug)]
+pub struct WallHole {
+    cells: Vec<WallCell>,
+}
+
+impl WallHole {
+    fn aligned_with_grid(columns: u32, rows: u32) -> Self {
+        Self {
+            cells: hole_cells(columns, rows),
+        }
+    }
+
+    /// Collection of cells that occupy the hole within the wall.
+    #[must_use]
+    pub fn cells(&self) -> &[WallCell] {
+        &self.cells
+    }
+}
+
+/// Discrete cell that composes part of the wall hole.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct WallCell {
+    column: u32,
+    row: u32,
+}
+
+impl WallCell {
+    /// Creates a new wall cell located at the provided column and row.
+    #[must_use]
+    pub const fn new(column: u32, row: u32) -> Self {
+        Self { column, row }
+    }
+
+    /// Column that contains the cell relative to the tile grid.
+    #[must_use]
+    pub const fn column(&self) -> u32 {
+        self.column
+    }
+
+    /// Row that contains the cell relative to the tile grid.
+    #[must_use]
+    pub const fn row(&self) -> u32 {
+        self.row
+    }
+}
+
 /// Represents the authoritative Maze Defence world state.
 #[derive(Debug)]
 pub struct World {
     banner: &'static str,
     tile_grid: TileGrid,
+    wall: Wall,
     bugs: Vec<Bug>,
 }
 
@@ -81,10 +151,12 @@ impl World {
     #[must_use]
     pub fn new() -> Self {
         let tile_grid = TileGrid::new(DEFAULT_GRID_COLUMNS, DEFAULT_GRID_ROWS, DEFAULT_TILE_LENGTH);
+        let wall = Wall::new(tile_grid.columns, tile_grid.rows);
 
         Self {
             banner: WELCOME_BANNER,
             bugs: generate_bugs(tile_grid.columns, tile_grid.rows),
+            wall,
             tile_grid,
         }
     }
@@ -99,6 +171,7 @@ pub fn apply(world: &mut World, command: Command) {
             tile_length,
         } => {
             world.tile_grid = TileGrid::new(columns, rows, tile_length);
+            world.wall = Wall::new(columns, rows);
             world.bugs = generate_bugs(columns, rows);
         }
     }
@@ -106,7 +179,7 @@ pub fn apply(world: &mut World, command: Command) {
 
 /// Query functions that provide read-only access to the world state.
 pub mod query {
-    use super::{Bug, TileGrid, World};
+    use super::{Bug, TileGrid, Wall, WallHole, World};
 
     /// Retrieves the welcome banner that adapters may display to players.
     #[must_use]
@@ -118,6 +191,18 @@ pub mod query {
     #[must_use]
     pub fn tile_grid(world: &World) -> &TileGrid {
         &world.tile_grid
+    }
+
+    /// Provides read-only access to the wall guarding the maze perimeter.
+    #[must_use]
+    pub fn wall(world: &World) -> &Wall {
+        &world.wall
+    }
+
+    /// Provides read-only access to the hole carved into the perimeter wall.
+    #[must_use]
+    pub fn wall_hole(world: &World) -> &WallHole {
+        world.wall.hole()
     }
 
     /// Provides read-only access to the bugs currently inhabiting the maze.
@@ -237,6 +322,24 @@ impl Bug {
     #[must_use]
     pub const fn color(&self) -> BugColor {
         self.color
+    }
+}
+
+fn hole_cells(columns: u32, rows: u32) -> Vec<WallCell> {
+    if columns == 0 || rows == 0 {
+        return Vec::new();
+    }
+
+    if columns % 2 == 0 {
+        let right_center = columns / 2;
+        let left_center = right_center - 1;
+
+        vec![
+            WallCell::new(left_center, rows),
+            WallCell::new(right_center, rows),
+        ]
+    } else {
+        vec![WallCell::new(columns / 2, rows)]
     }
 }
 
@@ -382,5 +485,64 @@ mod tests {
         );
 
         assert_eq!(query::bugs(&first_world), query::bugs(&second_world));
+    }
+
+    #[test]
+    fn wall_hole_aligns_with_center_for_odd_columns() {
+        let mut world = World::new();
+
+        apply(
+            &mut world,
+            Command::ConfigureTileGrid {
+                columns: 9,
+                rows: 7,
+                tile_length: 64.0,
+            },
+        );
+
+        let hole_cells = query::wall_hole(&world).cells();
+
+        assert_eq!(hole_cells.len(), 1);
+        let cell = hole_cells[0];
+        assert_eq!(cell.column(), 4);
+        assert_eq!(cell.row(), 7);
+    }
+
+    #[test]
+    fn wall_hole_aligns_with_center_for_even_columns() {
+        let mut world = World::new();
+
+        apply(
+            &mut world,
+            Command::ConfigureTileGrid {
+                columns: 12,
+                rows: 6,
+                tile_length: 64.0,
+            },
+        );
+
+        let hole_cells = query::wall_hole(&world).cells();
+
+        assert_eq!(hole_cells.len(), 2);
+        assert_eq!(hole_cells[0].column(), 5);
+        assert_eq!(hole_cells[0].row(), 6);
+        assert_eq!(hole_cells[1].column(), 6);
+        assert_eq!(hole_cells[1].row(), 6);
+    }
+
+    #[test]
+    fn wall_hole_absent_when_grid_missing() {
+        let mut world = World::new();
+
+        apply(
+            &mut world,
+            Command::ConfigureTileGrid {
+                columns: 0,
+                rows: 0,
+                tile_length: 32.0,
+            },
+        );
+
+        assert!(query::wall_hole(&world).cells().is_empty());
     }
 }
