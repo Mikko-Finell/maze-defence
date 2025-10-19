@@ -330,17 +330,13 @@ fn hole_cells(columns: u32, rows: u32) -> Vec<WallCell> {
         return Vec::new();
     }
 
-    if columns % 2 == 0 {
-        let right_center = columns / 2;
-        let left_center = right_center - 1;
-
-        vec![
-            WallCell::new(left_center, rows),
-            WallCell::new(right_center, rows),
-        ]
+    let center_column = if columns % 2 == 0 {
+        (columns - 1) / 2
     } else {
-        vec![WallCell::new(columns / 2, rows)]
-    }
+        columns / 2
+    };
+
+    vec![WallCell::new(center_column, rows)]
 }
 
 fn generate_bugs(columns: u32, rows: u32) -> Vec<Bug> {
@@ -509,7 +505,7 @@ mod tests {
     }
 
     #[test]
-    fn wall_hole_aligns_with_center_for_even_columns() {
+    fn wall_hole_spans_single_tile_for_even_columns() {
         let mut world = World::new();
 
         apply(
@@ -523,11 +519,10 @@ mod tests {
 
         let hole_cells = query::wall_hole(&world).cells();
 
-        assert_eq!(hole_cells.len(), 2);
-        assert_eq!(hole_cells[0].column(), 5);
-        assert_eq!(hole_cells[0].row(), 6);
-        assert_eq!(hole_cells[1].column(), 6);
-        assert_eq!(hole_cells[1].row(), 6);
+        assert_eq!(hole_cells.len(), 1);
+        let cell = hole_cells[0];
+        assert_eq!(cell.column(), 5);
+        assert_eq!(cell.row(), 6);
     }
 
     #[test]
