@@ -9,18 +9,19 @@
 
 //! Command-line adapter that boots the Maze Defence experience.
 
-use std::str::FromStr;
+use std::{str::FromStr, time::Duration};
 
 use anyhow::Result;
 use clap::Parser;
-use maze_defence_core::Command;
+use maze_defence_core::{Command, Event};
 use maze_defence_rendering::{
     BugPresentation, Color, Presentation, RenderingBackend, Scene, TileGridPresentation,
     WallHoleCellPresentation, WallHolePresentation, WallPresentation,
 };
 use maze_defence_rendering_macroquad::MacroquadBackend;
 use maze_defence_system_bootstrap::Bootstrap;
-use maze_defence_world::{self as world, World};
+use maze_defence_system_movement::Movement;
+use maze_defence_world::{self as world, query, World};
 
 const DEFAULT_GRID_COLUMNS: u32 = 10;
 const DEFAULT_GRID_ROWS: u32 = 10;
@@ -104,47 +105,96 @@ fn main() -> Result<()> {
         (DEFAULT_GRID_COLUMNS, DEFAULT_GRID_ROWS)
     };
 
-    let mut world = World::new();
-    let mut _events = Vec::new();
-    world::apply(
-        &mut world,
-        Command::ConfigureTileGrid {
-            columns,
-            rows,
-            tile_length: DEFAULT_TILE_LENGTH,
-        },
-        &mut _events,
-    );
+    let mut simulation = Simulation::new(columns, rows, DEFAULT_TILE_LENGTH);
     let bootstrap = Bootstrap::default();
-    let banner = bootstrap.welcome_banner(&world);
+    let (banner, grid_scene, wall_scene) = {
+        let world = simulation.world();
+        let banner = bootstrap.welcome_banner(world).to_owned();
+        let tile_grid = bootstrap.tile_grid(world);
+        let wall_hole = bootstrap.wall_hole(world);
+        let grid_scene = TileGridPresentation::new(
+            tile_grid.columns(),
+            tile_grid.rows(),
+            tile_grid.tile_length(),
+            args.cells_per_tile,
+            Color::from_rgb_u8(31, 54, 22),
+        )?;
+        let wall_hole_cells: Vec<WallHoleCellPresentation> = wall_hole
+            .cells()
+            .iter()
+            .map(|cell| WallHoleCellPresentation::new(cell.column(), cell.row()))
+            .collect();
+        let wall_scene = WallPresentation::new(
+            args.wall_thickness,
+            Color::from_rgb_u8(68, 45, 15),
+            WallHolePresentation::new(wall_hole_cells),
+        );
+        (banner, grid_scene, wall_scene)
+    };
 
-    let tile_grid = bootstrap.tile_grid(&world);
-    let bug_view = bootstrap.bugs(&world);
-    let wall_hole = bootstrap.wall_hole(&world);
+    let mut scene = Scene::new(grid_scene, wall_scene, Vec::new());
+    simulation.populate_scene(&mut scene);
 
-    let grid_scene = TileGridPresentation::new(
-        tile_grid.columns(),
-        tile_grid.rows(),
-        tile_grid.tile_length(),
-        args.cells_per_tile,
-        Color::from_rgb_u8(31, 54, 22),
-    )?;
+    let presentation = Presentation::new(banner, Color::from_rgb_u8(85, 142, 52), scene);
 
-    let wall_hole_cells: Vec<WallHoleCellPresentation> = wall_hole
-        .cells()
-        .iter()
-        .map(|cell| WallHoleCellPresentation::new(cell.column(), cell.row()))
-        .collect();
+    MacroquadBackend::default().run(presentation, move |dt, scene| {
+        simulation.advance(dt);
+        simulation.populate_scene(scene);
+    })
+}
 
-    let wall_scene = WallPresentation::new(
-        args.wall_thickness,
-        Color::from_rgb_u8(68, 45, 15),
-        WallHolePresentation::new(wall_hole_cells),
-    );
+#[derive(Debug)]
+struct Simulation {
+    world: World,
+    movement: Movement,
+    pending_events: Vec<Event>,
+    scratch_commands: Vec<Command>,
+}
 
-    let bug_presentations: Vec<BugPresentation> = bug_view
-        .iter()
-        .map(|bug| {
+impl Simulation {
+    fn new(columns: u32, rows: u32, tile_length: f32) -> Self {
+        let mut world = World::new();
+        let mut pending_events = Vec::new();
+        world::apply(
+            &mut world,
+            Command::ConfigureTileGrid {
+                columns,
+                rows,
+                tile_length,
+            },
+            &mut pending_events,
+        );
+
+        let mut simulation = Self {
+            world,
+            movement: Movement::default(),
+            pending_events,
+            scratch_commands: Vec::new(),
+        };
+        simulation.process_pending_events();
+        simulation
+    }
+
+    fn world(&self) -> &World {
+        &self.world
+    }
+
+    fn advance(&mut self, dt: Duration) {
+        if !dt.is_zero() {
+            self.pending_events.clear();
+            world::apply(
+                &mut self.world,
+                Command::Tick { dt },
+                &mut self.pending_events,
+            );
+        }
+        self.process_pending_events();
+    }
+
+    fn populate_scene(&self, scene: &mut Scene) {
+        let bug_view = query::bug_view(&self.world);
+        scene.bugs.clear();
+        scene.bugs.extend(bug_view.iter().map(|bug| {
             let cell = bug.cell;
             let color = bug.color;
             BugPresentation::new(
@@ -152,12 +202,37 @@ fn main() -> Result<()> {
                 cell.row(),
                 Color::from_rgb_u8(color.red(), color.green(), color.blue()),
             )
-        })
-        .collect();
+        }));
+    }
 
-    let scene = Scene::new(grid_scene, wall_scene, bug_presentations);
+    fn process_pending_events(&mut self) {
+        let mut events = std::mem::take(&mut self.pending_events);
+        loop {
+            if events.is_empty() {
+                break;
+            }
 
-    let presentation = Presentation::new(banner.to_owned(), Color::from_rgb_u8(85, 142, 52), scene);
+            let bug_view = query::bug_view(&self.world);
+            let occupancy_view = query::occupancy_view(&self.world);
+            self.scratch_commands.clear();
+            self.movement.handle(
+                &events,
+                &bug_view,
+                occupancy_view,
+                &mut self.scratch_commands,
+            );
 
-    MacroquadBackend::default().run(presentation)
+            if self.scratch_commands.is_empty() {
+                break;
+            }
+
+            events.clear();
+            for command in self.scratch_commands.drain(..) {
+                world::apply(&mut self.world, command, &mut events);
+            }
+        }
+
+        self.pending_events = events;
+        self.pending_events.clear();
+    }
 }
