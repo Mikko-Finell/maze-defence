@@ -103,7 +103,7 @@ fn main() -> Result<()> {
     };
 
     let world = World::with_tile_grid(columns, rows, DEFAULT_TILE_LENGTH);
-    let bootstrap = Bootstrap::default();
+    let bootstrap = Bootstrap;
     let banner = bootstrap.welcome_banner(&world);
 
     let tile_grid = bootstrap.tile_grid(&world);
@@ -122,5 +122,5 @@ fn main() -> Result<()> {
 
     let presentation = Presentation::new(banner.to_owned(), Color::from_rgb_u8(85, 142, 52), scene);
 
-    MacroquadBackend::default().run(presentation)
+    MacroquadBackend.run(presentation)
 }

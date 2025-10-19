@@ -32,10 +32,12 @@ impl RenderingBackend for MacroquadBackend {
             scene,
         } = presentation;
 
-        let mut config = macroquad::window::Conf::default();
-        config.window_title = window_title;
-        config.window_width = 960;
-        config.window_height = 960;
+        let config = macroquad::window::Conf {
+            window_title,
+            window_width: 960,
+            window_height: 960,
+            ..macroquad::window::Conf::default()
+        };
 
         macroquad::Window::from_config(config, async move {
             let background = to_macroquad_color(clear_color);

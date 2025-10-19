@@ -76,7 +76,7 @@ impl World {
     /// Creates a new Maze Defence world ready for simulation.
     #[must_use]
     pub fn new() -> Self {
-        Self::with_tile_grid(DEFAULT_GRID_COLUMNS, DEFAULT_GRID_ROWS, DEFAULT_TILE_LENGTH)
+        Self::default()
     }
 
     /// Creates a Maze Defence world with the provided tile grid definition.
@@ -86,6 +86,12 @@ impl World {
             banner: WELCOME_BANNER,
             tile_grid: TileGrid::new(columns, rows, tile_length),
         }
+    }
+}
+
+impl Default for World {
+    fn default() -> Self {
+        Self::with_tile_grid(DEFAULT_GRID_COLUMNS, DEFAULT_GRID_ROWS, DEFAULT_TILE_LENGTH)
     }
 }
 
@@ -103,5 +109,38 @@ pub mod query {
     #[must_use]
     pub fn tile_grid(world: &World) -> &TileGrid {
         &world.tile_grid
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_world_matches_new() {
+        let default_world = World::default();
+        let new_world = World::new();
+
+        assert_eq!(
+            query::welcome_banner(&default_world),
+            query::welcome_banner(&new_world)
+        );
+
+        let default_grid = query::tile_grid(&default_world);
+        let new_grid = query::tile_grid(&new_world);
+
+        assert_eq!(default_grid.columns(), new_grid.columns());
+        assert_eq!(default_grid.rows(), new_grid.rows());
+        assert!((default_grid.tile_length() - new_grid.tile_length()).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn default_world_uses_expected_dimensions() {
+        let world = World::default();
+        let grid = query::tile_grid(&world);
+
+        assert_eq!(grid.columns(), DEFAULT_GRID_COLUMNS);
+        assert_eq!(grid.rows(), DEFAULT_GRID_ROWS);
+        assert!((grid.tile_length() - DEFAULT_TILE_LENGTH).abs() < f32::EPSILON);
     }
 }
