@@ -11,7 +11,7 @@
 
 use anyhow::Result;
 use macroquad::input::{is_key_pressed, KeyCode};
-use maze_defence_rendering::{Presentation, RenderingBackend};
+use maze_defence_rendering::{Presentation, RenderingBackend, TileGridPresentation};
 
 /// Rendering backend implemented on top of macroquad.
 #[derive(Debug, Default)]
@@ -46,7 +46,7 @@ impl RenderingBackend for MacroquadBackend {
                 let tile_grid = scene.tile_grid;
                 let wall = scene.wall;
 
-                let world_width = tile_grid.width();
+                let world_width = tile_grid.bordered_width();
                 let world_height = scene.total_height();
                 let scale = (screen_width / world_width).min(screen_height / world_height);
 
@@ -57,27 +57,65 @@ impl RenderingBackend for MacroquadBackend {
 
                 let grid_height_scaled = tile_grid.height() * scale;
                 let grid_width_scaled = tile_grid.width() * scale;
+                let bordered_grid_height_scaled = tile_grid.bordered_height() * scale;
+                let bordered_grid_width_scaled = tile_grid.bordered_width() * scale;
                 let tile_step = tile_grid.tile_length * scale;
+                let subcell_step = tile_step / TileGridPresentation::SUBDIVISIONS_PER_TILE as f32;
+                let grid_offset_x =
+                    offset_x + TileGridPresentation::BORDER_SUBCELL_LAYERS as f32 * subcell_step;
+                let grid_offset_y =
+                    offset_y + TileGridPresentation::BORDER_SUBCELL_LAYERS as f32 * subcell_step;
                 let grid_color = to_macroquad_color(tile_grid.line_color);
 
-                for column in 0..=tile_grid.columns {
-                    let x = offset_x + column as f32 * tile_step;
+                let subgrid_color = to_macroquad_color(tile_grid.line_color.lighten(0.6));
+
+                let total_subcolumns = tile_grid.columns
+                    * TileGridPresentation::SUBDIVISIONS_PER_TILE
+                    + 2 * TileGridPresentation::BORDER_SUBCELL_LAYERS;
+                for column in 0..=total_subcolumns {
+                    let x = offset_x + column as f32 * subcell_step;
                     macroquad::shapes::draw_line(
                         x,
                         offset_y,
                         x,
-                        offset_y + grid_height_scaled,
+                        offset_y + bordered_grid_height_scaled,
+                        0.5,
+                        subgrid_color,
+                    );
+                }
+
+                let total_subrows = tile_grid.rows * TileGridPresentation::SUBDIVISIONS_PER_TILE
+                    + 2 * TileGridPresentation::BORDER_SUBCELL_LAYERS;
+                for row in 0..=total_subrows {
+                    let y = offset_y + row as f32 * subcell_step;
+                    macroquad::shapes::draw_line(
+                        offset_x,
+                        y,
+                        offset_x + bordered_grid_width_scaled,
+                        y,
+                        0.5,
+                        subgrid_color,
+                    );
+                }
+
+                for column in 0..=tile_grid.columns {
+                    let x = grid_offset_x + column as f32 * tile_step;
+                    macroquad::shapes::draw_line(
+                        x,
+                        grid_offset_y,
+                        x,
+                        grid_offset_y + grid_height_scaled,
                         1.0,
                         grid_color,
                     );
                 }
 
                 for row in 0..=tile_grid.rows {
-                    let y = offset_y + row as f32 * tile_step;
+                    let y = grid_offset_y + row as f32 * tile_step;
                     macroquad::shapes::draw_line(
-                        offset_x,
+                        grid_offset_x,
                         y,
-                        offset_x + grid_width_scaled,
+                        grid_offset_x + grid_width_scaled,
                         y,
                         1.0,
                         grid_color,
@@ -86,11 +124,11 @@ impl RenderingBackend for MacroquadBackend {
 
                 let wall_color = to_macroquad_color(wall.color);
                 let wall_height = wall.thickness * scale;
-                let wall_y = offset_y + grid_height_scaled;
+                let wall_y = offset_y + bordered_grid_height_scaled;
                 macroquad::shapes::draw_rectangle(
                     offset_x,
                     wall_y,
-                    grid_width_scaled,
+                    bordered_grid_width_scaled,
                     wall_height,
                     wall_color,
                 );

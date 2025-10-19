@@ -46,6 +46,23 @@ impl Color {
             alpha: 1.0,
         }
     }
+
+    /// Returns a new color lightened towards white by the provided amount.
+    #[must_use]
+    pub fn lighten(self, amount: f32) -> Self {
+        let amount = amount.clamp(0.0, 1.0);
+
+        Self {
+            red: lighten_channel(self.red, amount),
+            green: lighten_channel(self.green, amount),
+            blue: lighten_channel(self.blue, amount),
+            alpha: self.alpha,
+        }
+    }
+}
+
+fn lighten_channel(channel: f32, amount: f32) -> f32 {
+    channel + (1.0 - channel) * amount
 }
 
 /// Describes a square tile grid that can be rendered by adapters.
@@ -62,6 +79,12 @@ pub struct TileGridPresentation {
 }
 
 impl TileGridPresentation {
+    /// Number of subcells drawn along each tile edge.
+    pub const SUBDIVISIONS_PER_TILE: u32 = 10;
+
+    /// Number of subcell layers rendered outside the tile grid on each side.
+    pub const BORDER_SUBCELL_LAYERS: u32 = 1;
+
     /// Creates a new tile grid descriptor.
     #[must_use]
     pub const fn new(columns: u32, rows: u32, tile_length: f32, line_color: Color) -> Self {
@@ -71,6 +94,12 @@ impl TileGridPresentation {
             tile_length,
             line_color,
         }
+    }
+
+    /// Length of a single subcell derived from the tile length.
+    #[must_use]
+    pub const fn subcell_length(&self) -> f32 {
+        self.tile_length / Self::SUBDIVISIONS_PER_TILE as f32
     }
 
     /// Calculates the total width of the grid.
@@ -83,6 +112,18 @@ impl TileGridPresentation {
     #[must_use]
     pub const fn height(&self) -> f32 {
         self.rows as f32 * self.tile_length
+    }
+
+    /// Calculates the total width of the grid including the surrounding subcell border.
+    #[must_use]
+    pub const fn bordered_width(&self) -> f32 {
+        self.width() + 2.0 * self.subcell_length() * Self::BORDER_SUBCELL_LAYERS as f32
+    }
+
+    /// Calculates the total height of the grid including the surrounding subcell border.
+    #[must_use]
+    pub const fn bordered_height(&self) -> f32 {
+        self.height() + 2.0 * self.subcell_length() * Self::BORDER_SUBCELL_LAYERS as f32
     }
 }
 
@@ -122,7 +163,7 @@ impl Scene {
     /// Height of the entire scene including the wall.
     #[must_use]
     pub const fn total_height(&self) -> f32 {
-        self.tile_grid.height() + self.wall.thickness
+        self.tile_grid.bordered_height() + self.wall.thickness
     }
 }
 
