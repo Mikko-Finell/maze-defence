@@ -9,7 +9,8 @@
 
 //! Shared rendering contracts for Maze Defence adapters.
 
-use anyhow::Result;
+use anyhow::Result as AnyResult;
+use std::{error::Error, fmt};
 
 /// RGBA color used when presenting frames.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -95,7 +96,7 @@ impl TileGridPresentation {
 
     /// Creates a new tile grid descriptor.
     ///
-    /// `subdivisions_per_tile` must be greater than zero.
+    /// Returns an error when `subdivisions_per_tile` is zero.
     #[must_use]
     pub fn new(
         columns: u32,
@@ -103,19 +104,20 @@ impl TileGridPresentation {
         tile_length: f32,
         subdivisions_per_tile: u32,
         line_color: Color,
-    ) -> Self {
-        assert!(
-            subdivisions_per_tile > 0,
-            "subdivisions_per_tile must be positive"
-        );
+    ) -> std::result::Result<Self, RenderingError> {
+        if subdivisions_per_tile == 0 {
+            return Err(RenderingError::InvalidSubdivisions {
+                subdivisions_per_tile,
+            });
+        }
 
-        Self {
+        Ok(Self {
             columns,
             rows,
             tile_length,
             subdivisions_per_tile,
             line_color,
-        }
+        })
     }
 
     /// Length of a single subcell derived from the tile length.
@@ -220,5 +222,58 @@ impl Presentation {
 /// Rendering backend capable of presenting Maze Defence scenes.
 pub trait RenderingBackend {
     /// Runs the rendering backend until it is requested to exit.
-    fn run(self, presentation: Presentation) -> Result<()>;
+    fn run(self, presentation: Presentation) -> AnyResult<()>;
+}
+
+/// Errors that can occur when constructing rendering descriptors.
+#[derive(Debug, PartialEq, Eq)]
+pub enum RenderingError {
+    /// Subdivision count must be positive to avoid a zero-sized subcell.
+    InvalidSubdivisions {
+        /// Provided subdivision count that failed validation.
+        subdivisions_per_tile: u32,
+    },
+}
+
+impl fmt::Display for RenderingError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InvalidSubdivisions {
+                subdivisions_per_tile,
+            } => {
+                write!(
+                    f,
+                    "subdivisions_per_tile must be positive (received {subdivisions_per_tile})"
+                )
+            }
+        }
+    }
+}
+
+impl Error for RenderingError {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tile_grid_creation_accepts_positive_subdivisions() {
+        let presentation = TileGridPresentation::new(10, 5, 32.0, 4, Color::from_rgb_u8(0, 0, 0))
+            .expect("positive subdivisions should succeed");
+
+        assert_eq!(presentation.subdivisions_per_tile, 4);
+    }
+
+    #[test]
+    fn tile_grid_creation_rejects_zero_subdivisions_without_panicking() {
+        let error = TileGridPresentation::new(10, 5, 32.0, 0, Color::from_rgb_u8(0, 0, 0))
+            .expect_err("zero subdivisions must be rejected");
+
+        assert!(matches!(
+            error,
+            RenderingError::InvalidSubdivisions {
+                subdivisions_per_tile: 0
+            }
+        ));
+    }
 }
