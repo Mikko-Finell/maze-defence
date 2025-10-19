@@ -25,8 +25,8 @@ pub struct Movement {
     g_score: Vec<u32>,
     path_buffer: Vec<CellCoord>,
     needs_path: Vec<BugId>,
-    hole_targets: Vec<CellCoord>,
-    hole_columns: Vec<u32>,
+    targets: Vec<CellCoord>,
+    target_columns: Vec<u32>,
     prepared_dimensions: Option<(u32, u32)>,
     workspace_nodes: usize,
     active_nodes: usize,
@@ -132,15 +132,15 @@ impl Movement {
     fn plan_path(
         &mut self,
         bug: &BugSnapshot,
-        occupancy_view: OccupancyView<'_>,
+        _occupancy_view: OccupancyView<'_>,
         columns: u32,
         rows: u32,
     ) -> Option<Vec<CellCoord>> {
-        if self.hole_targets.is_empty() {
+        if self.targets.is_empty() {
             return None;
         }
 
-        if self.hole_targets.iter().any(|target| *target == bug.cell) {
+        if self.targets.iter().any(|target| *target == bug.cell) {
             return None;
         }
 
@@ -152,26 +152,18 @@ impl Movement {
         self.frontier.push(Reverse(NodeState::new(
             bug.cell,
             0,
-            heuristic_to_targets(bug.cell, &self.hole_targets),
+            heuristic_to_targets(bug.cell, &self.targets),
         )));
 
         while let Some(Reverse(current)) = self.frontier.pop() {
-            if self
-                .hole_targets
-                .iter()
-                .any(|target| *target == current.cell)
-            {
+            if self.targets.iter().any(|target| *target == current.cell) {
                 self.reconstruct_path(bug.cell, current.cell, columns, rows_with_exit);
                 let path: Vec<CellCoord> = self.path_buffer.drain(..).collect();
                 return Some(path);
             }
 
-            let neighbors = enumerate_neighbors(current.cell, columns, rows, &self.hole_columns);
+            let neighbors = enumerate_neighbors(current.cell, columns, rows, &self.target_columns);
             for neighbor in neighbors {
-                if neighbor != bug.cell && !cell_available_for(neighbor, bug.id, occupancy_view) {
-                    continue;
-                }
-
                 let Some(neighbor_index) = index(columns, rows_with_exit, neighbor) else {
                     continue;
                 };
@@ -186,7 +178,7 @@ impl Movement {
                 self.frontier.push(Reverse(NodeState::new(
                     neighbor,
                     tentative,
-                    heuristic_to_targets(neighbor, &self.hole_targets),
+                    heuristic_to_targets(neighbor, &self.targets),
                 )));
             }
         }
@@ -218,8 +210,8 @@ impl Movement {
 
     fn prepare_workspace(&mut self, columns: u32, rows: u32) -> usize {
         if self.prepared_dimensions != Some((columns, rows)) {
-            self.hole_targets = hole_cells(columns, rows);
-            self.hole_columns = self.hole_targets.iter().map(|cell| cell.column()).collect();
+            self.targets = target_cells(columns, rows);
+            self.target_columns = self.targets.iter().map(|cell| cell.column()).collect();
             self.prepared_dimensions = Some((columns, rows));
         }
 
@@ -285,7 +277,7 @@ fn enumerate_neighbors(
     cell: CellCoord,
     columns: u32,
     rows: u32,
-    hole_columns: &[u32],
+    target_columns: &[u32],
 ) -> NeighborIter {
     let mut neighbors = NeighborIter::default();
     if cell.row() < rows {
@@ -301,7 +293,7 @@ fn enumerate_neighbors(
         if cell.row() + 1 < rows {
             neighbors.push(CellCoord::new(cell.column(), cell.row() + 1));
         } else if cell.row() + 1 == rows {
-            if hole_columns.iter().any(|column| *column == cell.column()) {
+            if target_columns.iter().any(|column| *column == cell.column()) {
                 neighbors.push(CellCoord::new(cell.column(), rows));
             }
         }
@@ -390,7 +382,7 @@ fn index(columns: u32, rows: u32, cell: CellCoord) -> Option<usize> {
     Some(row * width + column)
 }
 
-fn hole_cells(columns: u32, rows: u32) -> Vec<CellCoord> {
+fn target_cells(columns: u32, rows: u32) -> Vec<CellCoord> {
     if columns == 0 || rows == 0 {
         return Vec::new();
     }
@@ -431,10 +423,10 @@ mod tests {
     }
 
     #[test]
-    fn hole_cells_align_with_center() {
-        assert!(hole_cells(0, 0).is_empty());
-        assert_eq!(hole_cells(3, 4), vec![CellCoord::new(1, 4)]);
-        assert_eq!(hole_cells(4, 2), vec![CellCoord::new(1, 2)]);
+    fn target_cells_align_with_center() {
+        assert!(target_cells(0, 0).is_empty());
+        assert_eq!(target_cells(3, 4), vec![CellCoord::new(1, 4)]);
+        assert_eq!(target_cells(4, 2), vec![CellCoord::new(1, 2)]);
     }
 
     #[test]

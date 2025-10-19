@@ -9,7 +9,7 @@
 
 //! Pure bootstrap system that prepares the Maze Defence experience.
 
-use maze_defence_world::{query, TileGrid, Wall, WallHole, World};
+use maze_defence_world::{query, Target, TileGrid, Wall, World};
 
 /// Produces data required to greet the player.
 #[derive(Debug, Default)]
@@ -40,9 +40,9 @@ impl Bootstrap {
         query::wall(world)
     }
 
-    /// Exposes the hole carved into the wall for presentation.
+    /// Exposes the target carved into the wall for presentation.
     #[must_use]
-    pub fn wall_hole<'world>(&self, world: &'world World) -> &'world WallHole {
-        query::wall_hole(world)
+    pub fn target<'world>(&self, world: &'world World) -> &'world Target {
+        query::target(world)
     }
 }

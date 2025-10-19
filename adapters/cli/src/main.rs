@@ -15,8 +15,8 @@ use anyhow::Result;
 use clap::Parser;
 use maze_defence_core::{Command, Event, TileCoord};
 use maze_defence_rendering::{
-    BugPresentation, Color, Presentation, RenderingBackend, Scene, TileGridPresentation,
-    WallHoleCellPresentation, WallHolePresentation, WallPresentation,
+    BugPresentation, Color, Presentation, RenderingBackend, Scene, TargetCellPresentation,
+    TargetPresentation, TileGridPresentation, WallPresentation,
 };
 use maze_defence_rendering_macroquad::MacroquadBackend;
 use maze_defence_system_bootstrap::Bootstrap;
@@ -111,7 +111,7 @@ fn main() -> Result<()> {
         let world = simulation.world();
         let banner = bootstrap.welcome_banner(world).to_owned();
         let tile_grid = bootstrap.tile_grid(world);
-        let wall_hole = bootstrap.wall_hole(world);
+        let target = bootstrap.target(world);
         let grid_scene = TileGridPresentation::new(
             tile_grid.columns().get(),
             tile_grid.rows().get(),
@@ -119,15 +119,15 @@ fn main() -> Result<()> {
             args.cells_per_tile,
             Color::from_rgb_u8(31, 54, 22),
         )?;
-        let wall_hole_cells: Vec<WallHoleCellPresentation> = wall_hole
+        let target_cells: Vec<TargetCellPresentation> = target
             .cells()
             .iter()
-            .map(|cell| WallHoleCellPresentation::new(cell.column().get(), cell.row().get()))
+            .map(|cell| TargetCellPresentation::new(cell.column().get(), cell.row().get()))
             .collect();
         let wall_scene = WallPresentation::new(
             args.wall_thickness,
             Color::from_rgb_u8(68, 45, 15),
-            WallHolePresentation::new(wall_hole_cells),
+            TargetPresentation::new(target_cells),
         );
         (banner, grid_scene, wall_scene)
     };

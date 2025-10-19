@@ -158,54 +158,54 @@ pub struct WallPresentation {
     pub thickness: f32,
     /// Color used for the wall fill.
     pub color: Color,
-    /// Hole carved into the wall if one exists.
-    pub hole: WallHolePresentation,
+    /// Target carved into the wall if one exists.
+    pub target: TargetPresentation,
 }
 
 impl WallPresentation {
     /// Creates a new wall descriptor.
     #[must_use]
-    pub fn new(thickness: f32, color: Color, hole: WallHolePresentation) -> Self {
+    pub fn new(thickness: f32, color: Color, target: TargetPresentation) -> Self {
         Self {
             thickness,
             color,
-            hole,
+            target,
         }
     }
 }
 
-/// Hole carved into the perimeter wall aligned with the grid cells.
+/// Target carved into the perimeter wall aligned with the grid cells.
 #[derive(Clone, Debug, PartialEq)]
-pub struct WallHolePresentation {
-    /// Cells that compose the hole region.
-    pub cells: Vec<WallHoleCellPresentation>,
+pub struct TargetPresentation {
+    /// Cells that compose the target region.
+    pub cells: Vec<TargetCellPresentation>,
 }
 
-impl WallHolePresentation {
-    /// Creates a new wall hole descriptor.
+impl TargetPresentation {
+    /// Creates a new wall target descriptor.
     #[must_use]
-    pub fn new(cells: Vec<WallHoleCellPresentation>) -> Self {
+    pub fn new(cells: Vec<TargetCellPresentation>) -> Self {
         Self { cells }
     }
 
-    /// Determines whether the hole contains any cells.
+    /// Determines whether the target contains any cells.
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.cells.is_empty()
     }
 }
 
-/// Single cell composing part of a wall hole.
+/// Single cell composing part of a wall target.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct WallHoleCellPresentation {
+pub struct TargetCellPresentation {
     /// Column of the cell aligned with the main grid.
     pub column: u32,
     /// Row of the cell relative to the main grid.
     pub row: u32,
 }
 
-impl WallHoleCellPresentation {
-    /// Creates a new wall hole cell descriptor.
+impl TargetCellPresentation {
+    /// Creates a new wall target cell descriptor.
     #[must_use]
     pub const fn new(column: u32, row: u32) -> Self {
         Self { column, row }
