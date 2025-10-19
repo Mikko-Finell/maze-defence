@@ -11,8 +11,8 @@ fn assigns_paths_for_all_bugs() {
     world::apply(
         &mut world,
         Command::ConfigureTileGrid {
-            columns: 3,
-            rows: 3,
+            columns: 5,
+            rows: 4,
             tile_length: 1.0,
         },
         &mut events,
@@ -37,8 +37,8 @@ fn step_commands_target_free_cells() {
     world::apply(
         &mut world,
         Command::ConfigureTileGrid {
-            columns: 3,
-            rows: 3,
+            columns: 5,
+            rows: 4,
             tile_length: 1.0,
         },
         &mut events,
@@ -63,7 +63,10 @@ fn step_commands_target_free_cells() {
 
     for command in &commands {
         if let Command::StepBug { bug_id, direction } = command {
-            let bug = bug_view.iter().find(|snapshot| &snapshot.id == bug_id).unwrap();
+            let bug = bug_view
+                .iter()
+                .find(|snapshot| &snapshot.id == bug_id)
+                .unwrap();
             let target = advance_cell(bug.cell, *direction);
             assert!(occupancy_view.is_free(target));
         }
@@ -113,24 +116,23 @@ fn replans_when_world_requests_new_path() {
         &mut bad_step_events,
     );
 
-    assert!(bad_step_events
+    let bug_view_after_failure = query::bug_view(&world);
+    let failed_bug = bug_view_after_failure
         .iter()
-        .any(|event| matches!(event, Event::BugPathNeeded { bug_id: requested } if *requested == bug_id)));
+        .find(|bug| bug.id == bug_id)
+        .expect("bug missing after failed step");
+    assert!(failed_bug.needs_path);
 
     tick_events.extend(bad_step_events);
+    pump_system(&mut world, &mut movement, tick_events);
 
-    let bug_view = query::bug_view(&world);
-    let occupancy_view = query::occupancy_view(&world);
-    let mut commands = Vec::new();
-    movement.handle(&tick_events, &bug_view, occupancy_view, &mut commands);
-
-    assert!(commands.iter().any(|command| matches!(command, Command::SetBugPath { bug_id: requested, .. } if *requested == bug_id)));
-
-    let mut follow_up_events = Vec::new();
-    for command in commands {
-        world::apply(&mut world, command, &mut follow_up_events);
-    }
-    pump_system(&mut world, &mut movement, follow_up_events);
+    let post_replan_view = query::bug_view(&world);
+    let replanned_bug = post_replan_view
+        .iter()
+        .find(|bug| bug.id == bug_id)
+        .expect("bug missing after replanning");
+    assert!(replanned_bug.next_hop.is_some());
+    assert!(!replanned_bug.needs_path);
 }
 
 fn pump_system(world: &mut World, movement: &mut Movement, mut events: Vec<Event>) {
@@ -152,13 +154,18 @@ fn pump_system(world: &mut World, movement: &mut Movement, mut events: Vec<Event
     }
 }
 
-fn advance_cell(cell: maze_defence_core::GridCell, direction: Direction) -> maze_defence_core::GridCell {
+fn advance_cell(
+    cell: maze_defence_core::GridCell,
+    direction: Direction,
+) -> maze_defence_core::GridCell {
     match direction {
-        Direction::North =>
-            maze_defence_core::GridCell::new(cell.column(), cell.row().saturating_sub(1)),
+        Direction::North => {
+            maze_defence_core::GridCell::new(cell.column(), cell.row().saturating_sub(1))
+        }
         Direction::East => maze_defence_core::GridCell::new(cell.column() + 1, cell.row()),
         Direction::South => maze_defence_core::GridCell::new(cell.column(), cell.row() + 1),
-        Direction::West =>
-            maze_defence_core::GridCell::new(cell.column().saturating_sub(1), cell.row()),
+        Direction::West => {
+            maze_defence_core::GridCell::new(cell.column().saturating_sub(1), cell.row())
+        }
     }
 }

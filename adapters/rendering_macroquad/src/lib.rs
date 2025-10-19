@@ -19,20 +19,26 @@
 use anyhow::Result;
 use macroquad::input::{is_key_pressed, KeyCode};
 use maze_defence_rendering::{
-    BugPresentation, Presentation, RenderingBackend, TileGridPresentation,
+    BugPresentation, Presentation, RenderingBackend, Scene, TileGridPresentation,
 };
+use std::time::Duration;
 
 /// Rendering backend implemented on top of macroquad.
 #[derive(Debug, Default)]
 pub struct MacroquadBackend;
 
 impl RenderingBackend for MacroquadBackend {
-    fn run(self, presentation: Presentation) -> Result<()> {
+    fn run<F>(self, presentation: Presentation, mut update_scene: F) -> Result<()>
+    where
+        F: FnMut(Duration, &mut Scene) + 'static,
+    {
         let Presentation {
             window_title,
             clear_color,
             scene,
         } = presentation;
+
+        let mut scene = scene;
 
         let mut config = macroquad::window::Conf::default();
         config.window_title = window_title;
@@ -51,6 +57,10 @@ impl RenderingBackend for MacroquadBackend {
 
                 let screen_width = macroquad::window::screen_width();
                 let screen_height = macroquad::window::screen_height();
+
+                let dt_seconds = macroquad::time::get_frame_time();
+                let frame_dt = Duration::from_secs_f32(dt_seconds.max(0.0));
+                update_scene(frame_dt, &mut scene);
 
                 let tile_grid = scene.tile_grid;
                 let wall = &scene.wall;

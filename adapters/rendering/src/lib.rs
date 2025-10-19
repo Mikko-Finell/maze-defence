@@ -10,7 +10,7 @@
 //! Shared rendering contracts for Maze Defence adapters.
 
 use anyhow::Result as AnyResult;
-use std::{error::Error, fmt};
+use std::{error::Error, fmt, time::Duration};
 
 /// RGBA color used when presenting frames.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -295,7 +295,13 @@ impl Presentation {
 /// Rendering backend capable of presenting Maze Defence scenes.
 pub trait RenderingBackend {
     /// Runs the rendering backend until it is requested to exit.
-    fn run(self, presentation: Presentation) -> AnyResult<()>;
+    ///
+    /// The provided `update_scene` closure receives the simulated frame delta and
+    /// may mutate the scene before it is rendered, allowing adapters to animate
+    /// world snapshots deterministically.
+    fn run<F>(self, presentation: Presentation, update_scene: F) -> AnyResult<()>
+    where
+        F: FnMut(Duration, &mut Scene) + 'static;
 }
 
 /// Errors that can occur when constructing rendering descriptors.
