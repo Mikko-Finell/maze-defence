@@ -284,6 +284,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "maze-defence-core",
  "maze-defence-rendering",
  "maze-defence-rendering-macroquad",
  "maze-defence-system-bootstrap",

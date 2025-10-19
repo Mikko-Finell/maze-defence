@@ -10,6 +10,7 @@ maze-defence-system-bootstrap = { path = "../../systems/bootstrap" }
 maze-defence-world = { path = "../../world" }
 maze-defence-rendering = { path = "../rendering" }
 maze-defence-rendering-macroquad = { path = "../rendering_macroquad" }
+maze-defence-core = { path = "../../core" }
 
 [[bin]]
 name = "maze-defence"

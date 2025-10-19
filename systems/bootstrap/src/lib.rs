@@ -9,7 +9,7 @@
 
 //! Pure bootstrap system that prepares the Maze Defence experience.
 
-use maze_defence_world::{query, TileGrid, World};
+use maze_defence_world::{query, Bug, TileGrid, World};
 
 /// Produces data required to greet the player.
 #[derive(Debug, Default)]
@@ -26,5 +26,11 @@ impl Bootstrap {
     #[must_use]
     pub fn tile_grid<'world>(&self, world: &'world World) -> &'world TileGrid {
         query::tile_grid(world)
+    }
+
+    /// Exposes the bugs currently inhabiting the maze for presentation purposes.
+    #[must_use]
+    pub fn bugs<'world>(&self, world: &'world World) -> &'world [Bug] {
+        query::bugs(world)
     }
 }

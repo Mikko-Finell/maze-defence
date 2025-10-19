@@ -170,25 +170,54 @@ impl WallPresentation {
     }
 }
 
-/// Scene description combining the tile grid and outer wall.
+/// In-game bug rendered as a filled circle occupying a single grid cell.
 #[derive(Clone, Copy, Debug, PartialEq)]
+pub struct BugPresentation {
+    /// Zero-based column index of the grid cell that contains the bug.
+    pub column: u32,
+    /// Zero-based row index of the grid cell that contains the bug.
+    pub row: u32,
+    /// Fill color of the bug's body.
+    pub color: Color,
+}
+
+impl BugPresentation {
+    /// Creates a new bug presentation descriptor.
+    #[must_use]
+    pub const fn new(column: u32, row: u32, color: Color) -> Self {
+        Self { column, row, color }
+    }
+}
+
+/// Scene description combining the tile grid, outer wall and inhabitants.
+#[derive(Clone, Debug, PartialEq)]
 pub struct Scene {
     /// Tile grid that composes the main play area.
     pub tile_grid: TileGridPresentation,
     /// Wall drawn outside the play area.
     pub wall: WallPresentation,
+    /// Bugs currently visible within the maze.
+    pub bugs: Vec<BugPresentation>,
 }
 
 impl Scene {
     /// Creates a new scene descriptor.
     #[must_use]
-    pub const fn new(tile_grid: TileGridPresentation, wall: WallPresentation) -> Self {
-        Self { tile_grid, wall }
+    pub fn new(
+        tile_grid: TileGridPresentation,
+        wall: WallPresentation,
+        bugs: Vec<BugPresentation>,
+    ) -> Self {
+        Self {
+            tile_grid,
+            wall,
+            bugs,
+        }
     }
 
     /// Height of the entire scene including the wall.
     #[must_use]
-    pub const fn total_height(&self) -> f32 {
+    pub fn total_height(&self) -> f32 {
         self.tile_grid.bordered_height() + self.wall.thickness
     }
 }

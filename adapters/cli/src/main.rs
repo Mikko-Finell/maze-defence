@@ -15,7 +15,8 @@ use anyhow::Result;
 use clap::Parser;
 use maze_defence_core::Command;
 use maze_defence_rendering::{
-    Color, Presentation, RenderingBackend, Scene, TileGridPresentation, WallPresentation,
+    BugPresentation, Color, Presentation, RenderingBackend, Scene, TileGridPresentation,
+    WallPresentation,
 };
 use maze_defence_rendering_macroquad::MacroquadBackend;
 use maze_defence_system_bootstrap::Bootstrap;
@@ -116,6 +117,7 @@ fn main() -> Result<()> {
     let banner = bootstrap.welcome_banner(&world);
 
     let tile_grid = bootstrap.tile_grid(&world);
+    let bugs = bootstrap.bugs(&world);
 
     let grid_scene = TileGridPresentation::new(
         tile_grid.columns(),
@@ -127,7 +129,20 @@ fn main() -> Result<()> {
 
     let wall_scene = WallPresentation::new(args.wall_thickness, Color::from_rgb_u8(68, 45, 15));
 
-    let scene = Scene::new(grid_scene, wall_scene);
+    let bug_presentations: Vec<BugPresentation> = bugs
+        .iter()
+        .map(|bug| {
+            let cell = bug.cell();
+            let color = bug.color();
+            BugPresentation::new(
+                cell.column(),
+                cell.row(),
+                Color::from_rgb_u8(color.red(), color.green(), color.blue()),
+            )
+        })
+        .collect();
+
+    let scene = Scene::new(grid_scene, wall_scene, bug_presentations);
 
     let presentation = Presentation::new(banner.to_owned(), Color::from_rgb_u8(85, 142, 52), scene);
 

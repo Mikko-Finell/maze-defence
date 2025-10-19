@@ -18,7 +18,9 @@
 
 use anyhow::Result;
 use macroquad::input::{is_key_pressed, KeyCode};
-use maze_defence_rendering::{Presentation, RenderingBackend, TileGridPresentation};
+use maze_defence_rendering::{
+    BugPresentation, Presentation, RenderingBackend, TileGridPresentation,
+};
 
 /// Rendering backend implemented on top of macroquad.
 #[derive(Debug, Default)]
@@ -139,6 +141,18 @@ impl RenderingBackend for MacroquadBackend {
                     wall_height,
                     wall_color,
                 );
+
+                let bug_radius = tile_step * 0.5;
+                for BugPresentation { column, row, color } in &scene.bugs {
+                    let bug_center_x = grid_offset_x + (*column as f32 + 0.5) * tile_step;
+                    let bug_center_y = grid_offset_y + (*row as f32 + 0.5) * tile_step;
+                    macroquad::shapes::draw_circle(
+                        bug_center_x,
+                        bug_center_y,
+                        bug_radius,
+                        to_macroquad_color(*color),
+                    );
+                }
 
                 macroquad::window::next_frame().await;
             }
