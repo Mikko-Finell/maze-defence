@@ -4,8 +4,11 @@ version = "0.1.0"
 edition.workspace = true
 
 [dependencies]
+anyhow.workspace = true
 maze-defence-system-bootstrap = { path = "../../systems/bootstrap" }
 maze-defence-world = { path = "../../world" }
+maze-defence-rendering = { path = "../rendering" }
+maze-defence-rendering-macroquad = { path = "../rendering_macroquad" }
 
 [[bin]]
 name = "maze-defence"
