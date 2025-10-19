@@ -9,7 +9,7 @@
 
 //! Pure bootstrap system that prepares the Maze Defence experience.
 
-use maze_defence_world::{query, Bug, TileGrid, World};
+use maze_defence_world::{query, Bug, TileGrid, Wall, WallHole, World};
 
 /// Produces data required to greet the player.
 #[derive(Debug, Default)]
@@ -32,5 +32,17 @@ impl Bootstrap {
     #[must_use]
     pub fn bugs<'world>(&self, world: &'world World) -> &'world [Bug] {
         query::bugs(world)
+    }
+
+    /// Exposes the perimeter wall guarding the maze.
+    #[must_use]
+    pub fn wall<'world>(&self, world: &'world World) -> &'world Wall {
+        query::wall(world)
+    }
+
+    /// Exposes the hole carved into the wall for presentation.
+    #[must_use]
+    pub fn wall_hole<'world>(&self, world: &'world World) -> &'world WallHole {
+        query::wall_hole(world)
     }
 }
