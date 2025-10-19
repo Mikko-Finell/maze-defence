@@ -1,7 +1,7 @@
 # Movement and Pathing Implementation Plan
 
 ## Goals and Constraints
-- Enable bugs to traverse the maze grid toward the wall hole using four-directional (N/E/S/W) moves on grid cells.
+- Enable bugs to traverse the maze grid toward the wall target using four-directional (N/E/S/W) moves on grid cells.
 - Maintain deterministic behaviour that respects the architectural rules in `AGENTS.md` (pure systems, single mutation point in the world, message-based coordination).
 - Ensure multiple bugs can move concurrently without overlapping; re-plan paths whenever the intended next cell becomes occupied.
 - Keep execution performant for many bugs by minimising redundant path computations and avoiding unnecessary allocations.
@@ -25,9 +25,9 @@
    - Use a dense `Vec<Option<BugId>>` sized to the grid (`width * height`) for cache-friendly O(1) membership.
    - Provide helper methods for translating `(row, column)` to indices; keep a `HashSet` fallback only if extremely sparse maps emerge in future use-cases.
    - Update occupancy atomically when bugs move.
-3. [DONE] Track wall-hole target cells as `CellCoord` equivalents:
-   - Convert `WallCell` values into traversable `CellCoord` nodes, treating the hole row (`rows`) as a valid exit cell.
-   - Maintain adjacency information to connect interior edge cells to the hole cell so A* can path to it.
+3. [DONE] Track wall target cells as `CellCoord` equivalents:
+   - Convert `TargetCell` values into traversable `CellCoord` nodes, treating the target row (`rows`) as a valid exit cell.
+   - Maintain adjacency information to connect interior edge cells to the target cell so A* can path to it.
 4. [DONE] Update `apply` logic:
    - `Tick` accumulates time on each bug and emits `Event::TimeAdvanced { dt }`; when a bug accrues at least one-second quantum and lacks a queued hop, emit `Event::BugPathNeeded` to request planning.
    - `SetBugPath` replaces the queued path (validating first hop against current position) and clears any stale progress.
@@ -35,7 +35,7 @@
 5. [DONE] Expose new queries for systems:
    - `query::bug_view(world) -> BugView` returning read-only DTOs that contain bug ids, cells, queued path heads, and readiness flags.
    - `query::occupancy_view(world) -> OccupancyView` with immutable access to the dense grid buffer (and helper iterators for free target cells).
-   - Helper query to expose free hole cells (`query::available_wall_cells`).
+   - Helper query to expose free target cells (`query::available_target_cells`).
 6. [DONE] Ensure determinism:
    - Use fixed ordering when iterating bugs (e.g., ascending `BugId`).
    - Avoid floating-point drift by storing time as `FixedU32` microseconds or `Duration` accumulators and subtract exactly one-second quanta.
@@ -47,21 +47,21 @@
    - For each bug needing a path (via `Event::BugPathNeeded` or DTO flag), compute the best path and issue `SetBugPath` command.
    - When a bug is ready to step and has a path, propose `StepBug` commands for the next direction, but only if the destination cell appears free in `occupancy_view`. Losers in the reservation phase will cause the world to emit a new `Event::BugPathNeeded`.
 2. [DONE] Keep computation efficient:
-   - Cache wall-hole target cells once per handler call.
+   - Cache wall target cells once per handler call.
    - A* pathfinding on a per-bug basis using `BinaryHeap` for the frontier, Manhattan heuristic, and hashing grid coordinates.
    - Re-use allocation buffers (e.g., `Vec<CellCoord>`) via scratch workspace passed into helper functions to avoid repeated allocations on each tick.
 3. [DONE] Respect non-overlap rule and reservation outcomes:
    - Before emitting `StepBug`, consult `occupancy_view` to ensure target cell is free (ignoring the bug's current cell).
    - Systems do not loop on failed reservations; they rely on the subsequent `Event::BugPathNeeded` to trigger fresh planning.
-4. [DONE] Determine the nearest wall-hole cell:
-   - Cache wall-hole cells derived from `WallHole::cells()` once the workspace dimensions are known.
+4. [DONE] Determine the nearest target cell:
+   - Cache wall target cells derived from `Target::cells()` once the workspace dimensions are known.
    - Break ties deterministically (lowest manhattan distance, then lowest column/row) to maintain reproducibility while allowing
      exit cells to remain always enterable.
 
 ## Pathfinding Implementation Details
 1. [DONE] Grid Model:
-   - Graph nodes are `CellCoord` values inside the maze plus the `WallHole` exit nodes.
-   - Legal moves: four directions; when on the interior cell adjacent to the hole, allow moving into the hole node.
+   - Graph nodes are `CellCoord` values inside the maze plus the `Target` exit nodes.
+   - Legal moves: four directions; when on the interior cell adjacent to the target, allow moving into the target node.
 2. [DONE] A* Mechanics:
    - Reconstruct the final path using a reusable `Vec<CellCoord>` buffer to avoid repeated allocations.
    - Occupancy map excludes the moving bug’s current cell; treat other bugs as static obstacles during the search.
@@ -78,7 +78,7 @@
 2. Scenario tests:
    - Two bugs starting on same column path toward exit verifying they queue without overlap.
    - Bug encountering newly occupied cell triggers replanning (simulate by positioning another bug in its path before next tick).
-   - Validation that the nearest available wall-hole cell is selected when one is already reserved.
+   - Validation that the nearest available target cell is selected when one is already reserved.
 3. Unit tests:
    - A* pathfinding returns Manhattan-shortest path on simple grids and respects obstacles.
    - `World::apply` rejects invalid `StepBug` commands (wrong direction or occupied target).

@@ -147,10 +147,10 @@ impl RenderingBackend for MacroquadBackend {
                 let wall_left = offset_x;
                 let wall_right = offset_x + bordered_grid_width_scaled;
 
-                let hole = &wall.hole;
-                let hole_cells = &hole.cells;
+                let target = &wall.target;
+                let target_cells = &target.cells;
 
-                if hole.is_empty() {
+                if target.is_empty() {
                     macroquad::shapes::draw_rectangle(
                         wall_left,
                         wall_y,
@@ -159,32 +159,32 @@ impl RenderingBackend for MacroquadBackend {
                         wall_color,
                     );
                 } else {
-                    let mut hole_columns: Vec<u32> =
-                        hole_cells.iter().map(|cell| cell.column).collect();
-                    hole_columns.sort_unstable();
-                    hole_columns.dedup();
+                    let mut target_columns: Vec<u32> =
+                        target_cells.iter().map(|cell| cell.column).collect();
+                    target_columns.sort_unstable();
+                    target_columns.dedup();
 
                     if let (Some(&first_column), Some(&last_column)) =
-                        (hole_columns.first(), hole_columns.last())
+                        (target_columns.first(), target_columns.last())
                     {
-                        let hole_left = grid_offset_x + first_column as f32 * tile_step;
-                        let hole_right = grid_offset_x + (last_column + 1) as f32 * tile_step;
+                        let target_left = grid_offset_x + first_column as f32 * tile_step;
+                        let target_right = grid_offset_x + (last_column + 1) as f32 * tile_step;
 
-                        if hole_left > wall_left {
+                        if target_left > wall_left {
                             macroquad::shapes::draw_rectangle(
                                 wall_left,
                                 wall_y,
-                                hole_left - wall_left,
+                                target_left - wall_left,
                                 wall_height,
                                 wall_color,
                             );
                         }
 
-                        if hole_right < wall_right {
+                        if target_right < wall_right {
                             macroquad::shapes::draw_rectangle(
-                                hole_right,
+                                target_right,
                                 wall_y,
-                                wall_right - hole_right,
+                                wall_right - target_right,
                                 wall_height,
                                 wall_color,
                             );
@@ -193,7 +193,7 @@ impl RenderingBackend for MacroquadBackend {
                         let walkway_top = wall_y;
                         let walkway_bottom = wall_y + wall_height;
 
-                        for column in hole_columns {
+                        for column in target_columns {
                             let start_x = grid_offset_x + column as f32 * tile_step;
                             macroquad::shapes::draw_line(
                                 start_x,
@@ -228,9 +228,9 @@ impl RenderingBackend for MacroquadBackend {
                         }
 
                         macroquad::shapes::draw_line(
-                            hole_left,
+                            target_left,
                             walkway_bottom,
-                            hole_right,
+                            target_right,
                             walkway_bottom,
                             1.0,
                             grid_color,

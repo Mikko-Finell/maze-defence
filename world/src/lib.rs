@@ -14,7 +14,7 @@ use std::{collections::VecDeque, time::Duration};
 use maze_defence_core::{BugId, CellCoord, Command, Direction, Event, TileCoord, WELCOME_BANNER};
 
 const BUG_GENERATION_SEED: u64 = 0x42f0_e1eb_d4a5_3c21;
-const BUG_COUNT: usize = 4;
+const BUG_COUNT: usize = 10;
 
 const DEFAULT_GRID_COLUMNS: TileCoord = TileCoord::new(10);
 const DEFAULT_GRID_ROWS: TileCoord = TileCoord::new(10);
@@ -75,7 +75,7 @@ impl TileGrid {
 /// Describes the perimeter wall that surrounds the tile grid.
 #[derive(Debug)]
 pub struct Wall {
-    hole: WallHole,
+    target: Target,
 }
 
 impl Wall {
@@ -83,46 +83,46 @@ impl Wall {
     #[must_use]
     pub(crate) fn new(columns: TileCoord, rows: TileCoord) -> Self {
         Self {
-            hole: WallHole::aligned_with_grid(columns, rows),
+            target: Target::aligned_with_grid(columns, rows),
         }
     }
 
-    /// Retrieves the hole carved into the perimeter wall.
+    /// Retrieves the target carved into the perimeter wall.
     #[must_use]
-    pub fn hole(&self) -> &WallHole {
-        &self.hole
+    pub fn target(&self) -> &Target {
+        &self.target
     }
 }
 
 /// Opening carved into the wall to connect the maze with the outside world.
 #[derive(Debug)]
-pub struct WallHole {
-    cells: Vec<WallCell>,
+pub struct Target {
+    cells: Vec<TargetCell>,
 }
 
-impl WallHole {
+impl Target {
     fn aligned_with_grid(columns: TileCoord, rows: TileCoord) -> Self {
         Self {
-            cells: hole_cells(columns, rows),
+            cells: target_cells(columns, rows),
         }
     }
 
-    /// Collection of cells that occupy the hole within the wall.
+    /// Collection of cells that occupy the target within the wall.
     #[must_use]
-    pub fn cells(&self) -> &[WallCell] {
+    pub fn cells(&self) -> &[TargetCell] {
         &self.cells
     }
 }
 
-/// Discrete cell that composes part of the wall hole.
+/// Discrete cell that composes part of the wall target.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct WallCell {
+pub struct TargetCell {
     column: TileCoord,
     row: TileCoord,
 }
 
-impl WallCell {
-    /// Creates a new wall cell located at the provided column and row.
+impl TargetCell {
+    /// Creates a new target cell located at the provided column and row.
     #[must_use]
     pub const fn new(column: TileCoord, row: TileCoord) -> Self {
         Self { column, row }
@@ -147,7 +147,7 @@ pub struct World {
     banner: &'static str,
     tile_grid: TileGrid,
     wall: Wall,
-    wall_targets: Vec<CellCoord>,
+    targets: Vec<CellCoord>,
     bugs: Vec<Bug>,
     occupancy: OccupancyGrid,
     reservations: ReservationFrame,
@@ -160,14 +160,14 @@ impl World {
     pub fn new() -> Self {
         let tile_grid = TileGrid::new(DEFAULT_GRID_COLUMNS, DEFAULT_GRID_ROWS, DEFAULT_TILE_LENGTH);
         let wall = Wall::new(tile_grid.columns(), tile_grid.rows());
-        let wall_targets = wall_target_cells(&wall);
+        let targets = target_cells_from_wall(&wall);
         let mut world = Self {
             banner: WELCOME_BANNER,
             bugs: Vec::new(),
             occupancy: OccupancyGrid::new(tile_grid.columns().get(), tile_grid.rows().get()),
             reservations: ReservationFrame::new(),
             wall,
-            wall_targets,
+            targets,
             tile_grid,
             tick_index: 0,
         };
@@ -203,6 +203,7 @@ impl World {
             return;
         }
 
+        let mut exited_bugs: Vec<BugId> = Vec::new();
         for request in requests {
             let Some(index) = self.bug_index(request.bug_id) else {
                 continue;
@@ -247,6 +248,8 @@ impl World {
                 continue;
             }
 
+            let reached_target = self.targets.iter().any(|target| *target == next_cell);
+
             self.occupancy.vacate(from);
             self.occupancy.occupy(bug.id, next_cell);
             bug.advance(next_cell);
@@ -257,6 +260,12 @@ impl World {
                 to: next_cell,
             });
 
+            if reached_target {
+                self.occupancy.vacate(next_cell);
+                exited_bugs.push(bug.id);
+                continue;
+            }
+
             if bug.next_step().is_none() && bug.accumulator >= STEP_QUANTUM {
                 if bug.mark_path_needed() {
                     out_events.push(Event::BugPathNeeded { bug_id: bug.id });
@@ -264,6 +273,12 @@ impl World {
             }
 
             let _ = before;
+        }
+
+        for bug_id in exited_bugs {
+            if let Some(position) = self.bug_index(bug_id) {
+                let _ = self.bugs.remove(position);
+            }
         }
     }
 }
@@ -278,7 +293,7 @@ pub fn apply(world: &mut World, command: Command, out_events: &mut Vec<Event>) {
         } => {
             world.tile_grid = TileGrid::new(columns, rows, tile_length);
             world.wall = Wall::new(columns, rows);
-            world.wall_targets = wall_target_cells(&world.wall);
+            world.targets = target_cells_from_wall(&world.wall);
             world.occupancy = OccupancyGrid::new(columns.get(), rows.get());
             world.reset_bugs();
 
@@ -327,7 +342,7 @@ pub fn apply(world: &mut World, command: Command, out_events: &mut Vec<Event>) {
 pub mod query {
     use std::time::Duration;
 
-    use super::{OccupancyGrid, TileGrid, Wall, WallHole, World};
+    use super::{OccupancyGrid, Target, TileGrid, Wall, World};
     use maze_defence_core::{BugId, CellCoord};
 
     /// Retrieves the welcome banner that adapters may display to players.
@@ -348,10 +363,10 @@ pub mod query {
         &world.wall
     }
 
-    /// Provides read-only access to the hole carved into the perimeter wall.
+    /// Provides read-only access to the target carved into the perimeter wall.
     #[must_use]
-    pub fn wall_hole(world: &World) -> &WallHole {
-        world.wall.hole()
+    pub fn target(world: &World) -> &Target {
+        world.wall.target()
     }
 
     /// Captures a read-only view of the bugs inhabiting the maze.
@@ -382,11 +397,11 @@ pub mod query {
         }
     }
 
-    /// Enumerates the wall-hole cells that are currently unoccupied.
+    /// Enumerates the target cells that are currently unoccupied.
     #[must_use]
-    pub fn available_wall_cells(world: &World) -> Vec<CellCoord> {
+    pub fn available_target_cells(world: &World) -> Vec<CellCoord> {
         world
-            .wall_targets
+            .targets
             .iter()
             .copied()
             .filter(|cell| world.occupancy.can_enter(*cell))
@@ -686,7 +701,7 @@ fn is_valid_cell(cell: CellCoord, columns: u32, rows: u32) -> bool {
     cell.column() < columns && cell.row() < rows
 }
 
-fn hole_cells(columns: TileCoord, rows: TileCoord) -> Vec<WallCell> {
+fn target_cells(columns: TileCoord, rows: TileCoord) -> Vec<TargetCell> {
     let column_count = columns.get();
     let row_count = rows.get();
 
@@ -700,7 +715,7 @@ fn hole_cells(columns: TileCoord, rows: TileCoord) -> Vec<WallCell> {
         column_count / 2
     };
 
-    vec![WallCell::new(
+    vec![TargetCell::new(
         TileCoord::new(center_column),
         TileCoord::new(row_count),
     )]
@@ -727,8 +742,8 @@ fn direction_between(from: CellCoord, to: CellCoord) -> Option<Direction> {
     }
 }
 
-fn wall_target_cells(wall: &Wall) -> Vec<CellCoord> {
-    wall.hole()
+fn target_cells_from_wall(wall: &Wall) -> Vec<CellCoord> {
+    wall.target()
         .cells()
         .iter()
         .map(|cell| CellCoord::new(cell.column().get(), cell.row().get()))
@@ -905,7 +920,7 @@ mod tests {
     }
 
     #[test]
-    fn wall_hole_aligns_with_center_for_odd_columns() {
+    fn target_aligns_with_center_for_odd_columns() {
         let mut world = World::new();
         let mut events = Vec::new();
 
@@ -919,17 +934,17 @@ mod tests {
             &mut events,
         );
 
-        let hole_cells = query::wall_hole(&world).cells();
+        let target_cells = query::target(&world).cells();
 
-        assert_eq!(hole_cells.len(), 1);
-        let cell = hole_cells[0];
+        assert_eq!(target_cells.len(), 1);
+        let cell = target_cells[0];
         assert_eq!(cell.column().get(), 4);
         assert_eq!(cell.row().get(), 7);
         assert_eq!(events.len(), BUG_COUNT);
     }
 
     #[test]
-    fn wall_hole_spans_single_tile_for_even_columns() {
+    fn target_spans_single_tile_for_even_columns() {
         let mut world = World::new();
         let mut events = Vec::new();
 
@@ -943,17 +958,17 @@ mod tests {
             &mut events,
         );
 
-        let hole_cells = query::wall_hole(&world).cells();
+        let target_cells = query::target(&world).cells();
 
-        assert_eq!(hole_cells.len(), 1);
-        let cell = hole_cells[0];
+        assert_eq!(target_cells.len(), 1);
+        let cell = target_cells[0];
         assert_eq!(cell.column().get(), 5);
         assert_eq!(cell.row().get(), 6);
         assert_eq!(events.len(), BUG_COUNT);
     }
 
     #[test]
-    fn wall_hole_absent_when_grid_missing() {
+    fn target_absent_when_grid_missing() {
         let mut world = World::new();
         let mut events = Vec::new();
 
@@ -967,7 +982,7 @@ mod tests {
             &mut events,
         );
 
-        assert!(query::wall_hole(&world).cells().is_empty());
+        assert!(query::target(&world).cells().is_empty());
         assert!(events.is_empty());
     }
 }
