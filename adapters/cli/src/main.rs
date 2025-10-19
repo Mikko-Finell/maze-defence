@@ -105,6 +105,7 @@ fn main() -> Result<()> {
     };
 
     let mut world = World::new();
+    let mut _events = Vec::new();
     world::apply(
         &mut world,
         Command::ConfigureTileGrid {
@@ -112,12 +113,13 @@ fn main() -> Result<()> {
             rows,
             tile_length: DEFAULT_TILE_LENGTH,
         },
+        &mut _events,
     );
     let bootstrap = Bootstrap::default();
     let banner = bootstrap.welcome_banner(&world);
 
     let tile_grid = bootstrap.tile_grid(&world);
-    let bugs = bootstrap.bugs(&world);
+    let bug_view = bootstrap.bugs(&world);
     let wall_hole = bootstrap.wall_hole(&world);
 
     let grid_scene = TileGridPresentation::new(
@@ -140,11 +142,11 @@ fn main() -> Result<()> {
         WallHolePresentation::new(wall_hole_cells),
     );
 
-    let bug_presentations: Vec<BugPresentation> = bugs
+    let bug_presentations: Vec<BugPresentation> = bug_view
         .iter()
         .map(|bug| {
-            let cell = bug.cell();
-            let color = bug.color();
+            let cell = bug.cell;
+            let color = bug.color;
             BugPresentation::new(
                 cell.column(),
                 cell.row(),
