@@ -79,19 +79,19 @@ impl RenderingBackend for MacroquadBackend {
                 let bordered_grid_height_scaled = tile_grid.bordered_height() * scale;
                 let bordered_grid_width_scaled = tile_grid.bordered_width() * scale;
                 let tile_step = tile_grid.tile_length * scale;
-                let subcell_step = tile_step / tile_grid.subdivisions_per_tile as f32;
-                let grid_offset_x = offset_x
-                    + TileGridPresentation::SIDE_BORDER_SUBCELL_LAYERS as f32 * subcell_step;
-                let grid_offset_y = offset_y
-                    + TileGridPresentation::TOP_BORDER_SUBCELL_LAYERS as f32 * subcell_step;
+                let cell_step = tile_step / tile_grid.cells_per_tile as f32;
+                let grid_offset_x =
+                    offset_x + TileGridPresentation::SIDE_BORDER_CELL_LAYERS as f32 * cell_step;
+                let grid_offset_y =
+                    offset_y + TileGridPresentation::TOP_BORDER_CELL_LAYERS as f32 * cell_step;
                 let grid_color = to_macroquad_color(tile_grid.line_color);
 
                 let subgrid_color = to_macroquad_color(tile_grid.line_color.lighten(0.6));
 
-                let total_subcolumns = tile_grid.columns * tile_grid.subdivisions_per_tile
-                    + 2 * TileGridPresentation::SIDE_BORDER_SUBCELL_LAYERS;
+                let total_subcolumns = tile_grid.columns * tile_grid.cells_per_tile
+                    + 2 * TileGridPresentation::SIDE_BORDER_CELL_LAYERS;
                 for column in 0..=total_subcolumns {
-                    let x = offset_x + column as f32 * subcell_step;
+                    let x = offset_x + column as f32 * cell_step;
                     macroquad::shapes::draw_line(
                         x,
                         offset_y,
@@ -102,11 +102,11 @@ impl RenderingBackend for MacroquadBackend {
                     );
                 }
 
-                let total_subrows = tile_grid.rows * tile_grid.subdivisions_per_tile
-                    + TileGridPresentation::TOP_BORDER_SUBCELL_LAYERS
-                    + TileGridPresentation::BOTTOM_BORDER_SUBCELL_LAYERS;
+                let total_subrows = tile_grid.rows * tile_grid.cells_per_tile
+                    + TileGridPresentation::TOP_BORDER_CELL_LAYERS
+                    + TileGridPresentation::BOTTOM_BORDER_CELL_LAYERS;
                 for row in 0..=total_subrows {
-                    let y = offset_y + row as f32 * subcell_step;
+                    let y = offset_y + row as f32 * cell_step;
                     macroquad::shapes::draw_line(
                         offset_x,
                         y,
@@ -214,8 +214,8 @@ impl RenderingBackend for MacroquadBackend {
                                 grid_color,
                             );
 
-                            for subdivision in 1..tile_grid.subdivisions_per_tile {
-                                let subdivision_x = start_x + subdivision as f32 * subcell_step;
+                            for subdivision in 1..tile_grid.cells_per_tile {
+                                let subdivision_x = start_x + subdivision as f32 * cell_step;
                                 macroquad::shapes::draw_line(
                                     subdivision_x,
                                     walkway_top,
@@ -238,10 +238,10 @@ impl RenderingBackend for MacroquadBackend {
                     }
                 }
 
-                let bug_radius = subcell_step * 0.5;
+                let bug_radius = cell_step * 0.5;
                 for BugPresentation { column, row, color } in &scene.bugs {
-                    let bug_center_x = grid_offset_x + (*column as f32 + 0.5) * tile_step;
-                    let bug_center_y = grid_offset_y + (*row as f32 + 0.5) * tile_step;
+                    let bug_center_x = grid_offset_x + (*column as f32 + 0.5) * cell_step;
+                    let bug_center_y = grid_offset_y + (*row as f32 + 0.5) * cell_step;
                     macroquad::shapes::draw_circle(
                         bug_center_x,
                         bug_center_y,

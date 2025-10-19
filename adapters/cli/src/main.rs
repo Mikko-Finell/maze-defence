@@ -43,11 +43,11 @@ struct CliArgs {
     /// Thickness of the surrounding wall measured in pixels.
     #[arg(long, value_name = "PIXELS", default_value_t = 40.0)]
     wall_thickness: f32,
-    /// Number of subcells drawn along each tile edge when rendering.
+    /// Number of cells drawn along each tile edge when rendering.
     #[arg(
         long = "cells-per-tile",
         value_name = "COUNT",
-        default_value_t = TileGridPresentation::DEFAULT_SUBDIVISIONS_PER_TILE,
+        default_value_t = TileGridPresentation::DEFAULT_CELLS_PER_TILE,
         value_parser = clap::value_parser!(u32).range(1..)
     )]
     cells_per_tile: u32,

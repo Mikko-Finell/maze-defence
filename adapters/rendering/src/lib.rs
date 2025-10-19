@@ -75,55 +75,53 @@ pub struct TileGridPresentation {
     pub rows: u32,
     /// Side length of a single tile expressed in world units.
     pub tile_length: f32,
-    /// Number of subcells drawn along each tile edge.
-    pub subdivisions_per_tile: u32,
+    /// Number of cells drawn along each tile edge.
+    pub cells_per_tile: u32,
     /// Color used when drawing grid lines.
     pub line_color: Color,
 }
 
 impl TileGridPresentation {
-    /// Default number of subcells drawn along each tile edge.
-    pub const DEFAULT_SUBDIVISIONS_PER_TILE: u32 = 4;
+    /// Default number of cells drawn along each tile edge.
+    pub const DEFAULT_CELLS_PER_TILE: u32 = 4;
 
-    /// Number of subcell layers rendered outside the tile grid on each side.
-    pub const SIDE_BORDER_SUBCELL_LAYERS: u32 = 1;
+    /// Number of cell layers rendered outside the tile grid on each side.
+    pub const SIDE_BORDER_CELL_LAYERS: u32 = 1;
 
-    /// Number of subcell layers rendered above the tile grid.
-    pub const TOP_BORDER_SUBCELL_LAYERS: u32 = 1;
+    /// Number of cell layers rendered above the tile grid.
+    pub const TOP_BORDER_CELL_LAYERS: u32 = 1;
 
-    /// Number of subcell layers rendered below the tile grid.
-    pub const BOTTOM_BORDER_SUBCELL_LAYERS: u32 = 0;
+    /// Number of cell layers rendered below the tile grid.
+    pub const BOTTOM_BORDER_CELL_LAYERS: u32 = 0;
 
     /// Creates a new tile grid descriptor.
     ///
-    /// Returns an error when `subdivisions_per_tile` is zero.
+    /// Returns an error when `cells_per_tile` is zero.
     #[must_use]
     pub fn new(
         columns: u32,
         rows: u32,
         tile_length: f32,
-        subdivisions_per_tile: u32,
+        cells_per_tile: u32,
         line_color: Color,
     ) -> std::result::Result<Self, RenderingError> {
-        if subdivisions_per_tile == 0 {
-            return Err(RenderingError::InvalidSubdivisions {
-                subdivisions_per_tile,
-            });
+        if cells_per_tile == 0 {
+            return Err(RenderingError::InvalidCellsPerTile { cells_per_tile });
         }
 
         Ok(Self {
             columns,
             rows,
             tile_length,
-            subdivisions_per_tile,
+            cells_per_tile,
             line_color,
         })
     }
 
-    /// Length of a single subcell derived from the tile length.
+    /// Length of a single cell derived from the tile length.
     #[must_use]
-    pub const fn subcell_length(&self) -> f32 {
-        self.tile_length / self.subdivisions_per_tile as f32
+    pub const fn cell_length(&self) -> f32 {
+        self.tile_length / self.cells_per_tile as f32
     }
 
     /// Calculates the total width of the grid.
@@ -138,18 +136,18 @@ impl TileGridPresentation {
         self.rows as f32 * self.tile_length
     }
 
-    /// Calculates the total width of the grid including the surrounding subcell border.
+    /// Calculates the total width of the grid including the surrounding cell border.
     #[must_use]
     pub const fn bordered_width(&self) -> f32 {
-        self.width() + 2.0 * self.subcell_length() * Self::SIDE_BORDER_SUBCELL_LAYERS as f32
+        self.width() + 2.0 * self.cell_length() * Self::SIDE_BORDER_CELL_LAYERS as f32
     }
 
-    /// Calculates the total height of the grid including the surrounding subcell border.
+    /// Calculates the total height of the grid including the surrounding cell border.
     #[must_use]
     pub const fn bordered_height(&self) -> f32 {
         self.height()
-            + self.subcell_length()
-                * (Self::TOP_BORDER_SUBCELL_LAYERS + Self::BOTTOM_BORDER_SUBCELL_LAYERS) as f32
+            + self.cell_length()
+                * (Self::TOP_BORDER_CELL_LAYERS + Self::BOTTOM_BORDER_CELL_LAYERS) as f32
     }
 }
 
@@ -215,6 +213,9 @@ impl WallHoleCellPresentation {
 }
 
 /// In-game bug rendered as a filled circle scaled to a single cell.
+///
+/// Bug coordinates are expressed in cell units derived from the tile grid's
+/// [`cells_per_tile`](TileGridPresentation::cells_per_tile) configuration.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct BugPresentation {
     /// Zero-based column index of the grid cell that contains the bug.
@@ -240,7 +241,7 @@ pub struct Scene {
     pub tile_grid: TileGridPresentation,
     /// Wall drawn outside the play area.
     pub wall: WallPresentation,
-    /// Bugs currently visible within the maze.
+    /// Bugs currently visible within the maze, positioned using cell coordinates.
     pub bugs: Vec<BugPresentation>,
 }
 
@@ -307,22 +308,20 @@ pub trait RenderingBackend {
 /// Errors that can occur when constructing rendering descriptors.
 #[derive(Debug, PartialEq, Eq)]
 pub enum RenderingError {
-    /// Subdivision count must be positive to avoid a zero-sized subcell.
-    InvalidSubdivisions {
-        /// Provided subdivision count that failed validation.
-        subdivisions_per_tile: u32,
+    /// Cells per tile must be positive to avoid a zero-sized cell.
+    InvalidCellsPerTile {
+        /// Provided cell count that failed validation.
+        cells_per_tile: u32,
     },
 }
 
 impl fmt::Display for RenderingError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::InvalidSubdivisions {
-                subdivisions_per_tile,
-            } => {
+            Self::InvalidCellsPerTile { cells_per_tile } => {
                 write!(
                     f,
-                    "subdivisions_per_tile must be positive (received {subdivisions_per_tile})"
+                    "cells_per_tile must be positive (received {cells_per_tile})"
                 )
             }
         }
@@ -336,23 +335,21 @@ mod tests {
     use super::*;
 
     #[test]
-    fn tile_grid_creation_accepts_positive_subdivisions() {
+    fn tile_grid_creation_accepts_positive_cells_per_tile() {
         let presentation = TileGridPresentation::new(10, 5, 32.0, 4, Color::from_rgb_u8(0, 0, 0))
-            .expect("positive subdivisions should succeed");
+            .expect("positive cells_per_tile should succeed");
 
-        assert_eq!(presentation.subdivisions_per_tile, 4);
+        assert_eq!(presentation.cells_per_tile, 4);
     }
 
     #[test]
-    fn tile_grid_creation_rejects_zero_subdivisions_without_panicking() {
+    fn tile_grid_creation_rejects_zero_cells_per_tile_without_panicking() {
         let error = TileGridPresentation::new(10, 5, 32.0, 0, Color::from_rgb_u8(0, 0, 0))
-            .expect_err("zero subdivisions must be rejected");
+            .expect_err("zero cells_per_tile must be rejected");
 
         assert!(matches!(
             error,
-            RenderingError::InvalidSubdivisions {
-                subdivisions_per_tile: 0
-            }
+            RenderingError::InvalidCellsPerTile { cells_per_tile: 0 }
         ));
     }
 }
