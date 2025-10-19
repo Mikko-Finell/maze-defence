@@ -170,7 +170,7 @@ impl WallPresentation {
     }
 }
 
-/// In-game bug rendered as a filled circle occupying a single grid cell.
+/// In-game bug rendered as a filled circle scaled to a single cell.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct BugPresentation {
     /// Zero-based column index of the grid cell that contains the bug.
