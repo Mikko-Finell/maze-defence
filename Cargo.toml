@@ -3,6 +3,7 @@ members = [
     "core",
     "world",
     "systems/bootstrap",
+    "systems/movement",
     "adapters/rendering",
     "adapters/rendering_macroquad",
     "adapters/cli",
