@@ -5,5 +5,5 @@ edition.workspace = true
 
 [dependencies]
 anyhow.workspace = true
-macroquad = "0.3"
+macroquad = { version = "0.3", default-features = false }
 maze-defence-rendering = { path = "../rendering" }

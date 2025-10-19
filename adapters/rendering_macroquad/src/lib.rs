@@ -8,6 +8,13 @@
 )]
 
 //! Macroquad-backed rendering adapter for Maze Defence.
+//!
+//! Macroquad's optional audio stack depends on native ALSA development
+//! libraries, which are unavailable in the containerised CI environment.
+//! To keep `cargo test` usable everywhere we depend on macroquad without its
+//! default `audio` feature.  Consumers that need sound playback can opt back
+//! in by enabling `macroquad/audio` in their own `Cargo.toml` dependency
+//! specification.
 
 use anyhow::Result;
 use macroquad::input::{is_key_pressed, KeyCode};
