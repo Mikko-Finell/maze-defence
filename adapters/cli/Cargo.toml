@@ -1,0 +1,12 @@
+[package]
+name = "maze-defence-cli"
+version = "0.1.0"
+edition.workspace = true
+
+[dependencies]
+maze-defence-system-bootstrap = { path = "../../systems/bootstrap" }
+maze-defence-world = { path = "../../world" }
+
+[[bin]]
+name = "maze-defence"
+path = "src/main.rs"
