@@ -1,0 +1,15 @@
+[workspace]
+members = [
+    "core",
+    "world",
+    "systems/bootstrap",
+    "adapters/cli",
+]
+resolver = "2"
+
+[workspace.package]
+edition = "2021"
+
+[workspace.dependencies]
+anyhow = "1.0"
+thiserror = "1.0"
