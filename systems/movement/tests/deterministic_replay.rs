@@ -4,7 +4,7 @@ use std::{
     time::Duration,
 };
 
-use maze_defence_core::{Command, Event, GridCell};
+use maze_defence_core::{CellCoord, Command, Event, TileCoord};
 use maze_defence_system_movement::Movement;
 use maze_defence_world::{self as world, query, World};
 
@@ -83,8 +83,8 @@ fn record_events(events: &[Event], log: &mut Vec<EventRecord>) {
 fn scripted_commands() -> Vec<Command> {
     vec![
         Command::ConfigureTileGrid {
-            columns: 5,
-            rows: 4,
+            columns: TileCoord::new(5),
+            rows: TileCoord::new(4),
             tile_length: 1.0,
         },
         Command::Tick {
@@ -122,8 +122,8 @@ impl ReplayOutcome {
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 struct BugState {
     id: maze_defence_core::BugId,
-    cell: GridCell,
-    next_hop: Option<GridCell>,
+    cell: CellCoord,
+    next_hop: Option<CellCoord>,
     ready_for_step: bool,
     needs_path: bool,
     accumulated_micros: u128,
@@ -158,8 +158,8 @@ enum EventRecord {
     },
     BugAdvanced {
         bug_id: maze_defence_core::BugId,
-        from: GridCell,
-        to: GridCell,
+        from: CellCoord,
+        to: CellCoord,
     },
 }
 

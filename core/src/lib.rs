@@ -26,10 +26,10 @@ pub const WELCOME_BANNER: &str = "Welcome to Maze Defence.";
 pub enum Command {
     /// Configures the world's tile grid using the provided dimensions.
     ConfigureTileGrid {
-        /// Number of columns laid out in the grid.
-        columns: u32,
-        /// Number of rows laid out in the grid.
-        rows: u32,
+        /// Number of tile columns laid out in the grid.
+        columns: TileCoord,
+        /// Number of tile rows laid out in the grid.
+        rows: TileCoord,
         /// Length of each square tile measured in world units.
         tile_length: f32,
     },
@@ -42,8 +42,8 @@ pub enum Command {
     SetBugPath {
         /// Identifier of the bug that should adopt the path.
         bug_id: BugId,
-        /// Ordered list of grid cells the bug will traverse.
-        path: Vec<GridCell>,
+        /// Ordered list of cell coordinates that subdivide each tile.
+        path: Vec<CellCoord>,
     },
     /// Requests that a bug advance a single step in the specified direction.
     StepBug {
@@ -71,10 +71,10 @@ pub enum Event {
     BugAdvanced {
         /// Identifier of the bug that advanced.
         bug_id: BugId,
-        /// Cell the bug occupied before moving.
-        from: GridCell,
-        /// Cell the bug occupies after completing the move.
-        to: GridCell,
+        /// Cell the bug occupied before moving. Cells subdivide individual tiles.
+        from: CellCoord,
+        /// Cell the bug occupies after completing the move. Cells subdivide individual tiles.
+        to: CellCoord,
     },
 }
 
@@ -111,12 +111,12 @@ impl BugId {
 
 /// Location of a single grid cell expressed as column and row coordinates.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct GridCell {
+pub struct CellCoord {
     column: u32,
     row: u32,
 }
 
-impl GridCell {
+impl CellCoord {
     /// Creates a new grid cell coordinate.
     #[must_use]
     pub const fn new(column: u32, row: u32) -> Self {
@@ -133,5 +133,23 @@ impl GridCell {
     #[must_use]
     pub const fn row(&self) -> u32 {
         self.row
+    }
+}
+
+/// Index within the tile grid measured in whole tiles rather than cells.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct TileCoord(u32);
+
+impl TileCoord {
+    /// Creates a new tile coordinate wrapper.
+    #[must_use]
+    pub const fn new(value: u32) -> Self {
+        Self(value)
+    }
+
+    /// Retrieves the underlying tile index.
+    #[must_use]
+    pub const fn get(&self) -> u32 {
+        self.0
     }
 }

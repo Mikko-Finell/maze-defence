@@ -9,24 +9,24 @@
 ## Message Surface Changes (`core` crate)
 1. [DONE] Extend `Command` with discrete mutations instead of embedding movement logic inside systems:
    - `Command::Tick { dt: Duration }` – issued by adapters each frame to request that the world advance the simulation clock.
-   - `Command::SetBugPath { bug_id: BugId, path: Vec<GridCell> }` – authoritative path assignment emitted by the pure movement system.
+   - `Command::SetBugPath { bug_id: BugId, path: Vec<CellCoord> }` – authoritative path assignment emitted by the pure movement system using the fine-grained cell lattice inside each tile.
    - `Command::StepBug { bug_id: BugId, direction: Direction }` – proposals for one-cell moves emitted after a tick makes a bug ready to advance.
 2. [DONE] Introduce a new `Event` enum so the world can broadcast state transitions for systems to react to deterministically:
    - `Event::TimeAdvanced { dt: Duration }` emitted from `World::apply` after handling `Command::Tick`, preserving the “command in, event out” contract.
    - `Event::BugPathNeeded { bug_id: BugId }` whenever the world requires a new path (e.g., spawn, completed path, or failed reservation).
-   - `Event::BugAdvanced { bug_id: BugId, from: GridCell, to: GridCell }` emitted after the world accepts a `StepBug` command during reservation resolution.
+   - `Event::BugAdvanced { bug_id: BugId, from: CellCoord, to: CellCoord }` emitted after the world accepts a `StepBug` command during reservation resolution.
 3. [DONE] Document the message contracts and update adapter/system wiring so adapters only send commands, the world only mutates through `apply`, and systems consume event streams while returning command batches.
 
 ## World State Authoritative Changes (`world` crate)
 1. [DONE] Replace the immutable `Bug` data with a stateful struct tracking navigation:
    - Keep immutable presentation fields (`id`, `color`).
-   - Store current cell, optional queued path (`VecDeque<GridCell>`), and accumulated fractional time toward the next step.
+   - Store current cell, optional queued path (`VecDeque<CellCoord>`), and accumulated fractional time toward the next step.
 2. [DONE] Maintain an occupancy map for fast lookup:
    - Use a dense `Vec<Option<BugId>>` sized to the grid (`width * height`) for cache-friendly O(1) membership.
    - Provide helper methods for translating `(row, column)` to indices; keep a `HashSet` fallback only if extremely sparse maps emerge in future use-cases.
    - Update occupancy atomically when bugs move.
-3. [DONE] Track wall-hole target cells as `GridCell` equivalents:
-   - Convert `WallCell` values into traversable `GridCell` nodes, treating the hole row (`rows`) as a valid exit cell.
+3. [DONE] Track wall-hole target cells as `CellCoord` equivalents:
+   - Convert `WallCell` values into traversable `CellCoord` nodes, treating the hole row (`rows`) as a valid exit cell.
    - Maintain adjacency information to connect interior edge cells to the hole cell so A* can path to it.
 4. [DONE] Update `apply` logic:
    - `Tick` accumulates time on each bug and emits `Event::TimeAdvanced { dt }`; when a bug accrues at least one-second quantum and lacks a queued hop, emit `Event::BugPathNeeded` to request planning.
@@ -49,7 +49,7 @@
 2. [DONE] Keep computation efficient:
    - Cache wall-hole target cells once per handler call.
    - A* pathfinding on a per-bug basis using `BinaryHeap` for the frontier, Manhattan heuristic, and hashing grid coordinates.
-   - Re-use allocation buffers (e.g., `Vec<GridCell>`) via scratch workspace passed into helper functions to avoid repeated allocations on each tick.
+   - Re-use allocation buffers (e.g., `Vec<CellCoord>`) via scratch workspace passed into helper functions to avoid repeated allocations on each tick.
 3. [DONE] Respect non-overlap rule and reservation outcomes:
    - Before emitting `StepBug`, consult `occupancy_view` to ensure target cell is free (ignoring the bug's current cell).
    - Systems do not loop on failed reservations; they rely on the subsequent `Event::BugPathNeeded` to trigger fresh planning.
@@ -60,10 +60,10 @@
 
 ## Pathfinding Implementation Details
 1. [DONE] Grid Model:
-   - Graph nodes are `GridCell` inside the maze plus the `WallHole` exit nodes.
+   - Graph nodes are `CellCoord` values inside the maze plus the `WallHole` exit nodes.
    - Legal moves: four directions; when on the interior cell adjacent to the hole, allow moving into the hole node.
 2. [DONE] A* Mechanics:
-   - Reconstruct the final path using a reusable `Vec<GridCell>` buffer to avoid repeated allocations.
+   - Reconstruct the final path using a reusable `Vec<CellCoord>` buffer to avoid repeated allocations.
    - Occupancy map excludes the moving bug’s current cell; treat other bugs as static obstacles during the search.
    - Abort and return empty path when no exit cell reachable.
 3. [DONE] Performance Considerations:

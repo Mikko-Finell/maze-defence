@@ -14,18 +14,18 @@ use std::{
     collections::BinaryHeap,
 };
 
-use maze_defence_core::{BugId, Command, Direction, Event, GridCell};
+use maze_defence_core::{BugId, CellCoord, Command, Direction, Event};
 use maze_defence_world::query::{BugSnapshot, BugView, OccupancyView};
 
 /// Pure system that reacts to world events and emits movement commands.
 #[derive(Debug, Default)]
 pub struct Movement {
     frontier: BinaryHeap<Reverse<NodeState>>,
-    came_from: Vec<Option<GridCell>>,
+    came_from: Vec<Option<CellCoord>>,
     g_score: Vec<u32>,
-    path_buffer: Vec<GridCell>,
+    path_buffer: Vec<CellCoord>,
     needs_path: Vec<BugId>,
-    hole_targets: Vec<GridCell>,
+    hole_targets: Vec<CellCoord>,
     hole_columns: Vec<u32>,
     prepared_dimensions: Option<(u32, u32)>,
     workspace_nodes: usize,
@@ -135,7 +135,7 @@ impl Movement {
         occupancy_view: OccupancyView<'_>,
         columns: u32,
         rows: u32,
-    ) -> Option<Vec<GridCell>> {
+    ) -> Option<Vec<CellCoord>> {
         if self.hole_targets.is_empty() {
             return None;
         }
@@ -162,7 +162,7 @@ impl Movement {
                 .any(|target| *target == current.cell)
             {
                 self.reconstruct_path(bug.cell, current.cell, columns, rows_with_exit);
-                let path: Vec<GridCell> = self.path_buffer.drain(..).collect();
+                let path: Vec<CellCoord> = self.path_buffer.drain(..).collect();
                 return Some(path);
             }
 
@@ -194,7 +194,7 @@ impl Movement {
         None
     }
 
-    fn reconstruct_path(&mut self, start: GridCell, goal: GridCell, columns: u32, rows: u32) {
+    fn reconstruct_path(&mut self, start: CellCoord, goal: CellCoord, columns: u32, rows: u32) {
         self.path_buffer.clear();
 
         let mut current = goal;
@@ -249,13 +249,13 @@ impl Movement {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct NodeState {
-    cell: GridCell,
+    cell: CellCoord,
     g_cost: u32,
     f_cost: u32,
 }
 
 impl NodeState {
-    fn new(cell: GridCell, g_cost: u32, heuristic: u32) -> Self {
+    fn new(cell: CellCoord, g_cost: u32, heuristic: u32) -> Self {
         Self {
             cell,
             g_cost,
@@ -282,7 +282,7 @@ impl PartialOrd for NodeState {
 }
 
 fn enumerate_neighbors(
-    cell: GridCell,
+    cell: CellCoord,
     columns: u32,
     rows: u32,
     hole_columns: &[u32],
@@ -290,19 +290,19 @@ fn enumerate_neighbors(
     let mut neighbors = NeighborIter::default();
     if cell.row() < rows {
         if cell.row() > 0 {
-            neighbors.push(GridCell::new(cell.column(), cell.row() - 1));
+            neighbors.push(CellCoord::new(cell.column(), cell.row() - 1));
         }
         if cell.column() > 0 {
-            neighbors.push(GridCell::new(cell.column() - 1, cell.row()));
+            neighbors.push(CellCoord::new(cell.column() - 1, cell.row()));
         }
         if cell.column() + 1 < columns {
-            neighbors.push(GridCell::new(cell.column() + 1, cell.row()));
+            neighbors.push(CellCoord::new(cell.column() + 1, cell.row()));
         }
         if cell.row() + 1 < rows {
-            neighbors.push(GridCell::new(cell.column(), cell.row() + 1));
+            neighbors.push(CellCoord::new(cell.column(), cell.row() + 1));
         } else if cell.row() + 1 == rows {
             if hole_columns.iter().any(|column| *column == cell.column()) {
-                neighbors.push(GridCell::new(cell.column(), rows));
+                neighbors.push(CellCoord::new(cell.column(), rows));
             }
         }
     }
@@ -312,13 +312,13 @@ fn enumerate_neighbors(
 
 #[derive(Clone, Debug, Default)]
 struct NeighborIter {
-    buffer: [Option<GridCell>; 4],
+    buffer: [Option<CellCoord>; 4],
     len: usize,
     cursor: usize,
 }
 
 impl NeighborIter {
-    fn push(&mut self, cell: GridCell) {
+    fn push(&mut self, cell: CellCoord) {
         if self.len < self.buffer.len() {
             self.buffer[self.len] = Some(cell);
             self.len += 1;
@@ -327,7 +327,7 @@ impl NeighborIter {
 }
 
 impl Iterator for NeighborIter {
-    type Item = GridCell;
+    type Item = CellCoord;
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.cursor >= self.len {
@@ -340,14 +340,14 @@ impl Iterator for NeighborIter {
     }
 }
 
-fn cell_available_for(cell: GridCell, bug_id: BugId, occupancy_view: OccupancyView<'_>) -> bool {
+fn cell_available_for(cell: CellCoord, bug_id: BugId, occupancy_view: OccupancyView<'_>) -> bool {
     match occupancy_view.occupant(cell) {
         None => true,
         Some(occupant) => occupant == bug_id,
     }
 }
 
-fn direction_between(from: GridCell, to: GridCell) -> Option<Direction> {
+fn direction_between(from: CellCoord, to: CellCoord) -> Option<Direction> {
     let column_diff = from.column().abs_diff(to.column());
     let row_diff = from.row().abs_diff(to.row());
     if column_diff + row_diff != 1 {
@@ -367,7 +367,7 @@ fn direction_between(from: GridCell, to: GridCell) -> Option<Direction> {
     }
 }
 
-fn heuristic_to_targets(cell: GridCell, targets: &[GridCell]) -> u32 {
+fn heuristic_to_targets(cell: CellCoord, targets: &[CellCoord]) -> u32 {
     targets
         .iter()
         .map(|target| manhattan_distance(cell, *target))
@@ -375,11 +375,11 @@ fn heuristic_to_targets(cell: GridCell, targets: &[GridCell]) -> u32 {
         .unwrap_or(0)
 }
 
-fn manhattan_distance(from: GridCell, to: GridCell) -> u32 {
+fn manhattan_distance(from: CellCoord, to: CellCoord) -> u32 {
     from.column().abs_diff(to.column()) + from.row().abs_diff(to.row())
 }
 
-fn index(columns: u32, rows: u32, cell: GridCell) -> Option<usize> {
+fn index(columns: u32, rows: u32, cell: CellCoord) -> Option<usize> {
     if cell.column() >= columns || cell.row() >= rows {
         return None;
     }
@@ -390,7 +390,7 @@ fn index(columns: u32, rows: u32, cell: GridCell) -> Option<usize> {
     Some(row * width + column)
 }
 
-fn hole_cells(columns: u32, rows: u32) -> Vec<GridCell> {
+fn hole_cells(columns: u32, rows: u32) -> Vec<CellCoord> {
     if columns == 0 || rows == 0 {
         return Vec::new();
     }
@@ -401,7 +401,7 @@ fn hole_cells(columns: u32, rows: u32) -> Vec<GridCell> {
         columns / 2
     };
 
-    vec![GridCell::new(center_column, rows)]
+    vec![CellCoord::new(center_column, rows)]
 }
 
 #[cfg(test)]
@@ -410,21 +410,21 @@ mod tests {
 
     #[test]
     fn direction_between_neighbors() {
-        let origin = GridCell::new(3, 3);
+        let origin = CellCoord::new(3, 3);
         assert_eq!(
-            direction_between(origin, GridCell::new(3, 2)),
+            direction_between(origin, CellCoord::new(3, 2)),
             Some(Direction::North)
         );
         assert_eq!(
-            direction_between(origin, GridCell::new(4, 3)),
+            direction_between(origin, CellCoord::new(4, 3)),
             Some(Direction::East)
         );
         assert_eq!(
-            direction_between(origin, GridCell::new(3, 4)),
+            direction_between(origin, CellCoord::new(3, 4)),
             Some(Direction::South)
         );
         assert_eq!(
-            direction_between(origin, GridCell::new(2, 3)),
+            direction_between(origin, CellCoord::new(2, 3)),
             Some(Direction::West)
         );
         assert_eq!(direction_between(origin, origin), None);
@@ -433,14 +433,14 @@ mod tests {
     #[test]
     fn hole_cells_align_with_center() {
         assert!(hole_cells(0, 0).is_empty());
-        assert_eq!(hole_cells(3, 4), vec![GridCell::new(1, 4)]);
-        assert_eq!(hole_cells(4, 2), vec![GridCell::new(1, 2)]);
+        assert_eq!(hole_cells(3, 4), vec![CellCoord::new(1, 4)]);
+        assert_eq!(hole_cells(4, 2), vec![CellCoord::new(1, 2)]);
     }
 
     #[test]
     fn manhattan_distance_matches_expectation() {
-        let from = GridCell::new(0, 0);
-        let to = GridCell::new(3, 4);
+        let from = CellCoord::new(0, 0);
+        let to = CellCoord::new(3, 4);
         assert_eq!(manhattan_distance(from, to), 7);
     }
 }
