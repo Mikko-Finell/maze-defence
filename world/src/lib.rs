@@ -9,7 +9,7 @@
 
 //! Authoritative world state management for Maze Defence.
 
-use maze_defence_core::WELCOME_BANNER;
+use maze_defence_core::{Command, WELCOME_BANNER};
 
 const DEFAULT_GRID_COLUMNS: u32 = 10;
 const DEFAULT_GRID_ROWS: u32 = 10;
@@ -26,7 +26,7 @@ pub struct TileGrid {
 impl TileGrid {
     /// Creates a new tile grid description.
     #[must_use]
-    pub const fn new(columns: u32, rows: u32, tile_length: f32) -> Self {
+    pub(crate) const fn new(columns: u32, rows: u32, tile_length: f32) -> Self {
         Self {
             columns,
             rows,
@@ -76,15 +76,22 @@ impl World {
     /// Creates a new Maze Defence world ready for simulation.
     #[must_use]
     pub fn new() -> Self {
-        Self::with_tile_grid(DEFAULT_GRID_COLUMNS, DEFAULT_GRID_ROWS, DEFAULT_TILE_LENGTH)
-    }
-
-    /// Creates a Maze Defence world with the provided tile grid definition.
-    #[must_use]
-    pub fn with_tile_grid(columns: u32, rows: u32, tile_length: f32) -> Self {
         Self {
             banner: WELCOME_BANNER,
-            tile_grid: TileGrid::new(columns, rows, tile_length),
+            tile_grid: TileGrid::new(DEFAULT_GRID_COLUMNS, DEFAULT_GRID_ROWS, DEFAULT_TILE_LENGTH),
+        }
+    }
+}
+
+/// Applies the provided command to the world, mutating state deterministically.
+pub fn apply(world: &mut World, command: Command) {
+    match command {
+        Command::ConfigureTileGrid {
+            columns,
+            rows,
+            tile_length,
+        } => {
+            world.tile_grid = TileGrid::new(columns, rows, tile_length);
         }
     }
 }
@@ -103,5 +110,34 @@ pub mod query {
     #[must_use]
     pub fn tile_grid(world: &World) -> &TileGrid {
         &world.tile_grid
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn apply_configures_tile_grid() {
+        let mut world = World::new();
+
+        let expected_columns = 12;
+        let expected_rows = 8;
+        let expected_tile_length = 75.0;
+
+        apply(
+            &mut world,
+            Command::ConfigureTileGrid {
+                columns: expected_columns,
+                rows: expected_rows,
+                tile_length: expected_tile_length,
+            },
+        );
+
+        let tile_grid = query::tile_grid(&world);
+
+        assert_eq!(tile_grid.columns(), expected_columns);
+        assert_eq!(tile_grid.rows(), expected_rows);
+        assert_eq!(tile_grid.tile_length(), expected_tile_length);
     }
 }

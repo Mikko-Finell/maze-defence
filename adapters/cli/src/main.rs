@@ -13,12 +13,13 @@ use std::str::FromStr;
 
 use anyhow::Result;
 use clap::Parser;
+use maze_defence_core::Command;
 use maze_defence_rendering::{
     Color, Presentation, RenderingBackend, Scene, TileGridPresentation, WallPresentation,
 };
 use maze_defence_rendering_macroquad::MacroquadBackend;
 use maze_defence_system_bootstrap::Bootstrap;
-use maze_defence_world::World;
+use maze_defence_world::{self as world, World};
 
 const DEFAULT_GRID_COLUMNS: u32 = 10;
 const DEFAULT_GRID_ROWS: u32 = 10;
@@ -102,7 +103,15 @@ fn main() -> Result<()> {
         (DEFAULT_GRID_COLUMNS, DEFAULT_GRID_ROWS)
     };
 
-    let world = World::with_tile_grid(columns, rows, DEFAULT_TILE_LENGTH);
+    let mut world = World::new();
+    world::apply(
+        &mut world,
+        Command::ConfigureTileGrid {
+            columns,
+            rows,
+            tile_length: DEFAULT_TILE_LENGTH,
+        },
+    );
     let bootstrap = Bootstrap::default();
     let banner = bootstrap.welcome_banner(&world);
 
