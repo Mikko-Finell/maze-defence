@@ -74,24 +74,46 @@ pub struct TileGridPresentation {
     pub rows: u32,
     /// Side length of a single tile expressed in world units.
     pub tile_length: f32,
+    /// Number of subcells drawn along each tile edge.
+    pub subdivisions_per_tile: u32,
     /// Color used when drawing grid lines.
     pub line_color: Color,
 }
 
 impl TileGridPresentation {
-    /// Number of subcells drawn along each tile edge.
-    pub const SUBDIVISIONS_PER_TILE: u32 = 10;
+    /// Default number of subcells drawn along each tile edge.
+    pub const DEFAULT_SUBDIVISIONS_PER_TILE: u32 = 4;
 
     /// Number of subcell layers rendered outside the tile grid on each side.
-    pub const BORDER_SUBCELL_LAYERS: u32 = 1;
+    pub const SIDE_BORDER_SUBCELL_LAYERS: u32 = 1;
+
+    /// Number of subcell layers rendered above the tile grid.
+    pub const TOP_BORDER_SUBCELL_LAYERS: u32 = 1;
+
+    /// Number of subcell layers rendered below the tile grid.
+    pub const BOTTOM_BORDER_SUBCELL_LAYERS: u32 = 0;
 
     /// Creates a new tile grid descriptor.
+    ///
+    /// `subdivisions_per_tile` must be greater than zero.
     #[must_use]
-    pub const fn new(columns: u32, rows: u32, tile_length: f32, line_color: Color) -> Self {
+    pub fn new(
+        columns: u32,
+        rows: u32,
+        tile_length: f32,
+        subdivisions_per_tile: u32,
+        line_color: Color,
+    ) -> Self {
+        assert!(
+            subdivisions_per_tile > 0,
+            "subdivisions_per_tile must be positive"
+        );
+
         Self {
             columns,
             rows,
             tile_length,
+            subdivisions_per_tile,
             line_color,
         }
     }
@@ -99,7 +121,7 @@ impl TileGridPresentation {
     /// Length of a single subcell derived from the tile length.
     #[must_use]
     pub const fn subcell_length(&self) -> f32 {
-        self.tile_length / Self::SUBDIVISIONS_PER_TILE as f32
+        self.tile_length / self.subdivisions_per_tile as f32
     }
 
     /// Calculates the total width of the grid.
@@ -117,13 +139,15 @@ impl TileGridPresentation {
     /// Calculates the total width of the grid including the surrounding subcell border.
     #[must_use]
     pub const fn bordered_width(&self) -> f32 {
-        self.width() + 2.0 * self.subcell_length() * Self::BORDER_SUBCELL_LAYERS as f32
+        self.width() + 2.0 * self.subcell_length() * Self::SIDE_BORDER_SUBCELL_LAYERS as f32
     }
 
     /// Calculates the total height of the grid including the surrounding subcell border.
     #[must_use]
     pub const fn bordered_height(&self) -> f32 {
-        self.height() + 2.0 * self.subcell_length() * Self::BORDER_SUBCELL_LAYERS as f32
+        self.height()
+            + self.subcell_length()
+                * (Self::TOP_BORDER_SUBCELL_LAYERS + Self::BOTTOM_BORDER_SUBCELL_LAYERS) as f32
     }
 }
 

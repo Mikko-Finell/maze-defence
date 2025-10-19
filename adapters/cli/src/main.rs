@@ -40,6 +40,14 @@ struct CliArgs {
     /// Thickness of the surrounding wall measured in pixels.
     #[arg(long, value_name = "PIXELS", default_value_t = 40.0)]
     wall_thickness: f32,
+    /// Number of subcells drawn along each tile edge when rendering.
+    #[arg(
+        long = "cells-per-tile",
+        value_name = "COUNT",
+        default_value_t = TileGridPresentation::DEFAULT_SUBDIVISIONS_PER_TILE,
+        value_parser = clap::value_parser!(u32).range(1..)
+    )]
+    cells_per_tile: u32,
 }
 
 /// Grid dimensions parsed from a WIDTHxHEIGHT command-line argument.
@@ -104,6 +112,7 @@ fn main() -> Result<()> {
         tile_grid.columns(),
         tile_grid.rows(),
         tile_grid.tile_length(),
+        args.cells_per_tile,
         Color::from_rgb_u8(31, 54, 22),
     );
 

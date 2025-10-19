@@ -60,18 +60,17 @@ impl RenderingBackend for MacroquadBackend {
                 let bordered_grid_height_scaled = tile_grid.bordered_height() * scale;
                 let bordered_grid_width_scaled = tile_grid.bordered_width() * scale;
                 let tile_step = tile_grid.tile_length * scale;
-                let subcell_step = tile_step / TileGridPresentation::SUBDIVISIONS_PER_TILE as f32;
-                let grid_offset_x =
-                    offset_x + TileGridPresentation::BORDER_SUBCELL_LAYERS as f32 * subcell_step;
-                let grid_offset_y =
-                    offset_y + TileGridPresentation::BORDER_SUBCELL_LAYERS as f32 * subcell_step;
+                let subcell_step = tile_step / tile_grid.subdivisions_per_tile as f32;
+                let grid_offset_x = offset_x
+                    + TileGridPresentation::SIDE_BORDER_SUBCELL_LAYERS as f32 * subcell_step;
+                let grid_offset_y = offset_y
+                    + TileGridPresentation::TOP_BORDER_SUBCELL_LAYERS as f32 * subcell_step;
                 let grid_color = to_macroquad_color(tile_grid.line_color);
 
                 let subgrid_color = to_macroquad_color(tile_grid.line_color.lighten(0.6));
 
-                let total_subcolumns = tile_grid.columns
-                    * TileGridPresentation::SUBDIVISIONS_PER_TILE
-                    + 2 * TileGridPresentation::BORDER_SUBCELL_LAYERS;
+                let total_subcolumns = tile_grid.columns * tile_grid.subdivisions_per_tile
+                    + 2 * TileGridPresentation::SIDE_BORDER_SUBCELL_LAYERS;
                 for column in 0..=total_subcolumns {
                     let x = offset_x + column as f32 * subcell_step;
                     macroquad::shapes::draw_line(
@@ -84,8 +83,9 @@ impl RenderingBackend for MacroquadBackend {
                     );
                 }
 
-                let total_subrows = tile_grid.rows * TileGridPresentation::SUBDIVISIONS_PER_TILE
-                    + 2 * TileGridPresentation::BORDER_SUBCELL_LAYERS;
+                let total_subrows = tile_grid.rows * tile_grid.subdivisions_per_tile
+                    + TileGridPresentation::TOP_BORDER_SUBCELL_LAYERS
+                    + TileGridPresentation::BOTTOM_BORDER_SUBCELL_LAYERS;
                 for row in 0..=total_subrows {
                     let y = offset_y + row as f32 * subcell_step;
                     macroquad::shapes::draw_line(
