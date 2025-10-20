@@ -158,8 +158,8 @@ impl SceneMetrics {
         } else {
             tile_step / tile_grid.cells_per_tile as f32
         };
-        let grid_offset_x =
-            offset_x + TileGridPresentation::SIDE_BORDER_CELL_LAYERS as f32 * cell_step;
+        let grid_offset_x = offset_x
+            + (TileGridPresentation::SIDE_BORDER_CELL_LAYERS as f32 + 1.0) * cell_step;
         let grid_offset_y =
             offset_y + TileGridPresentation::TOP_BORDER_CELL_LAYERS as f32 * cell_step;
 
