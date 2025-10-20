@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use maze_defence_core::{CellCoord, Command, Direction, Event, TileCoord};
+use maze_defence_core::{BugColor, CellCoord, Command, Direction, Event, TileCoord};
 use maze_defence_system_movement::Movement;
 use maze_defence_world::{self as world, query, World};
 
@@ -15,6 +15,14 @@ fn emits_step_commands_toward_target() {
             rows: TileCoord::new(4),
             tile_length: 1.0,
             cells_per_tile: 1,
+        },
+        &mut events,
+    );
+    world::apply(
+        &mut world,
+        Command::SpawnBug {
+            spawner: CellCoord::new(0, 0),
+            color: BugColor::from_rgb(0x2f, 0x95, 0x32),
         },
         &mut events,
     );
@@ -87,6 +95,14 @@ fn step_commands_target_free_cells() {
         },
         &mut events,
     );
+    world::apply(
+        &mut world,
+        Command::SpawnBug {
+            spawner: CellCoord::new(0, 0),
+            color: BugColor::from_rgb(0x2f, 0x95, 0x32),
+        },
+        &mut events,
+    );
 
     let mut movement = Movement::default();
     pump_system(&mut world, &mut movement, events);
@@ -141,6 +157,14 @@ fn replans_after_failed_step() {
             rows: TileCoord::new(3),
             tile_length: 1.0,
             cells_per_tile: 1,
+        },
+        &mut events,
+    );
+    world::apply(
+        &mut world,
+        Command::SpawnBug {
+            spawner: CellCoord::new(0, 0),
+            color: BugColor::from_rgb(0x2f, 0x95, 0x32),
         },
         &mut events,
     );

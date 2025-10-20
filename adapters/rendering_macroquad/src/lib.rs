@@ -18,7 +18,10 @@
 
 use anyhow::Result;
 use glam::Vec2;
-use macroquad::input::{is_key_pressed, mouse_position, KeyCode};
+use macroquad::{
+    color::BLACK,
+    input::{is_key_pressed, mouse_position, KeyCode},
+};
 use maze_defence_core::PlayMode;
 use maze_defence_rendering::{
     BugPresentation, Color, FrameInput, PlacementPreview, Presentation, RenderingBackend, Scene,
@@ -90,11 +93,19 @@ impl RenderingBackend for MacroquadBackend {
                         metrics.grid_offset_x + (*column as f32 + 0.5) * metrics.cell_step;
                     let bug_center_y =
                         metrics.grid_offset_y + (*row as f32 + 0.5) * metrics.cell_step;
+                    let border_thickness = (bug_radius * 0.2).max(1.0);
                     macroquad::shapes::draw_circle(
                         bug_center_x,
                         bug_center_y,
                         bug_radius,
                         to_macroquad_color(*color),
+                    );
+                    macroquad::shapes::draw_circle_lines(
+                        bug_center_x,
+                        bug_center_y,
+                        bug_radius,
+                        border_thickness,
+                        BLACK,
                     );
                 }
 
