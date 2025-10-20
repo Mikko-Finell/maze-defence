@@ -11,7 +11,7 @@
 
 use anyhow::Result as AnyResult;
 use glam::Vec2;
-use maze_defence_core::{PlayMode, TileCoord};
+use maze_defence_core::PlayMode;
 use std::{error::Error, fmt, time::Duration};
 
 /// RGBA color used when presenting frames.
@@ -75,7 +75,7 @@ pub struct FrameInput {
     pub mode_toggle: bool,
     /// Cursor position expressed in world units, clamped to the playable grid bounds.
     pub cursor_world_space: Option<Vec2>,
-    /// Cursor position snapped to tile coordinates within the playable grid.
+    /// Cursor position snapped to tile coordinates with half-tile resolution within the playable grid.
     pub cursor_tile_space: Option<TileSpacePosition>,
 }
 
@@ -89,33 +89,60 @@ impl Default for FrameInput {
     }
 }
 
-/// Tile-space coordinate pair expressed using strong `TileCoord` wrappers.
+/// Tile-space coordinate pair snapped to half-tile increments.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct TileSpacePosition {
-    column: TileCoord,
-    row: TileCoord,
+    column_half_steps: u32,
+    row_half_steps: u32,
 }
 
 impl TileSpacePosition {
-    /// Creates a new tile-space position from zero-based indices.
+    /// Creates a new tile-space position from zero-based integer indices.
     #[must_use]
-    pub fn from_indices(column: u32, row: u32) -> Self {
+    pub const fn from_indices(column: u32, row: u32) -> Self {
         Self {
-            column: TileCoord::new(column),
-            row: TileCoord::new(row),
+            column_half_steps: column * 2,
+            row_half_steps: row * 2,
         }
     }
 
-    /// Zero-based column index of the tile position.
+    /// Creates a new tile-space position expressed in half-tile increments.
     #[must_use]
-    pub fn column(&self) -> TileCoord {
-        self.column
+    pub const fn from_half_steps(column_half_steps: u32, row_half_steps: u32) -> Self {
+        Self {
+            column_half_steps,
+            row_half_steps,
+        }
     }
 
-    /// Zero-based row index of the tile position.
+    /// Number of half-tile steps offset along the column axis.
     #[must_use]
-    pub fn row(&self) -> TileCoord {
-        self.row
+    pub const fn column_half_steps(&self) -> u32 {
+        self.column_half_steps
+    }
+
+    /// Number of half-tile steps offset along the row axis.
+    #[must_use]
+    pub const fn row_half_steps(&self) -> u32 {
+        self.row_half_steps
+    }
+
+    /// Position expressed in tile units along the column axis.
+    #[must_use]
+    pub fn column_in_tiles(&self) -> f32 {
+        self.column_half_steps as f32 * 0.5
+    }
+
+    /// Position expressed in tile units along the row axis.
+    #[must_use]
+    pub fn row_in_tiles(&self) -> f32 {
+        self.row_half_steps as f32 * 0.5
+    }
+
+    /// Returns `true` when the position lies on whole-tile indices.
+    #[must_use]
+    pub const fn is_integer_aligned(&self) -> bool {
+        self.column_half_steps % 2 == 0 && self.row_half_steps % 2 == 0
     }
 }
 
@@ -236,23 +263,52 @@ impl TileGridPresentation {
         Vec2::new(position.x.clamp(0.0, width), position.y.clamp(0.0, height))
     }
 
-    /// Snaps a world-space position to the tile grid, returning `None` when out of bounds.
+    /// Snaps a world-space position to half-tile increments within the grid bounds.
+    ///
+    /// Returns `None` when the position lies outside the grid or the grid has no area.
     #[must_use]
     pub fn snap_world_to_tile(&self, position: Vec2) -> Option<TileSpacePosition> {
         if self.columns == 0 || self.rows == 0 || self.tile_length <= f32::EPSILON {
             return None;
         }
 
-        let clamped = self.clamp_world_position(position);
-        let column = (clamped.x / self.tile_length).floor() as u32;
-        let row = (clamped.y / self.tile_length).floor() as u32;
-
-        if column < self.columns && row < self.rows {
-            Some(TileSpacePosition::from_indices(column, row))
-        } else {
-            None
+        let width = self.width();
+        let height = self.height();
+        if position.x < 0.0 || position.y < 0.0 || position.x > width || position.y > height {
+            return None;
         }
+
+        let clamped = self.clamp_world_position(position);
+        let column_half_steps =
+            snap_axis_to_half_steps(clamped.x / self.tile_length, self.columns)?;
+        let row_half_steps = snap_axis_to_half_steps(clamped.y / self.tile_length, self.rows)?;
+
+        Some(TileSpacePosition::from_half_steps(
+            column_half_steps,
+            row_half_steps,
+        ))
     }
+}
+
+fn snap_axis_to_half_steps(value_in_tiles: f32, tiles: u32) -> Option<u32> {
+    if tiles == 0 {
+        return None;
+    }
+
+    const PREVIEW_SIZE_IN_TILES: f32 = 1.0;
+    let half_preview = PREVIEW_SIZE_IN_TILES * 0.5;
+    let min_center = half_preview;
+    let max_center = tiles as f32 - half_preview;
+
+    if max_center < min_center {
+        return Some(0);
+    }
+
+    let snapped_center = (value_in_tiles * 2.0).round() * 0.5;
+    let clamped_center = snapped_center.clamp(min_center, max_center);
+    let origin = clamped_center - half_preview;
+
+    Some((origin * 2.0).round() as u32)
 }
 
 /// Describes an outer wall that should be rendered near the grid.
@@ -476,15 +532,29 @@ mod tests {
     }
 
     #[test]
-    fn snap_world_to_tile_returns_tile_indices_within_bounds() {
+    fn snap_world_to_tile_snaps_to_half_tile_increments() {
         let presentation = TileGridPresentation::new(6, 3, 24.0, 4, Color::from_rgb_u8(0, 0, 0))
             .expect("valid grid");
         let snapped = presentation
-            .snap_world_to_tile(Vec2::new(47.9, 12.1))
+            .snap_world_to_tile(Vec2::new(24.0, 24.0))
             .expect("position inside grid should snap");
 
-        assert_eq!(snapped.column().get(), 1);
-        assert_eq!(snapped.row().get(), 0);
+        assert_eq!(snapped.column_half_steps(), 1);
+        assert_eq!(snapped.row_half_steps(), 1);
+        assert!(!snapped.is_integer_aligned());
+    }
+
+    #[test]
+    fn snap_world_to_tile_clamps_preview_to_grid_bounds() {
+        let presentation = TileGridPresentation::new(6, 3, 24.0, 4, Color::from_rgb_u8(0, 0, 0))
+            .expect("valid grid");
+        let snapped = presentation
+            .snap_world_to_tile(Vec2::new(143.9, 71.2))
+            .expect("position inside grid should snap");
+
+        assert_eq!(snapped.column_half_steps(), 10);
+        assert_eq!(snapped.row_half_steps(), 4);
+        assert!(snapped.is_integer_aligned());
     }
 
     #[test]

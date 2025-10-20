@@ -419,9 +419,8 @@ fn draw_placement_preview(preview: PlacementPreview, metrics: &SceneMetrics) {
     let fill_color = to_macroquad_color(Color::new(0.32, 0.66, 0.98, 0.35));
     let outline_color = to_macroquad_color(Color::new(0.18, 0.44, 0.75, 0.6));
 
-    let preview_x =
-        metrics.grid_offset_x + preview.origin.column().get() as f32 * metrics.tile_step;
-    let preview_y = metrics.grid_offset_y + preview.origin.row().get() as f32 * metrics.tile_step;
+    let preview_x = metrics.grid_offset_x + preview.origin.column_in_tiles() * metrics.tile_step;
+    let preview_y = metrics.grid_offset_y + preview.origin.row_in_tiles() * metrics.tile_step;
     let size = preview.size_in_tiles as f32 * metrics.tile_step;
 
     macroquad::shapes::draw_rectangle(preview_x, preview_y, size, size, fill_color);
