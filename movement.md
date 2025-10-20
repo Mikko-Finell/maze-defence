@@ -35,7 +35,7 @@
 5. [DONE] Expose new queries for systems:
    - `query::bug_view(world) -> BugView` returning read-only DTOs that contain bug ids, cells, queued path heads, and readiness flags.
    - `query::occupancy_view(world) -> OccupancyView` with immutable access to the dense grid buffer (and helper iterators for free target cells).
-   - Helper query to expose free target cells (`query::available_target_cells`).
+   - Helper query to expose target cells (`query::target_cells`).
 6. [DONE] Ensure determinism:
    - Use fixed ordering when iterating bugs (e.g., ascending `BugId`).
    - Avoid floating-point drift by storing time as `FixedU32` microseconds or `Duration` accumulators and subtract exactly one-second quanta.

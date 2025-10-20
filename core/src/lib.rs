@@ -33,6 +33,11 @@ pub enum Command {
         /// Length of each square tile measured in world units.
         tile_length: f32,
     },
+    /// Updates the duration a bug must accumulate before attempting another step.
+    ConfigureBugStep {
+        /// Minimum simulated time required between successive bug steps.
+        step_duration: Duration,
+    },
     /// Advances the simulation clock by the provided delta time.
     Tick {
         /// Duration of simulated time that elapsed since the previous tick.

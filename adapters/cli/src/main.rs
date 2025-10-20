@@ -26,6 +26,7 @@ use maze_defence_world::{self as world, query, World};
 const DEFAULT_GRID_COLUMNS: u32 = 10;
 const DEFAULT_GRID_ROWS: u32 = 10;
 const DEFAULT_TILE_LENGTH: f32 = 100.0;
+const DEFAULT_BUG_STEP_MS: u64 = 250;
 
 /// Command-line arguments for launching the Maze Defence experience.
 #[derive(Debug, Parser)]
@@ -51,6 +52,14 @@ struct CliArgs {
         value_parser = clap::value_parser!(u32).range(1..)
     )]
     cells_per_tile: u32,
+    /// Milliseconds each bug waits between steps. Smaller values make bugs move faster.
+    #[arg(
+        long = "bug-step-ms",
+        value_name = "MILLISECONDS",
+        default_value_t = DEFAULT_BUG_STEP_MS,
+        value_parser = clap::value_parser!(u64).range(1..=60_000)
+    )]
+    bug_step_ms: u64,
 }
 
 /// Grid dimensions parsed from a WIDTHxHEIGHT command-line argument.
@@ -105,7 +114,8 @@ fn main() -> Result<()> {
         (DEFAULT_GRID_COLUMNS, DEFAULT_GRID_ROWS)
     };
 
-    let mut simulation = Simulation::new(columns, rows, DEFAULT_TILE_LENGTH);
+    let bug_step_duration = Duration::from_millis(args.bug_step_ms);
+    let mut simulation = Simulation::new(columns, rows, DEFAULT_TILE_LENGTH, bug_step_duration);
     let bootstrap = Bootstrap::default();
     let (banner, grid_scene, wall_scene) = {
         let world = simulation.world();
@@ -152,7 +162,7 @@ struct Simulation {
 }
 
 impl Simulation {
-    fn new(columns: u32, rows: u32, tile_length: f32) -> Self {
+    fn new(columns: u32, rows: u32, tile_length: f32, bug_step: Duration) -> Self {
         let mut world = World::new();
         let mut pending_events = Vec::new();
         world::apply(
@@ -161,6 +171,13 @@ impl Simulation {
                 columns: TileCoord::new(columns),
                 rows: TileCoord::new(rows),
                 tile_length,
+            },
+            &mut pending_events,
+        );
+        world::apply(
+            &mut world,
+            Command::ConfigureBugStep {
+                step_duration: bug_step,
             },
             &mut pending_events,
         );
@@ -214,7 +231,7 @@ impl Simulation {
 
             let bug_view = query::bug_view(&self.world);
             let occupancy_view = query::occupancy_view(&self.world);
-            let target_cells = query::available_target_cells(&self.world);
+            let target_cells = query::target_cells(&self.world);
             self.scratch_commands.clear();
             self.movement.handle(
                 &events,
