@@ -19,9 +19,10 @@
 use anyhow::Result;
 use glam::Vec2;
 use macroquad::input::{is_key_pressed, mouse_position, KeyCode};
+use maze_defence_core::PlayMode;
 use maze_defence_rendering::{
     BugPresentation, Color, FrameInput, PlacementPreview, Presentation, RenderingBackend, Scene,
-    TileGridPresentation, TileSpacePosition,
+    TileGridPresentation,
 };
 use std::time::Duration;
 
@@ -77,7 +78,7 @@ impl RenderingBackend for MacroquadBackend {
                 draw_subgrid(&metrics, &tile_grid, subgrid_color);
                 draw_tile_grid(&metrics, &tile_grid, grid_color);
 
-                if let Some(preview) = scene.placement_preview {
+                if let Some(preview) = active_builder_preview(&scene) {
                     draw_placement_preview(preview, &metrics);
                 }
 
@@ -182,12 +183,12 @@ fn gather_frame_input(scene: &Scene, metrics: &SceneMetrics) -> FrameInput {
 
     let (cursor_x, cursor_y) = mouse_position();
 
-    let world_x =
-        ((cursor_x - metrics.grid_offset_x) / metrics.scale).clamp(0.0, tile_grid.width());
-    let world_y =
-        ((cursor_y - metrics.grid_offset_y) / metrics.scale).clamp(0.0, tile_grid.height());
+    let world_position = tile_grid.clamp_world_position(Vec2::new(
+        (cursor_x - metrics.grid_offset_x) / metrics.scale,
+        (cursor_y - metrics.grid_offset_y) / metrics.scale,
+    ));
 
-    input.cursor_world_space = Some(Vec2::new(world_x, world_y));
+    input.cursor_world_space = Some(world_position);
 
     let inside = cursor_x >= metrics.grid_offset_x
         && cursor_x < metrics.grid_offset_x + metrics.grid_width_scaled
@@ -195,14 +196,55 @@ fn gather_frame_input(scene: &Scene, metrics: &SceneMetrics) -> FrameInput {
         && cursor_y < metrics.grid_offset_y + metrics.grid_height_scaled;
 
     if inside {
-        let column = (world_x / tile_grid.tile_length).floor() as u32;
-        let row = (world_y / tile_grid.tile_length).floor() as u32;
-        if column < tile_grid.columns && row < tile_grid.rows {
-            input.cursor_tile_space = Some(TileSpacePosition::from_indices(column, row));
-        }
+        input.cursor_tile_space = tile_grid.snap_world_to_tile(world_position);
     }
 
     input
+}
+
+fn active_builder_preview(scene: &Scene) -> Option<PlacementPreview> {
+    if scene.play_mode == PlayMode::Builder {
+        scene.placement_preview
+    } else {
+        None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use maze_defence_rendering::TileSpacePosition;
+
+    fn base_scene(play_mode: PlayMode, placement_preview: Option<PlacementPreview>) -> Scene {
+        let grid = TileGridPresentation::new(
+            4,
+            4,
+            32.0,
+            TileGridPresentation::DEFAULT_CELLS_PER_TILE,
+            Color::from_rgb_u8(40, 40, 40),
+        )
+        .expect("valid grid");
+        let wall = maze_defence_rendering::WallPresentation::new(
+            8.0,
+            Color::from_rgb_u8(64, 64, 64),
+            maze_defence_rendering::TargetPresentation::new(Vec::new()),
+        );
+
+        Scene::new(grid, wall, Vec::new(), play_mode, placement_preview)
+    }
+
+    #[test]
+    fn active_builder_preview_suppresses_attack_mode_preview() {
+        let preview = PlacementPreview::new(TileSpacePosition::from_indices(1, 1), 1);
+        let mut scene = base_scene(PlayMode::Attack, Some(preview));
+
+        assert!(active_builder_preview(&scene).is_none());
+
+        scene.play_mode = PlayMode::Builder;
+        scene.placement_preview = Some(preview);
+
+        assert_eq!(active_builder_preview(&scene), Some(preview));
+    }
 }
 
 fn draw_subgrid(
