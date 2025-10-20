@@ -752,7 +752,9 @@ fn exit_columns_for_tile_grid(columns: TileCoord, cells_per_tile: u32) -> Vec<u3
         tile_columns / 2
     };
     let left_margin = SIDE_BORDER_CELL_LAYERS;
-    let start_column = left_margin.saturating_add(center_tile.saturating_mul(cells_per_tile));
+    let start_column = left_margin
+        .saturating_add(center_tile.saturating_mul(cells_per_tile))
+        .saturating_sub(1);
 
     (0..cells_per_tile)
         .map(|offset| start_column.saturating_add(offset))
@@ -1383,8 +1385,9 @@ mod tests {
             usize::try_from(cells_per_tile).expect("cells_per_tile fits in usize")
         );
         let expected_row = exit_row_for_tile_grid(TileCoord::new(7), cells_per_tile);
-        let expected_start =
-            SIDE_BORDER_CELL_LAYERS.saturating_add(4_u32.saturating_mul(cells_per_tile));
+        let expected_start = SIDE_BORDER_CELL_LAYERS
+            .saturating_add(4_u32.saturating_mul(cells_per_tile))
+            .saturating_sub(1);
         let expected_columns: Vec<u32> = (0..cells_per_tile)
             .map(|offset| expected_start + offset)
             .collect();
@@ -1418,8 +1421,9 @@ mod tests {
             usize::try_from(cells_per_tile).expect("cells_per_tile fits in usize")
         );
         let expected_row = exit_row_for_tile_grid(TileCoord::new(6), cells_per_tile);
-        let expected_start =
-            SIDE_BORDER_CELL_LAYERS.saturating_add(5_u32.saturating_mul(cells_per_tile));
+        let expected_start = SIDE_BORDER_CELL_LAYERS
+            .saturating_add(5_u32.saturating_mul(cells_per_tile))
+            .saturating_sub(1);
         let expected_columns: Vec<u32> = (0..cells_per_tile)
             .map(|offset| expected_start + offset)
             .collect();
