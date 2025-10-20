@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use maze_defence_core::{CellCoord, Command, Direction, Event, TileCoord};
+use maze_defence_core::{BugColor, CellCoord, Command, Direction, Event, TileCoord};
 use maze_defence_system_movement::Movement;
 use maze_defence_world::{self as world, query, World};
 
@@ -18,6 +18,9 @@ fn emits_step_commands_toward_target() {
         },
         &mut events,
     );
+
+    spawn_bug(&mut world, &mut events, CellCoord::new(0, 0));
+    spawn_bug(&mut world, &mut events, CellCoord::new(4, 3));
 
     let mut movement = Movement::default();
     pump_system(&mut world, &mut movement, events);
@@ -88,6 +91,9 @@ fn step_commands_target_free_cells() {
         &mut events,
     );
 
+    spawn_bug(&mut world, &mut events, CellCoord::new(0, 0));
+    spawn_bug(&mut world, &mut events, CellCoord::new(4, 3));
+
     let mut movement = Movement::default();
     pump_system(&mut world, &mut movement, events);
 
@@ -144,6 +150,9 @@ fn replans_after_failed_step() {
         },
         &mut events,
     );
+
+    spawn_bug(&mut world, &mut events, CellCoord::new(0, 0));
+    spawn_bug(&mut world, &mut events, CellCoord::new(2, 0));
 
     let mut movement = Movement::default();
     pump_system(&mut world, &mut movement, events);
@@ -204,6 +213,23 @@ fn replans_after_failed_step() {
     assert!(
         matches!(replanned_direction, Some(direction) if direction != blocked_direction),
         "expected a new direction different from the blocked move"
+    );
+}
+
+fn spawn_bug(world: &mut World, events: &mut Vec<Event>, cell: CellCoord) {
+    let before_len = events.len();
+    world::apply(
+        world,
+        Command::SpawnBug {
+            spawner: cell,
+            color: BugColor::from_rgb(0x88, 0x44, 0xbb),
+        },
+        events,
+    );
+    assert!(
+        events.len() > before_len && matches!(events.last(), Some(Event::BugSpawned { .. })),
+        "expected spawn event at {:?}",
+        cell
     );
 }
 

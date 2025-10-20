@@ -15,8 +15,9 @@ use maze_defence_core::{
     BugColor, BugId, CellCoord, Command, Direction, Event, PlayMode, TileCoord, WELCOME_BANNER,
 };
 
-const BUG_GENERATION_SEED: u64 = 0x42f0_e1eb_d4a5_3c21;
-const BUG_COUNT: usize = 20;
+const DEFAULT_SPAWN_RNG_SEED: u64 = 0x42f0_e1eb_d4a5_3c21;
+const DEFAULT_SPAWN_INTERVAL: Duration = Duration::from_secs(1);
+const MIN_SPAWN_INTERVAL: Duration = Duration::from_micros(1);
 
 const DEFAULT_GRID_COLUMNS: TileCoord = TileCoord::new(10);
 const DEFAULT_GRID_ROWS: TileCoord = TileCoord::new(10);
@@ -163,6 +164,9 @@ pub struct World {
     bugs: Vec<Bug>,
     bug_spawners: BugSpawnerRegistry,
     next_bug_id: u32,
+    spawn_interval: Duration,
+    spawn_accumulator: Duration,
+    spawn_rng_state: u64,
     occupancy: OccupancyGrid,
     reservations: ReservationFrame,
     tick_index: u64,
@@ -186,6 +190,9 @@ impl World {
             bugs: Vec::new(),
             bug_spawners: BugSpawnerRegistry::new(),
             next_bug_id: 0,
+            spawn_interval: DEFAULT_SPAWN_INTERVAL,
+            spawn_accumulator: Duration::ZERO,
+            spawn_rng_state: DEFAULT_SPAWN_RNG_SEED,
             occupancy,
             reservations: ReservationFrame::new(),
             wall,
@@ -197,23 +204,8 @@ impl World {
             play_mode: PlayMode::Attack,
         };
         world.rebuild_bug_spawners();
-        world.reset_bugs();
+        world.clear_bugs();
         world
-    }
-
-    fn reset_bugs(&mut self) {
-        let generated = generate_bugs(
-            self.tile_grid.columns(),
-            self.tile_grid.rows(),
-            self.cells_per_tile,
-        );
-        self.bugs = generated
-            .into_iter()
-            .map(|seed| Bug::new(seed.id, seed.cell, seed.color))
-            .collect();
-        self.occupancy.fill_with(&self.bugs);
-        self.reservations.clear();
-        self.next_bug_id = self.bugs.len() as u32;
     }
 
     fn clear_bugs(&mut self) {
@@ -221,6 +213,7 @@ impl World {
         self.occupancy.clear();
         self.reservations.clear();
         self.next_bug_id = 0;
+        self.reset_spawn_cycle();
     }
 
     fn iter_bugs_mut(&mut self) -> impl Iterator<Item = &mut Bug> {
@@ -254,6 +247,21 @@ impl World {
             cell,
             color,
         });
+    }
+
+    fn spawn_random_bug(&mut self, out_events: &mut Vec<Event>) {
+        let Some(spawner) = self.bug_spawners.choose(&mut self.spawn_rng_state) else {
+            return;
+        };
+
+        let color_index = (self.next_bug_id as usize) % BUG_COLORS.len();
+        let color = BUG_COLORS[color_index];
+        self.spawn_from_spawner(spawner, color, out_events);
+    }
+
+    fn reset_spawn_cycle(&mut self) {
+        self.spawn_accumulator = Duration::ZERO;
+        self.spawn_rng_state = DEFAULT_SPAWN_RNG_SEED;
     }
 
     fn next_bug_identifier(&mut self) -> BugId {
@@ -342,14 +350,7 @@ pub fn apply(world: &mut World, command: Command, out_events: &mut Vec<Event>) {
                 total_cell_rows(rows, normalized_cells),
             );
             world.rebuild_bug_spawners();
-            match world.play_mode {
-                PlayMode::Attack => {
-                    world.reset_bugs();
-                }
-                PlayMode::Builder => {
-                    world.clear_bugs();
-                }
-            }
+            world.clear_bugs();
         }
         Command::Tick { dt } => {
             if world.play_mode == PlayMode::Builder {
@@ -358,6 +359,13 @@ pub fn apply(world: &mut World, command: Command, out_events: &mut Vec<Event>) {
             world.tick_index = world.tick_index.saturating_add(1);
             out_events.push(Event::TimeAdvanced { dt });
 
+            world.spawn_accumulator = world.spawn_accumulator.saturating_add(dt);
+            while world.spawn_accumulator >= world.spawn_interval {
+                world.spawn_accumulator =
+                    world.spawn_accumulator.saturating_sub(world.spawn_interval);
+                world.spawn_random_bug(out_events);
+            }
+
             for bug in world.iter_bugs_mut() {
                 bug.accumulator = bug.accumulator.saturating_add(dt);
             }
@@ -365,6 +373,10 @@ pub fn apply(world: &mut World, command: Command, out_events: &mut Vec<Event>) {
         Command::ConfigureBugStep { step_duration } => {
             let clamped = step_duration.max(MIN_STEP_QUANTUM);
             world.step_quantum = clamped;
+        }
+        Command::ConfigureBugSpawnInterval { interval } => {
+            let clamped = interval.max(MIN_SPAWN_INTERVAL);
+            world.spawn_interval = clamped;
         }
         Command::StepBug { bug_id, direction } => {
             if world.play_mode == PlayMode::Builder {
@@ -384,7 +396,7 @@ pub fn apply(world: &mut World, command: Command, out_events: &mut Vec<Event>) {
 
             match mode {
                 PlayMode::Attack => {
-                    world.reset_bugs();
+                    world.reset_spawn_cycle();
                 }
                 PlayMode::Builder => {
                     world.clear_bugs();
@@ -579,13 +591,6 @@ impl Bug {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
-struct BugSeed {
-    id: BugId,
-    cell: CellCoord,
-    color: BugColor,
-}
-
 #[derive(Clone, Debug)]
 struct BugSpawnerRegistry {
     cells: BTreeSet<CellCoord>,
@@ -621,6 +626,17 @@ impl BugSpawnerRegistry {
 
     fn contains(&self, cell: CellCoord) -> bool {
         self.cells.contains(&cell)
+    }
+
+    fn choose(&self, rng_state: &mut u64) -> Option<CellCoord> {
+        let count = self.cells.len();
+        if count == 0 {
+            return None;
+        }
+
+        *rng_state = next_random(*rng_state);
+        let index = (*rng_state % count as u64) as usize;
+        self.cells.iter().nth(index).copied()
     }
 
     #[cfg(test)]
@@ -688,15 +704,6 @@ impl OccupancyGrid {
 
     fn clear(&mut self) {
         self.cells.fill(None);
-    }
-
-    fn fill_with(&mut self, bugs: &[Bug]) {
-        self.clear();
-        for bug in bugs {
-            if let Some(index) = self.index(bug.cell) {
-                self.cells[index] = Some(bug.id);
-            }
-        }
     }
 
     pub(crate) fn can_enter(&self, cell: CellCoord) -> bool {
@@ -838,60 +845,6 @@ fn target_cells_from_wall(wall: &Wall) -> Vec<CellCoord> {
         .collect()
 }
 
-fn generate_bugs(columns: TileCoord, rows: TileCoord, cells_per_tile: u32) -> Vec<BugSeed> {
-    let interior_columns = interior_cell_columns(columns, cells_per_tile);
-    let interior_rows = interior_cell_rows(rows, cells_per_tile);
-
-    if interior_columns == 0 || interior_rows == 0 {
-        return Vec::new();
-    }
-
-    let available_cells_u64 = u64::from(interior_columns) * u64::from(interior_rows);
-    let available_cells = match usize::try_from(available_cells_u64) {
-        Ok(value) => value,
-        Err(_) => usize::MAX,
-    };
-    let exit_cell_count = if columns.get() == 0 || rows.get() == 0 {
-        0
-    } else {
-        usize::try_from(cells_per_tile).unwrap_or(usize::MAX)
-    };
-    let target_capacity = available_cells.saturating_sub(exit_cell_count);
-    let target_count = BUG_COUNT.min(target_capacity);
-
-    let start_column: u32 = 0;
-    let end_column = interior_columns;
-    let start_row: u32 = 0;
-    let end_row = interior_rows;
-
-    let mut cells: Vec<CellCoord> = Vec::with_capacity(available_cells);
-    for row in start_row..end_row {
-        for column in start_column..end_column {
-            cells.push(CellCoord::new(column, row));
-        }
-    }
-
-    let mut rng_state = BUG_GENERATION_SEED;
-    for index in (1..cells.len()).rev() {
-        rng_state = next_random(rng_state);
-        let swap_index = (rng_state % (index as u64 + 1)) as usize;
-        cells.swap(index, swap_index);
-    }
-
-    let mut bugs: Vec<BugSeed> = Vec::with_capacity(target_count);
-    for (index, cell) in cells.into_iter().take(target_count).enumerate() {
-        let color = BUG_COLORS[index % BUG_COLORS.len()];
-        let bug_id = BugId::new(index as u32);
-        bugs.push(BugSeed {
-            id: bug_id,
-            cell,
-            color,
-        });
-    }
-
-    bugs
-}
-
 const BUG_COLORS: [BugColor; 4] = [
     BugColor::from_rgb(0x2f, 0x95, 0x32),
     BugColor::from_rgb(0xc8, 0x2a, 0x36),
@@ -944,7 +897,7 @@ mod tests {
         let mut world = World::new();
         let mut events = Vec::new();
 
-        assert!(!query::bug_view(&world).into_vec().is_empty());
+        assert!(query::bug_view(&world).into_vec().is_empty());
 
         apply(
             &mut world,
@@ -968,7 +921,7 @@ mod tests {
     }
 
     #[test]
-    fn returning_to_attack_mode_reseeds_bugs() {
+    fn returning_to_attack_mode_resets_spawn_cycle() {
         let mut world = World::new();
         let mut events = Vec::new();
 
@@ -996,7 +949,23 @@ mod tests {
             }]
         );
         assert_eq!(query::play_mode(&world), PlayMode::Attack);
-        assert!(!query::bug_view(&world).into_vec().is_empty());
+        assert!(query::bug_view(&world).into_vec().is_empty());
+
+        events.clear();
+        apply(
+            &mut world,
+            Command::Tick {
+                dt: Duration::from_secs(1),
+            },
+            &mut events,
+        );
+
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, Event::BugSpawned { .. })),
+            "expected automatic bug spawn after returning to attack mode"
+        );
     }
 
     #[test]
@@ -1097,6 +1066,74 @@ mod tests {
         assert!(events.is_empty());
         assert_eq!(world.tick_index, tick_before);
         assert!(world.reservations.requests.is_empty());
+    }
+
+    #[test]
+    fn tick_spawns_bug_after_interval() {
+        let mut world = World::new();
+        let mut events = Vec::new();
+
+        apply(
+            &mut world,
+            Command::Tick {
+                dt: Duration::from_millis(500),
+            },
+            &mut events,
+        );
+
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, Event::BugSpawned { .. })),
+            "no bug should spawn before accumulating a full interval"
+        );
+
+        events.clear();
+        apply(
+            &mut world,
+            Command::Tick {
+                dt: Duration::from_millis(500),
+            },
+            &mut events,
+        );
+
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, Event::BugSpawned { .. })),
+            "expected bug spawn after one second of accumulated time"
+        );
+    }
+
+    #[test]
+    fn configure_bug_spawn_interval_clamps_to_minimum() {
+        let mut world = World::new();
+        let mut events = Vec::new();
+
+        apply(
+            &mut world,
+            Command::ConfigureBugSpawnInterval {
+                interval: Duration::ZERO,
+            },
+            &mut events,
+        );
+
+        assert!(events.is_empty());
+
+        apply(
+            &mut world,
+            Command::Tick {
+                dt: Duration::from_micros(1),
+            },
+            &mut events,
+        );
+
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, Event::BugSpawned { .. })),
+            "clamped interval should allow immediate spawn"
+        );
     }
 
     #[test]
@@ -1336,7 +1373,7 @@ mod tests {
     }
 
     #[test]
-    fn bugs_are_generated_within_configured_grid() {
+    fn spawned_bugs_remain_within_grid() {
         let mut world = World::new();
         let mut events = Vec::new();
         let columns = TileCoord::new(8);
@@ -1354,23 +1391,39 @@ mod tests {
             &mut events,
         );
 
+        for _ in 0..3 {
+            events.clear();
+            apply(
+                &mut world,
+                Command::Tick {
+                    dt: Duration::from_secs(1),
+                },
+                &mut events,
+            );
+        }
+
         let interior_start_column = 0;
         let interior_end_column =
             interior_start_column + columns.get().saturating_mul(cells_per_tile);
         let interior_start_row = 0;
         let interior_end_row = interior_start_row + rows.get().saturating_mul(cells_per_tile);
 
-        for bug in query::bug_view(&world).iter() {
+        let bug_snapshots = query::bug_view(&world).into_vec();
+        assert!(
+            !bug_snapshots.is_empty(),
+            "expected automatic spawning to populate the grid"
+        );
+
+        for bug in bug_snapshots {
             assert!(bug.cell.column() >= interior_start_column);
             assert!(bug.cell.column() < interior_end_column);
             assert!(bug.cell.row() >= interior_start_row);
             assert!(bug.cell.row() < interior_end_row);
         }
-        assert!(events.is_empty());
     }
 
     #[test]
-    fn bug_generation_limits_to_available_cells() {
+    fn automatic_spawning_respects_single_cell_capacity() {
         let mut world = World::new();
         let mut events = Vec::new();
 
@@ -1385,13 +1438,41 @@ mod tests {
             &mut events,
         );
 
-        let bugs = query::bug_view(&world).into_vec();
-        assert!(bugs.is_empty());
-        assert!(events.is_empty());
+        events.clear();
+        apply(
+            &mut world,
+            Command::Tick {
+                dt: Duration::from_secs(1),
+            },
+            &mut events,
+        );
+
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, Event::BugSpawned { .. })),
+            "expected a bug to spawn into the only cell"
+        );
+
+        events.clear();
+        apply(
+            &mut world,
+            Command::Tick {
+                dt: Duration::from_secs(1),
+            },
+            &mut events,
+        );
+
+        assert!(
+            events
+                .iter()
+                .all(|event| !matches!(event, Event::BugSpawned { .. })),
+            "cell is occupied so no additional spawn should occur"
+        );
     }
 
     #[test]
-    fn bug_generation_is_deterministic_for_same_grid() {
+    fn automatic_spawning_is_deterministic_for_same_grid() {
         let mut first_world = World::new();
         let mut second_world = World::new();
         let mut first_events = Vec::new();
@@ -1419,11 +1500,30 @@ mod tests {
             &mut second_events,
         );
 
+        for _ in 0..5 {
+            first_events.clear();
+            apply(
+                &mut first_world,
+                Command::Tick {
+                    dt: Duration::from_secs(1),
+                },
+                &mut first_events,
+            );
+
+            second_events.clear();
+            apply(
+                &mut second_world,
+                Command::Tick {
+                    dt: Duration::from_secs(1),
+                },
+                &mut second_events,
+            );
+        }
+
         assert_eq!(
             query::bug_view(&first_world).into_vec(),
             query::bug_view(&second_world).into_vec()
         );
-        assert_eq!(first_events, second_events);
     }
 
     #[test]
@@ -1541,6 +1641,17 @@ mod tests {
     fn configure_bug_step_adjusts_quantum() {
         let mut world = World::new();
         let mut events = Vec::new();
+
+        apply(
+            &mut world,
+            Command::SpawnBug {
+                spawner: CellCoord::new(0, 0),
+                color: BugColor::from_rgb(0xaa, 0xbb, 0xcc),
+            },
+            &mut events,
+        );
+
+        events.clear();
 
         apply(
             &mut world,

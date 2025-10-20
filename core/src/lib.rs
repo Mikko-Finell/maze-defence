@@ -49,6 +49,11 @@ pub enum Command {
         /// Minimum simulated time required between successive bug steps.
         step_duration: Duration,
     },
+    /// Updates how frequently bug spawners automatically emit bugs.
+    ConfigureBugSpawnInterval {
+        /// Minimum simulated time required between automatic spawns.
+        interval: Duration,
+    },
     /// Advances the simulation clock by the provided delta time.
     Tick {
         /// Duration of simulated time that elapsed since the previous tick.

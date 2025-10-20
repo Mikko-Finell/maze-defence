@@ -28,6 +28,7 @@ const DEFAULT_GRID_COLUMNS: u32 = 10;
 const DEFAULT_GRID_ROWS: u32 = 10;
 const DEFAULT_TILE_LENGTH: f32 = 100.0;
 const DEFAULT_BUG_STEP_MS: u64 = 250;
+const DEFAULT_BUG_SPAWN_MS: u64 = 1_000;
 
 /// Command-line arguments for launching the Maze Defence experience.
 #[derive(Debug, Parser)]
@@ -61,6 +62,14 @@ struct CliArgs {
         value_parser = clap::value_parser!(u64).range(1..=60_000)
     )]
     bug_step_ms: u64,
+    /// Milliseconds between automatic bug spawns.
+    #[arg(
+        long = "bug-spawn-ms",
+        value_name = "MILLISECONDS",
+        default_value_t = DEFAULT_BUG_SPAWN_MS,
+        value_parser = clap::value_parser!(u64).range(1..=60_000)
+    )]
+    bug_spawn_ms: u64,
 }
 
 /// Grid dimensions parsed from a WIDTHxHEIGHT command-line argument.
@@ -116,12 +125,14 @@ fn main() -> Result<()> {
     };
 
     let bug_step_duration = Duration::from_millis(args.bug_step_ms);
+    let bug_spawn_interval = Duration::from_millis(args.bug_spawn_ms);
     let mut simulation = Simulation::new(
         columns,
         rows,
         DEFAULT_TILE_LENGTH,
         args.cells_per_tile,
         bug_step_duration,
+        bug_spawn_interval,
     );
     let bootstrap = Bootstrap::default();
     let (banner, grid_scene, wall_scene) = {
@@ -184,6 +195,7 @@ impl Simulation {
         tile_length: f32,
         cells_per_tile: u32,
         bug_step: Duration,
+        bug_spawn_interval: Duration,
     ) -> Self {
         let mut world = World::new();
         let mut pending_events = Vec::new();
@@ -201,6 +213,13 @@ impl Simulation {
             &mut world,
             Command::ConfigureBugStep {
                 step_duration: bug_step,
+            },
+            &mut pending_events,
+        );
+        world::apply(
+            &mut world,
+            Command::ConfigureBugSpawnInterval {
+                interval: bug_spawn_interval,
             },
             &mut pending_events,
         );
@@ -332,6 +351,7 @@ mod tests {
             32.0,
             TileGridPresentation::DEFAULT_CELLS_PER_TILE,
             Duration::from_millis(200),
+            Duration::from_secs(1),
         )
     }
 

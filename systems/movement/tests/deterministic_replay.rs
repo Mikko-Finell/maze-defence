@@ -16,7 +16,7 @@ fn deterministic_replay_produces_expected_snapshot() {
     assert_eq!(first, second, "replay diverged between runs");
 
     let fingerprint = first.fingerprint();
-    let expected = 0x5594_ab59_794f_5f2d;
+    let expected = 0xc2a8_a690_dab5_01cb;
     assert_eq!(
         fingerprint, expected,
         "fingerprint mismatch: {fingerprint:#x}"
@@ -122,7 +122,7 @@ fn movement_pauses_in_builder_mode() {
     world::apply(
         &mut world,
         Command::Tick {
-            dt: Duration::from_millis(500),
+            dt: Duration::from_secs(1),
         },
         &mut events,
     );
