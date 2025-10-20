@@ -6,7 +6,7 @@ Do not start working before you're read `tower-spec.md` so you understand the co
 
 **Goal:** Define the vocabulary; no behavior.
 
-**Status:** TODO
+**Status:** Done
 
 * Add `TowerId`, `TowerKind`, `PlacementError`, `RemovalError`.
 * Add `Command::{PlaceTower, RemoveTower}` and `Event::{TowerPlaced, TowerRemoved, TowerPlacementRejected, TowerRemovalRejected}`.

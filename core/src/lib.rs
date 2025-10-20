@@ -18,6 +18,8 @@
 
 use std::time::Duration;
 
+use serde::{Deserialize, Serialize};
+
 /// Canonical banner emitted when the experience boots.
 pub const WELCOME_BANNER: &str = "Welcome to Maze Defence.";
 
@@ -73,6 +75,18 @@ pub enum Command {
         /// Appearance to assign to the spawned bug.
         color: BugColor,
     },
+    /// Requests placement of a tower anchored at the provided origin cell.
+    PlaceTower {
+        /// Type of tower to construct at the origin.
+        kind: TowerKind,
+        /// Upper-left cell that defines the tower's footprint.
+        origin: CellCoord,
+    },
+    /// Requests removal of an existing tower from the world.
+    RemoveTower {
+        /// Identifier of the tower targeted for removal.
+        tower: TowerId,
+    },
 }
 
 /// Events broadcast by the world after processing commands.
@@ -105,6 +119,38 @@ pub enum Event {
         cell: CellCoord,
         /// Appearance applied to the bug.
         color: BugColor,
+    },
+    /// Confirms that a tower was placed into the world.
+    TowerPlaced {
+        /// Identifier assigned to the tower by the world.
+        tower: TowerId,
+        /// Type of tower that was placed.
+        kind: TowerKind,
+        /// Region of cells occupied by the tower.
+        region: CellRect,
+    },
+    /// Confirms that a tower was removed from the world.
+    TowerRemoved {
+        /// Identifier of the tower that was removed.
+        tower: TowerId,
+        /// Region of cells previously occupied by the tower.
+        region: CellRect,
+    },
+    /// Reports that a tower placement request was rejected.
+    TowerPlacementRejected {
+        /// Type of tower requested for placement.
+        kind: TowerKind,
+        /// Origin cell provided in the placement request.
+        origin: CellCoord,
+        /// Specific reason the placement failed.
+        reason: PlacementError,
+    },
+    /// Reports that a tower removal request was rejected.
+    TowerRemovalRejected {
+        /// Identifier of the tower targeted for removal.
+        tower: TowerId,
+        /// Specific reason the removal failed.
+        reason: RemovalError,
     },
 }
 
@@ -173,8 +219,26 @@ impl BugId {
     }
 }
 
+/// Unique identifier assigned to a tower.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct TowerId(u32);
+
+impl TowerId {
+    /// Creates a new tower identifier with the provided numeric value.
+    #[must_use]
+    pub const fn new(value: u32) -> Self {
+        Self(value)
+    }
+
+    /// Retrieves the numeric representation of the tower identifier.
+    #[must_use]
+    pub const fn get(&self) -> u32 {
+        self.0
+    }
+}
+
 /// Location of a single grid cell expressed as column and row coordinates.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct CellCoord {
     column: u32,
     row: u32,
@@ -204,6 +268,89 @@ impl CellCoord {
     pub fn manhattan_distance(self, other: CellCoord) -> u32 {
         self.column().abs_diff(other.column()) + self.row().abs_diff(other.row())
     }
+}
+
+/// Axis-aligned rectangle expressed in cell coordinates.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct CellRect {
+    origin: CellCoord,
+    size: CellRectSize,
+}
+
+impl CellRect {
+    /// Constructs a rectangle from an origin cell and size.
+    #[must_use]
+    pub const fn from_origin_and_size(origin: CellCoord, size: CellRectSize) -> Self {
+        Self { origin, size }
+    }
+
+    /// Upper-left cell that anchors the rectangle.
+    #[must_use]
+    pub const fn origin(&self) -> CellCoord {
+        self.origin
+    }
+
+    /// Dimensions of the rectangle measured in whole cells.
+    #[must_use]
+    pub const fn size(&self) -> CellRectSize {
+        self.size
+    }
+}
+
+/// Size of a [`CellRect`] measured in whole cells.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct CellRectSize {
+    width: u32,
+    height: u32,
+}
+
+impl CellRectSize {
+    /// Creates a new size descriptor with explicit dimensions.
+    #[must_use]
+    pub const fn new(width: u32, height: u32) -> Self {
+        Self { width, height }
+    }
+
+    /// Width of the rectangle in cells.
+    #[must_use]
+    pub const fn width(&self) -> u32 {
+        self.width
+    }
+
+    /// Height of the rectangle in cells.
+    #[must_use]
+    pub const fn height(&self) -> u32 {
+        self.height
+    }
+}
+
+/// Types of towers that can be constructed in the maze.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum TowerKind {
+    /// Basic tower with default attack parameters.
+    Basic,
+}
+
+/// Reasons a tower placement request may be rejected by the world.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PlacementError {
+    /// The simulation is not in builder mode, so placement is disabled.
+    InvalidMode,
+    /// The requested region extends beyond the configured grid bounds.
+    OutOfBounds,
+    /// The provided origin cell does not satisfy alignment requirements.
+    Misaligned,
+    /// The requested footprint overlaps an occupied cell.
+    Occupied,
+}
+
+/// Reasons a tower removal request may be rejected by the world.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RemovalError {
+    /// The simulation is not in builder mode, so removal is disabled.
+    InvalidMode,
+    /// No tower with the provided identifier exists.
+    MissingTower,
 }
 
 /// Canonical representation of "The Goal" for a bug.
@@ -263,7 +410,11 @@ impl TileCoord {
 
 #[cfg(test)]
 mod tests {
-    use super::{select_goal, CellCoord, Goal};
+    use super::{
+        select_goal, CellCoord, CellRect, CellRectSize, Goal, PlacementError, RemovalError,
+        TowerId, TowerKind,
+    };
+    use serde::{de::DeserializeOwned, Serialize};
 
     #[test]
     fn manhattan_distance_matches_expectation() {
@@ -284,5 +435,43 @@ mod tests {
 
         let goal = select_goal(origin, &candidates);
         assert_eq!(goal, Some(Goal::at(CellCoord::new(3, 5))));
+    }
+
+    fn assert_round_trip<T>(value: &T)
+    where
+        T: Serialize + DeserializeOwned + PartialEq + std::fmt::Debug,
+    {
+        let bytes = bincode::serialize(value).expect("serialize");
+        let restored: T = bincode::deserialize(&bytes).expect("deserialize");
+        assert_eq!(&restored, value);
+    }
+
+    #[test]
+    fn tower_id_round_trips_through_bincode() {
+        let tower_id = TowerId::new(42);
+        assert_round_trip(&tower_id);
+    }
+
+    #[test]
+    fn tower_kind_round_trips_through_bincode() {
+        assert_round_trip(&TowerKind::Basic);
+    }
+
+    #[test]
+    fn placement_error_round_trips_through_bincode() {
+        assert_round_trip(&PlacementError::Occupied);
+    }
+
+    #[test]
+    fn removal_error_round_trips_through_bincode() {
+        assert_round_trip(&RemovalError::MissingTower);
+    }
+
+    #[test]
+    fn cell_rect_round_trips_through_bincode() {
+        let origin = CellCoord::new(5, 7);
+        let size = CellRectSize::new(2, 3);
+        let rect = CellRect::from_origin_and_size(origin, size);
+        assert_round_trip(&rect);
     }
 }
