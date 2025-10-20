@@ -88,11 +88,21 @@ impl RenderingBackend for MacroquadBackend {
                 draw_wall(&metrics, wall, grid_color, subgrid_color);
 
                 let bug_radius = metrics.cell_step * 0.5;
+                let border_cell_offset_x = if metrics.cell_step > f32::EPSILON {
+                    (metrics.grid_offset_x - metrics.offset_x) / metrics.cell_step
+                } else {
+                    0.0
+                };
+                let border_cell_offset_y = if metrics.cell_step > f32::EPSILON {
+                    (metrics.grid_offset_y - metrics.offset_y) / metrics.cell_step
+                } else {
+                    0.0
+                };
                 for BugPresentation { column, row, color } in &scene.bugs {
-                    let bug_center_x =
-                        metrics.grid_offset_x + (*column as f32 + 0.5) * metrics.cell_step;
-                    let bug_center_y =
-                        metrics.grid_offset_y + (*row as f32 + 0.5) * metrics.cell_step;
+                    let bug_center_x = metrics.offset_x
+                        + (*column as f32 + border_cell_offset_x + 0.5) * metrics.cell_step;
+                    let bug_center_y = metrics.offset_y
+                        + (*row as f32 + border_cell_offset_y + 0.5) * metrics.cell_step;
                     let border_thickness = (bug_radius * 0.2).max(1.0);
                     macroquad::shapes::draw_circle(
                         bug_center_x,
