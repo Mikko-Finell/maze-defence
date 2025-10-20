@@ -763,7 +763,8 @@ fn generate_bugs(columns: TileCoord, rows: TileCoord) -> Vec<BugSeed> {
         Ok(value) => value,
         Err(_) => usize::MAX,
     };
-    let target_count = BUG_COUNT.min(available_cells);
+    let target_capacity = available_cells.saturating_sub(1);
+    let target_count = BUG_COUNT.min(target_capacity);
 
     let mut cells: Vec<CellCoord> = Vec::with_capacity(available_cells);
     for row in 0..row_count {
@@ -832,7 +833,9 @@ mod tests {
         assert_eq!(tile_grid.columns(), expected_columns);
         assert_eq!(tile_grid.rows(), expected_rows);
         assert_eq!(tile_grid.tile_length(), expected_tile_length);
-        assert_eq!(events.len(), BUG_COUNT);
+        let cell_capacity = expected_columns.get() as usize * expected_rows.get() as usize;
+        let expected_bugs = BUG_COUNT.min(cell_capacity.saturating_sub(1));
+        assert_eq!(events.len(), expected_bugs);
     }
 
     #[test]
@@ -856,8 +859,8 @@ mod tests {
             assert!(bug.cell.column() < columns.get());
             assert!(bug.cell.row() < rows.get());
         }
-        let cell_capacity = columns.get() * rows.get();
-        assert_eq!(events.len(), BUG_COUNT.min(cell_capacity as usize));
+        let cell_capacity = columns.get() as usize * rows.get() as usize;
+        assert_eq!(events.len(), BUG_COUNT.min(cell_capacity.saturating_sub(1)));
     }
 
     #[test]
@@ -876,11 +879,8 @@ mod tests {
         );
 
         let bugs = query::bug_view(&world).into_vec();
-        assert_eq!(bugs.len(), 1);
-        let bug = bugs.first().expect("exactly one bug should be generated");
-        assert_eq!(bug.cell.column(), 0);
-        assert_eq!(bug.cell.row(), 0);
-        assert_eq!(events.len(), 1);
+        assert!(bugs.is_empty());
+        assert!(events.is_empty());
     }
 
     #[test]

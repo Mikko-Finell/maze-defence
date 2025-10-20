@@ -210,6 +210,14 @@ impl Movement {
     }
 
     fn prepare_workspace(&mut self, columns: u32, rows: u32, targets: &[CellCoord]) -> usize {
+        if targets.is_empty() {
+            self.targets.clear();
+            self.target_columns.clear();
+            self.prepared_dimensions = Some((columns, rows));
+            self.active_nodes = 0;
+            return 0;
+        }
+
         if self.prepared_dimensions != Some((columns, rows)) || self.targets.as_slice() != targets {
             self.targets.clear();
             self.targets.extend_from_slice(targets);
@@ -415,6 +423,9 @@ mod tests {
         let mut movement = Movement::default();
 
         assert_eq!(movement.prepare_workspace(0, 0, &[]), 0);
+        assert!(movement.targets.is_empty());
+        assert!(movement.target_columns.is_empty());
+        assert_eq!(movement.active_nodes, 0);
 
         let targets = vec![CellCoord::new(1, 4)];
         assert_eq!(movement.prepare_workspace(3, 4, &targets), 15);
