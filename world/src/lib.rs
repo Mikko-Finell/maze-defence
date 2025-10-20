@@ -219,21 +219,22 @@ impl World {
         color: BugColor,
         out_events: &mut Vec<Event>,
     ) {
-        if !self.bug_spawners.contains(cell) {
+        let (columns, rows) = self.occupancy.dimensions();
+        let Some(entry_cell) = self.bug_spawners.entry_cell(cell, columns, rows) else {
             return;
-        }
+        };
 
-        if self.occupancy.index(cell).is_none() || !self.occupancy.can_enter(cell) {
+        if self.occupancy.index(entry_cell).is_none() || !self.occupancy.can_enter(entry_cell) {
             return;
         }
 
         let bug_id = self.next_bug_identifier();
-        let bug = Bug::new(bug_id, cell, color);
-        self.occupancy.occupy(bug_id, cell);
+        let bug = Bug::new(bug_id, entry_cell, color);
+        self.occupancy.occupy(bug_id, entry_cell);
         self.bugs.push(bug);
         out_events.push(Event::BugSpawned {
             bug_id,
-            cell,
+            cell: entry_cell,
             color,
         });
     }
@@ -577,22 +578,47 @@ impl BugSpawnerRegistry {
             return;
         }
 
-        let last_column = columns.saturating_sub(1);
-        let last_row = rows.saturating_sub(1);
-
-        for column in 0..columns {
-            let _ = self.cells.insert(CellCoord::new(column, 0));
-            let _ = self.cells.insert(CellCoord::new(column, last_row));
-        }
+        let left_column = u32::MAX;
+        let top_row = u32::MAX;
+        let right_column = columns;
 
         for row in 0..rows {
-            let _ = self.cells.insert(CellCoord::new(0, row));
-            let _ = self.cells.insert(CellCoord::new(last_column, row));
+            let _ = self.cells.insert(CellCoord::new(left_column, row));
+            let _ = self.cells.insert(CellCoord::new(right_column, row));
+        }
+
+        for column in 0..columns {
+            let _ = self.cells.insert(CellCoord::new(column, top_row));
         }
     }
 
     fn contains(&self, cell: CellCoord) -> bool {
         self.cells.contains(&cell)
+    }
+
+    fn entry_cell(&self, spawner: CellCoord, columns: u32, rows: u32) -> Option<CellCoord> {
+        if !self.contains(spawner) || columns == 0 || rows == 0 {
+            return None;
+        }
+
+        let left_column = u32::MAX;
+        let top_row = u32::MAX;
+        let right_column = columns;
+
+        if spawner.column() == left_column && spawner.row() < rows {
+            return Some(CellCoord::new(0, spawner.row()));
+        }
+
+        if spawner.row() == top_row && spawner.column() < columns {
+            return Some(CellCoord::new(spawner.column(), 0));
+        }
+
+        if spawner.column() == right_column && spawner.row() < rows {
+            let target_column = columns.saturating_sub(1);
+            return Some(CellCoord::new(target_column, spawner.row()));
+        }
+
+        None
     }
 
     fn iter(&self) -> impl Iterator<Item = CellCoord> + '_ {
@@ -811,6 +837,13 @@ mod tests {
     use maze_defence_core::{BugColor, Goal, PlayMode};
     use std::time::Duration;
 
+    fn first_spawner(world: &World) -> CellCoord {
+        query::bug_spawners(world)
+            .into_iter()
+            .next()
+            .expect("expected at least one bug spawner")
+    }
+
     fn expected_outer_rim(columns: u32, rows: u32) -> BTreeSet<CellCoord> {
         let mut cells = BTreeSet::new();
 
@@ -818,17 +851,17 @@ mod tests {
             return cells;
         }
 
-        let last_column = columns.saturating_sub(1);
-        let last_row = rows.saturating_sub(1);
-
-        for column in 0..columns {
-            let _ = cells.insert(CellCoord::new(column, 0));
-            let _ = cells.insert(CellCoord::new(column, last_row));
-        }
+        let left_column = u32::MAX;
+        let top_row = u32::MAX;
+        let right_column = columns;
 
         for row in 0..rows {
-            let _ = cells.insert(CellCoord::new(0, row));
-            let _ = cells.insert(CellCoord::new(last_column, row));
+            let _ = cells.insert(CellCoord::new(left_column, row));
+            let _ = cells.insert(CellCoord::new(right_column, row));
+        }
+
+        for column in 0..columns {
+            let _ = cells.insert(CellCoord::new(column, top_row));
         }
 
         cells
@@ -853,10 +886,11 @@ mod tests {
         let mut world = World::new();
         let mut events = Vec::new();
 
+        let spawner = first_spawner(&world);
         apply(
             &mut world,
             Command::SpawnBug {
-                spawner: CellCoord::new(0, 0),
+                spawner,
                 color: BugColor::from_rgb(0x2f, 0x95, 0x32),
             },
             &mut events,
@@ -1061,10 +1095,11 @@ mod tests {
         );
 
         events.clear();
+        let spawner = first_spawner(&world);
         apply(
             &mut world,
             Command::SpawnBug {
-                spawner: CellCoord::new(0, 0),
+                spawner,
                 color: BugColor::from_rgb(0x12, 0x34, 0x56),
             },
             &mut events,
@@ -1108,10 +1143,11 @@ mod tests {
         );
 
         events.clear();
+        let spawner = first_spawner(&world);
         apply(
             &mut world,
             Command::SpawnBug {
-                spawner: CellCoord::new(0, 0),
+                spawner,
                 color: BugColor::from_rgb(0xaa, 0xbb, 0xcc),
             },
             &mut events,
@@ -1120,10 +1156,11 @@ mod tests {
         assert_eq!(events.len(), 1);
 
         events.clear();
+        let spawner = first_spawner(&world);
         apply(
             &mut world,
             Command::SpawnBug {
-                spawner: CellCoord::new(0, 0),
+                spawner,
                 color: BugColor::from_rgb(0x10, 0x20, 0x30),
             },
             &mut events,
@@ -1181,16 +1218,32 @@ mod tests {
         );
 
         events.clear();
+        let spawner = first_spawner(&world);
         apply(
             &mut world,
             Command::SpawnBug {
-                spawner: CellCoord::new(0, 0),
+                spawner,
                 color: BugColor::from_rgb(0, 0, 0),
             },
             &mut events,
         );
 
         assert!(events.is_empty());
+    }
+
+    #[test]
+    fn bug_spawners_reside_outside_tile_grid() {
+        let world = World::new();
+        let (columns, rows) = world.occupancy.dimensions();
+        for spawner in query::bug_spawners(&world) {
+            assert!(
+                (spawner.column() == u32::MAX && spawner.row() < rows)
+                    || (spawner.row() == u32::MAX && spawner.column() < columns)
+                    || (spawner.column() == columns && spawner.row() < rows),
+                "unexpected spawner location: {:?}",
+                spawner
+            );
+        }
     }
 
     #[test]
@@ -1470,10 +1523,11 @@ mod tests {
 
         assert!(events.is_empty());
 
+        let spawner = first_spawner(&world);
         apply(
             &mut world,
             Command::SpawnBug {
-                spawner: CellCoord::new(0, 0),
+                spawner,
                 color: BugColor::from_rgb(0x2f, 0x95, 0x32),
             },
             &mut events,

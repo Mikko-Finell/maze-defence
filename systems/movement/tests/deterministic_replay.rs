@@ -8,6 +8,15 @@ use maze_defence_core::{BugColor, CellCoord, Command, Event, PlayMode, TileCoord
 use maze_defence_system_movement::Movement;
 use maze_defence_world::{self as world, query, World};
 
+const TOP_EDGE_SPAWNER: CellCoord = CellCoord::new(0, u32::MAX);
+
+fn first_spawner(world: &World) -> CellCoord {
+    query::bug_spawners(world)
+        .into_iter()
+        .next()
+        .expect("expected at least one bug spawner")
+}
+
 #[test]
 fn deterministic_replay_produces_expected_snapshot() {
     let first = replay(scripted_commands());
@@ -96,7 +105,7 @@ fn scripted_commands() -> Vec<Command> {
             cells_per_tile: 1,
         },
         Command::SpawnBug {
-            spawner: CellCoord::new(0, 0),
+            spawner: TOP_EDGE_SPAWNER,
             color: BugColor::from_rgb(0x2f, 0x95, 0x32),
         },
         Command::Tick {
@@ -123,10 +132,11 @@ fn movement_pauses_in_builder_mode() {
     let mut movement = Movement::default();
     let mut events = Vec::new();
 
+    let spawner = first_spawner(&world);
     world::apply(
         &mut world,
         Command::SpawnBug {
-            spawner: CellCoord::new(0, 0),
+            spawner,
             color: BugColor::from_rgb(0x2f, 0x95, 0x32),
         },
         &mut events,

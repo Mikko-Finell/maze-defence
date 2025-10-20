@@ -4,6 +4,13 @@ use maze_defence_core::{BugColor, CellCoord, Command, Direction, Event, TileCoor
 use maze_defence_system_movement::Movement;
 use maze_defence_world::{self as world, query, World};
 
+fn first_spawner(world: &World) -> CellCoord {
+    query::bug_spawners(world)
+        .into_iter()
+        .next()
+        .expect("expected at least one bug spawner")
+}
+
 #[test]
 fn emits_step_commands_toward_target() {
     let mut world = World::new();
@@ -18,10 +25,11 @@ fn emits_step_commands_toward_target() {
         },
         &mut events,
     );
+    let spawner = first_spawner(&world);
     world::apply(
         &mut world,
         Command::SpawnBug {
-            spawner: CellCoord::new(0, 0),
+            spawner,
             color: BugColor::from_rgb(0x2f, 0x95, 0x32),
         },
         &mut events,
@@ -95,10 +103,11 @@ fn step_commands_target_free_cells() {
         },
         &mut events,
     );
+    let spawner = first_spawner(&world);
     world::apply(
         &mut world,
         Command::SpawnBug {
-            spawner: CellCoord::new(0, 0),
+            spawner,
             color: BugColor::from_rgb(0x2f, 0x95, 0x32),
         },
         &mut events,
@@ -160,10 +169,11 @@ fn replans_after_failed_step() {
         },
         &mut events,
     );
+    let spawner = first_spawner(&world);
     world::apply(
         &mut world,
         Command::SpawnBug {
-            spawner: CellCoord::new(0, 0),
+            spawner,
             color: BugColor::from_rgb(0x2f, 0x95, 0x32),
         },
         &mut events,

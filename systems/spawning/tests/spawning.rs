@@ -8,6 +8,8 @@ use maze_defence_core::{BugColor, CellCoord, Command, Event, PlayMode, TileCoord
 use maze_defence_system_spawning::{Config, Spawning};
 use maze_defence_world::{self as world, query, World};
 
+const LEFT_EDGE_SPAWNER: CellCoord = CellCoord::new(u32::MAX, 0);
+
 #[test]
 fn emits_multiple_spawn_commands_for_large_dt() {
     let mut world = World::new();
@@ -56,7 +58,7 @@ fn emits_multiple_spawn_commands_for_large_dt() {
 
 #[test]
 fn builder_mode_resets_accumulator() {
-    let spawners = vec![CellCoord::new(0, 0)];
+    let spawners = vec![LEFT_EDGE_SPAWNER];
     let mut spawning = Spawning::new(Config::new(Duration::from_secs(1), 0x4d59_5df4_d0f3_3173));
 
     let mut commands = Vec::new();
@@ -119,7 +121,7 @@ fn deterministic_replay_produces_identical_sequence() {
     assert_eq!(first, second, "replay diverged between runs");
 
     let fingerprint = first.fingerprint();
-    let expected = 0xb1b6_5e5a_69ce_b95d;
+    let expected = 0x8026_3d83_7a05_a124;
     assert_eq!(
         fingerprint, expected,
         "fingerprint mismatch: {fingerprint:#x}",
