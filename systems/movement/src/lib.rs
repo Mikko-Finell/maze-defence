@@ -11,11 +11,11 @@
 
 use std::{cmp::Ordering, collections::BinaryHeap};
 
-use maze_defence_core::{select_goal, BugId, CellCoord, Command, Direction, Event, Goal};
+use maze_defence_core::{select_goal, BugId, CellCoord, Command, Direction, Event, Goal, PlayMode};
 use maze_defence_world::query::{BugSnapshot, BugView, OccupancyView};
 
 /// Pure system that reacts to world events and emits movement commands.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct Movement {
     frontier: BinaryHeap<NodeState>,
     came_from: Vec<Option<CellCoord>>,
@@ -24,6 +24,7 @@ pub struct Movement {
     prepared_dimensions: Option<(u32, u32)>,
     workspace_nodes: usize,
     active_nodes: usize,
+    play_mode: PlayMode,
 }
 
 impl Movement {
@@ -36,6 +37,16 @@ impl Movement {
         targets: &[CellCoord],
         out: &mut Vec<Command>,
     ) {
+        for event in events {
+            if let Event::PlayModeChanged { mode } = event {
+                self.play_mode = *mode;
+            }
+        }
+
+        if self.play_mode == PlayMode::Builder {
+            return;
+        }
+
         let (columns, rows) = occupancy_view.dimensions();
         let node_count = self.prepare_workspace(columns, rows, targets);
         if node_count == 0 {
@@ -193,6 +204,21 @@ impl Movement {
         }
         for entry in self.came_from.iter_mut().take(self.active_nodes) {
             *entry = None;
+        }
+    }
+}
+
+impl Default for Movement {
+    fn default() -> Self {
+        Self {
+            frontier: BinaryHeap::new(),
+            came_from: Vec::new(),
+            g_score: Vec::new(),
+            targets: Vec::new(),
+            prepared_dimensions: None,
+            workspace_nodes: 0,
+            active_nodes: 0,
+            play_mode: PlayMode::Attack,
         }
     }
 }

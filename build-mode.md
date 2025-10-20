@@ -139,8 +139,8 @@ This proposal:
 
 **Deliverables**
 
-* [ ] Add **early bail** inside world `Tick` / `StepBug` handlers if mode = Builder.
-* [ ] Optionally, have the movement system also check mode before emitting commands.
+* [x] Add **early bail** inside world `Tick` / `StepBug` handlers if mode = Builder.
+* [x] Optionally, have the movement system also check mode before emitting commands.
 
 **Goal**
 
