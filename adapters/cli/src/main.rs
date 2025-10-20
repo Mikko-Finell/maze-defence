@@ -214,11 +214,13 @@ impl Simulation {
 
             let bug_view = query::bug_view(&self.world);
             let occupancy_view = query::occupancy_view(&self.world);
+            let target_cells = query::available_target_cells(&self.world);
             self.scratch_commands.clear();
             self.movement.handle(
                 &events,
                 &bug_view,
                 occupancy_view,
+                &target_cells,
                 &mut self.scratch_commands,
             );
 

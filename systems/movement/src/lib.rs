@@ -39,10 +39,11 @@ impl Movement {
         events: &[Event],
         bug_view: &BugView,
         occupancy_view: OccupancyView<'_>,
+        targets: &[CellCoord],
         out: &mut Vec<Command>,
     ) {
         let (columns, rows) = occupancy_view.dimensions();
-        let node_count = self.prepare_workspace(columns, rows);
+        let node_count = self.prepare_workspace(columns, rows, targets);
         if node_count == 0 {
             return;
         }
@@ -208,9 +209,10 @@ impl Movement {
         self.path_buffer.reverse();
     }
 
-    fn prepare_workspace(&mut self, columns: u32, rows: u32) -> usize {
-        if self.prepared_dimensions != Some((columns, rows)) {
-            self.targets = target_cells(columns, rows);
+    fn prepare_workspace(&mut self, columns: u32, rows: u32, targets: &[CellCoord]) -> usize {
+        if self.prepared_dimensions != Some((columns, rows)) || self.targets.as_slice() != targets {
+            self.targets.clear();
+            self.targets.extend_from_slice(targets);
             self.target_columns = self.targets.iter().map(|cell| cell.column()).collect();
             self.prepared_dimensions = Some((columns, rows));
         }
@@ -382,20 +384,6 @@ fn index(columns: u32, rows: u32, cell: CellCoord) -> Option<usize> {
     Some(row * width + column)
 }
 
-fn target_cells(columns: u32, rows: u32) -> Vec<CellCoord> {
-    if columns == 0 || rows == 0 {
-        return Vec::new();
-    }
-
-    let center_column = if columns % 2 == 0 {
-        (columns - 1) / 2
-    } else {
-        columns / 2
-    };
-
-    vec![CellCoord::new(center_column, rows)]
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -423,10 +411,18 @@ mod tests {
     }
 
     #[test]
-    fn target_cells_align_with_center() {
-        assert!(target_cells(0, 0).is_empty());
-        assert_eq!(target_cells(3, 4), vec![CellCoord::new(1, 4)]);
-        assert_eq!(target_cells(4, 2), vec![CellCoord::new(1, 2)]);
+    fn provided_targets_are_cached() {
+        let mut movement = Movement::default();
+
+        assert_eq!(movement.prepare_workspace(0, 0, &[]), 0);
+
+        let targets = vec![CellCoord::new(1, 4)];
+        assert_eq!(movement.prepare_workspace(3, 4, &targets), 15);
+        assert_eq!(movement.targets, targets);
+
+        let alternate_targets = vec![CellCoord::new(2, 2), CellCoord::new(2, 3)];
+        assert_eq!(movement.prepare_workspace(4, 3, &alternate_targets), 16);
+        assert_eq!(movement.targets, alternate_targets);
     }
 
     #[test]

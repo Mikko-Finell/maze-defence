@@ -42,7 +42,7 @@
 
 ## Movement System (`systems/movement` crate)
 1. [DONE] Create a new pure system crate that listens for events and produces commands:
-   - Public API: `Movement::handle(events: &[Event], bug_view: BugView, occupancy_view: OccupancyView, out: &mut Vec<Command>)` – systems receive DTOs, never the world itself.
+   - Public API: `Movement::handle(events: &[Event], bug_view: BugView, occupancy_view: OccupancyView, targets: &[CellCoord], out: &mut Vec<Command>)` – systems receive DTOs, never the world itself.
    - Respond to `Event::TimeAdvanced` by scanning `bug_view` for bugs whose readiness flag is true (one-second quantum accrued).
    - For each bug needing a path (via `Event::BugPathNeeded` or DTO flag), compute the best path and issue `SetBugPath` command.
    - When a bug is ready to step and has a path, propose `StepBug` commands for the next direction, but only if the destination cell appears free in `occupancy_view`. Losers in the reservation phase will cause the world to emit a new `Event::BugPathNeeded`.
