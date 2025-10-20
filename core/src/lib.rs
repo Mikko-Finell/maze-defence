@@ -66,6 +66,13 @@ pub enum Command {
         /// Mode the world should activate.
         mode: PlayMode,
     },
+    /// Requests that a bug spawner emit a new bug into the maze.
+    SpawnBug {
+        /// Location of the spawner responsible for creating the bug.
+        spawner: CellCoord,
+        /// Appearance to assign to the spawned bug.
+        color: BugColor,
+    },
 }
 
 /// Events broadcast by the world after processing commands.
@@ -90,6 +97,49 @@ pub enum Event {
         /// Mode that became active after processing commands.
         mode: PlayMode,
     },
+    /// Confirms that a bug was created by a spawner.
+    BugSpawned {
+        /// Identifier assigned to the newly spawned bug.
+        bug_id: BugId,
+        /// Cell the bug occupies after spawning.
+        cell: CellCoord,
+        /// Appearance applied to the bug.
+        color: BugColor,
+    },
+}
+
+/// Visual appearance applied to a bug.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct BugColor {
+    red: u8,
+    green: u8,
+    blue: u8,
+}
+
+impl BugColor {
+    /// Creates a new bug color from byte RGB components.
+    #[must_use]
+    pub const fn from_rgb(red: u8, green: u8, blue: u8) -> Self {
+        Self { red, green, blue }
+    }
+
+    /// Red component of the color.
+    #[must_use]
+    pub const fn red(&self) -> u8 {
+        self.red
+    }
+
+    /// Green component of the color.
+    #[must_use]
+    pub const fn green(&self) -> u8 {
+        self.green
+    }
+
+    /// Blue component of the color.
+    #[must_use]
+    pub const fn blue(&self) -> u8 {
+        self.blue
+    }
 }
 
 /// Cardinal movement directions available to bugs.

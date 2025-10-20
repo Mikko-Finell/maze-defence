@@ -223,6 +223,11 @@ enum EventRecord {
     PlayModeChanged {
         mode: PlayMode,
     },
+    BugSpawned {
+        bug_id: maze_defence_core::BugId,
+        cell: CellCoord,
+        color: (u8, u8, u8),
+    },
 }
 
 impl From<&Event> for EventRecord {
@@ -237,6 +242,15 @@ impl From<&Event> for EventRecord {
                 to: *to,
             },
             Event::PlayModeChanged { mode } => Self::PlayModeChanged { mode: *mode },
+            Event::BugSpawned {
+                bug_id,
+                cell,
+                color,
+            } => Self::BugSpawned {
+                bug_id: *bug_id,
+                cell: *cell,
+                color: (color.red(), color.green(), color.blue()),
+            },
         }
     }
 }
