@@ -91,8 +91,7 @@ impl RenderingBackend for MacroquadBackend {
                 for BugPresentation { column, row, color } in &scene.bugs {
                     let bug_center_x =
                         metrics.offset_x + (*column as f32 + 0.5) * metrics.cell_step;
-                    let bug_center_y =
-                        metrics.offset_y + (*row as f32 + 0.5) * metrics.cell_step;
+                    let bug_center_y = metrics.offset_y + (*row as f32 + 0.5) * metrics.cell_step;
                     let border_thickness = (bug_radius * 0.2).max(1.0);
                     macroquad::shapes::draw_circle(
                         bug_center_x,
@@ -256,6 +255,15 @@ mod tests {
 
         assert_eq!(active_builder_preview(&scene), Some(preview));
     }
+
+    #[test]
+    fn target_columns_are_normalized_by_side_margin() {
+        let margin = TileGridPresentation::SIDE_BORDER_CELL_LAYERS;
+        let input = vec![margin, margin + 1, margin + 5];
+        let normalized = normalize_target_columns(&input);
+
+        assert_eq!(normalized, vec![0, 1, 5]);
+    }
 }
 
 fn draw_subgrid(
@@ -351,8 +359,10 @@ fn draw_wall(
         target_columns.sort_unstable();
         target_columns.dedup();
 
+        let normalized_columns = normalize_target_columns(&target_columns);
+
         if let (Some(&first_column), Some(&last_column)) =
-            (target_columns.first(), target_columns.last())
+            (normalized_columns.first(), normalized_columns.last())
         {
             let target_left = metrics.grid_offset_x + first_column as f32 * metrics.cell_step;
             let target_right = metrics.grid_offset_x + (last_column + 1) as f32 * metrics.cell_step;
@@ -398,7 +408,7 @@ fn draw_wall(
                 grid_color,
             );
 
-            for &column in target_columns.iter().skip(1) {
+            for &column in normalized_columns.iter().skip(1) {
                 let boundary_x = metrics.grid_offset_x + column as f32 * metrics.cell_step;
                 macroquad::shapes::draw_line(
                     boundary_x,
@@ -420,6 +430,14 @@ fn draw_wall(
             );
         }
     }
+}
+
+fn normalize_target_columns(columns: &[u32]) -> Vec<u32> {
+    let margin = TileGridPresentation::SIDE_BORDER_CELL_LAYERS;
+    columns
+        .iter()
+        .map(|&column| column.saturating_sub(margin))
+        .collect()
 }
 
 fn draw_placement_preview(preview: PlacementPreview, metrics: &SceneMetrics) {
