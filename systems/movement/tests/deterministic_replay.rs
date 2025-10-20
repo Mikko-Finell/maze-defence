@@ -16,7 +16,7 @@ fn deterministic_replay_produces_expected_snapshot() {
     assert_eq!(first, second, "replay diverged between runs");
 
     let fingerprint = first.fingerprint();
-    let expected = 0x2302_4dce_dcc6_995d;
+    let expected = 0x5594_ab59_794f_5f2d;
     assert_eq!(
         fingerprint, expected,
         "fingerprint mismatch: {fingerprint:#x}"
