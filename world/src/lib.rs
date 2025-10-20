@@ -11,7 +11,9 @@
 
 use std::time::Duration;
 
-use maze_defence_core::{BugId, CellCoord, Command, Direction, Event, TileCoord, WELCOME_BANNER};
+use maze_defence_core::{
+    BugId, CellCoord, Command, Direction, Event, PlayMode, TileCoord, WELCOME_BANNER,
+};
 
 const BUG_GENERATION_SEED: u64 = 0x42f0_e1eb_d4a5_3c21;
 const BUG_COUNT: usize = 20;
@@ -163,6 +165,7 @@ pub struct World {
     reservations: ReservationFrame,
     tick_index: u64,
     step_quantum: Duration,
+    play_mode: PlayMode,
 }
 
 impl World {
@@ -188,6 +191,7 @@ impl World {
             cells_per_tile,
             tick_index: 0,
             step_quantum: DEFAULT_STEP_QUANTUM,
+            play_mode: PlayMode::Attack,
         };
         world.reset_bugs();
         world
@@ -204,6 +208,12 @@ impl World {
             .map(|seed| Bug::from_seed(seed.id, seed.cell, seed.color))
             .collect();
         self.occupancy.fill_with(&self.bugs);
+        self.reservations.clear();
+    }
+
+    fn clear_bugs(&mut self) {
+        self.bugs.clear();
+        self.occupancy.clear();
         self.reservations.clear();
     }
 
@@ -294,7 +304,14 @@ pub fn apply(world: &mut World, command: Command, out_events: &mut Vec<Event>) {
                 total_cell_columns(columns, normalized_cells),
                 total_cell_rows(rows, normalized_cells),
             );
-            world.reset_bugs();
+            match world.play_mode {
+                PlayMode::Attack => {
+                    world.reset_bugs();
+                }
+                PlayMode::Builder => {
+                    world.clear_bugs();
+                }
+            }
         }
         Command::Tick { dt } => {
             world.tick_index = world.tick_index.saturating_add(1);
@@ -314,6 +331,24 @@ pub fn apply(world: &mut World, command: Command, out_events: &mut Vec<Event>) {
                 .queue(world.tick_index, StepRequest { bug_id, direction });
             world.resolve_pending_steps(out_events);
         }
+        Command::SetPlayMode { mode } => {
+            if world.play_mode == mode {
+                return;
+            }
+
+            world.play_mode = mode;
+
+            match mode {
+                PlayMode::Attack => {
+                    world.reset_bugs();
+                }
+                PlayMode::Builder => {
+                    world.clear_bugs();
+                }
+            }
+
+            out_events.push(Event::PlayModeChanged { mode });
+        }
     }
 }
 
@@ -322,7 +357,13 @@ pub mod query {
     use std::time::Duration;
 
     use super::{OccupancyGrid, Target, TileGrid, Wall, World};
-    use maze_defence_core::{select_goal, BugId, CellCoord, Goal};
+    use maze_defence_core::{select_goal, BugId, CellCoord, Goal, PlayMode};
+
+    /// Reports the active play mode for the world.
+    #[must_use]
+    pub fn play_mode(world: &World) -> PlayMode {
+        world.play_mode
+    }
 
     /// Retrieves the welcome banner that adapters may display to players.
     #[must_use]
@@ -578,8 +619,12 @@ impl OccupancyGrid {
         }
     }
 
-    fn fill_with(&mut self, bugs: &[Bug]) {
+    fn clear(&mut self) {
         self.cells.fill(None);
+    }
+
+    fn fill_with(&mut self, bugs: &[Bug]) {
+        self.clear();
         for bug in bugs {
             if let Some(index) = self.index(bug.cell) {
                 self.cells[index] = Some(bug.id);
@@ -794,7 +839,146 @@ fn next_random(state: u64) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use maze_defence_core::Goal;
+    use maze_defence_core::{Goal, PlayMode};
+
+    #[test]
+    fn world_defaults_to_attack_mode() {
+        let world = World::new();
+
+        assert_eq!(query::play_mode(&world), PlayMode::Attack);
+    }
+
+    #[test]
+    fn entering_builder_mode_clears_bugs_and_occupancy() {
+        let mut world = World::new();
+        let mut events = Vec::new();
+
+        assert!(!query::bug_view(&world).into_vec().is_empty());
+
+        apply(
+            &mut world,
+            Command::SetPlayMode {
+                mode: PlayMode::Builder,
+            },
+            &mut events,
+        );
+
+        assert_eq!(
+            events,
+            vec![Event::PlayModeChanged {
+                mode: PlayMode::Builder,
+            }]
+        );
+        assert_eq!(query::play_mode(&world), PlayMode::Builder);
+        assert!(query::bug_view(&world).into_vec().is_empty());
+        assert!(query::occupancy_view(&world)
+            .iter()
+            .all(|slot| slot.is_none()));
+    }
+
+    #[test]
+    fn returning_to_attack_mode_reseeds_bugs() {
+        let mut world = World::new();
+        let mut events = Vec::new();
+
+        apply(
+            &mut world,
+            Command::SetPlayMode {
+                mode: PlayMode::Builder,
+            },
+            &mut events,
+        );
+        events.clear();
+
+        apply(
+            &mut world,
+            Command::SetPlayMode {
+                mode: PlayMode::Attack,
+            },
+            &mut events,
+        );
+
+        assert_eq!(
+            events,
+            vec![Event::PlayModeChanged {
+                mode: PlayMode::Attack,
+            }]
+        );
+        assert_eq!(query::play_mode(&world), PlayMode::Attack);
+        assert!(!query::bug_view(&world).into_vec().is_empty());
+    }
+
+    #[test]
+    fn setting_same_play_mode_is_idempotent() {
+        let mut world = World::new();
+        let mut events = Vec::new();
+
+        apply(
+            &mut world,
+            Command::SetPlayMode {
+                mode: PlayMode::Attack,
+            },
+            &mut events,
+        );
+        assert!(events.is_empty());
+
+        apply(
+            &mut world,
+            Command::SetPlayMode {
+                mode: PlayMode::Builder,
+            },
+            &mut events,
+        );
+        assert_eq!(
+            events,
+            vec![Event::PlayModeChanged {
+                mode: PlayMode::Builder,
+            }]
+        );
+
+        events.clear();
+        apply(
+            &mut world,
+            Command::SetPlayMode {
+                mode: PlayMode::Builder,
+            },
+            &mut events,
+        );
+        assert!(events.is_empty());
+    }
+
+    #[test]
+    fn configure_tile_grid_respects_builder_mode() {
+        let mut world = World::new();
+        let mut events = Vec::new();
+
+        apply(
+            &mut world,
+            Command::SetPlayMode {
+                mode: PlayMode::Builder,
+            },
+            &mut events,
+        );
+        events.clear();
+
+        apply(
+            &mut world,
+            Command::ConfigureTileGrid {
+                columns: TileCoord::new(12),
+                rows: TileCoord::new(6),
+                tile_length: 64.0,
+                cells_per_tile: 1,
+            },
+            &mut events,
+        );
+
+        assert!(events.is_empty());
+        assert_eq!(query::play_mode(&world), PlayMode::Builder);
+        assert!(query::bug_view(&world).into_vec().is_empty());
+        assert!(query::occupancy_view(&world)
+            .iter()
+            .all(|slot| slot.is_none()));
+    }
 
     #[test]
     fn apply_configures_tile_grid() {

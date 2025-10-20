@@ -4,7 +4,7 @@ use std::{
     time::Duration,
 };
 
-use maze_defence_core::{CellCoord, Command, Event, TileCoord};
+use maze_defence_core::{CellCoord, Command, Event, PlayMode, TileCoord};
 use maze_defence_system_movement::Movement;
 use maze_defence_world::{self as world, query, World};
 
@@ -162,6 +162,9 @@ enum EventRecord {
         from: CellCoord,
         to: CellCoord,
     },
+    PlayModeChanged {
+        mode: PlayMode,
+    },
 }
 
 impl From<&Event> for EventRecord {
@@ -175,6 +178,7 @@ impl From<&Event> for EventRecord {
                 from: *from,
                 to: *to,
             },
+            Event::PlayModeChanged { mode } => Self::PlayModeChanged { mode: *mode },
         }
     }
 }
