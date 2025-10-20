@@ -10,6 +10,8 @@
 //! Shared rendering contracts for Maze Defence adapters.
 
 use anyhow::Result as AnyResult;
+use glam::Vec2;
+use maze_defence_core::{PlayMode, TileCoord};
 use std::{error::Error, fmt, time::Duration};
 
 /// RGBA color used when presenting frames.
@@ -64,6 +66,77 @@ impl Color {
 
 fn lighten_channel(channel: f32, amount: f32) -> f32 {
     channel + (1.0 - channel) * amount
+}
+
+/// Input snapshot gathered by adapters before updating the scene.
+#[derive(Clone, Debug, PartialEq)]
+pub struct FrameInput {
+    /// Whether the adapter detected a toggle press on this frame.
+    pub mode_toggle: bool,
+    /// Cursor position expressed in world units, clamped to the playable grid bounds.
+    pub cursor_world_space: Option<Vec2>,
+    /// Cursor position snapped to tile coordinates within the playable grid.
+    pub cursor_tile_space: Option<TileSpacePosition>,
+}
+
+impl Default for FrameInput {
+    fn default() -> Self {
+        Self {
+            mode_toggle: false,
+            cursor_world_space: None,
+            cursor_tile_space: None,
+        }
+    }
+}
+
+/// Tile-space coordinate pair expressed using strong `TileCoord` wrappers.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct TileSpacePosition {
+    column: TileCoord,
+    row: TileCoord,
+}
+
+impl TileSpacePosition {
+    /// Creates a new tile-space position from zero-based indices.
+    #[must_use]
+    pub fn from_indices(column: u32, row: u32) -> Self {
+        Self {
+            column: TileCoord::new(column),
+            row: TileCoord::new(row),
+        }
+    }
+
+    /// Zero-based column index of the tile position.
+    #[must_use]
+    pub fn column(&self) -> TileCoord {
+        self.column
+    }
+
+    /// Zero-based row index of the tile position.
+    #[must_use]
+    pub fn row(&self) -> TileCoord {
+        self.row
+    }
+}
+
+/// Declarative builder-mode placement preview emitted by the simulation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct PlacementPreview {
+    /// Origin tile coordinate for the preview region.
+    pub origin: TileSpacePosition,
+    /// Square footprint of the preview measured in tiles along one edge.
+    pub size_in_tiles: u32,
+}
+
+impl PlacementPreview {
+    /// Creates a new placement preview descriptor.
+    #[must_use]
+    pub const fn new(origin: TileSpacePosition, size_in_tiles: u32) -> Self {
+        Self {
+            origin,
+            size_in_tiles,
+        }
+    }
 }
 
 /// Describes a square tile grid that can be rendered by adapters.
@@ -243,6 +316,10 @@ pub struct Scene {
     pub wall: WallPresentation,
     /// Bugs currently visible within the maze, positioned using cell coordinates.
     pub bugs: Vec<BugPresentation>,
+    /// Active play mode for the simulation.
+    pub play_mode: PlayMode,
+    /// Optional builder placement preview emitted by the simulation.
+    pub placement_preview: Option<PlacementPreview>,
 }
 
 impl Scene {
@@ -252,11 +329,15 @@ impl Scene {
         tile_grid: TileGridPresentation,
         wall: WallPresentation,
         bugs: Vec<BugPresentation>,
+        play_mode: PlayMode,
+        placement_preview: Option<PlacementPreview>,
     ) -> Self {
         Self {
             tile_grid,
             wall,
             bugs,
+            play_mode,
+            placement_preview,
         }
     }
 
@@ -297,12 +378,13 @@ impl Presentation {
 pub trait RenderingBackend {
     /// Runs the rendering backend until it is requested to exit.
     ///
-    /// The provided `update_scene` closure receives the simulated frame delta and
-    /// may mutate the scene before it is rendered, allowing adapters to animate
-    /// world snapshots deterministically.
+    /// The provided `update_scene` closure receives the simulated frame delta,
+    /// per-frame input captured by the adapter, and may mutate the scene before
+    /// it is rendered, allowing adapters to animate world snapshots
+    /// deterministically.
     fn run<F>(self, presentation: Presentation, update_scene: F) -> AnyResult<()>
     where
-        F: FnMut(Duration, &mut Scene) + 'static;
+        F: FnMut(Duration, FrameInput, &mut Scene) + 'static;
 }
 
 /// Errors that can occur when constructing rendering descriptors.

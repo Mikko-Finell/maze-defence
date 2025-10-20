@@ -152,15 +152,15 @@ This proposal:
 
 **Deliverables**
 
-* [ ] Add a shared `FrameInput` type to `adapters/rendering` exposing **only** the information the simulation may consume:
+* [x] Add a shared `FrameInput` type to `adapters/rendering` exposing **only** the information the simulation may consume:
 
   * `mode_toggle: bool` — true on the frame the adapter detected a toggle press.
   * `cursor_world_space: Option<glam::Vec2>` — world-space cursor, already clamped to the playable grid bounds.
-  * `cursor_tile_space: Option<TileCoord>` — tile snapped position supplied as data, never derived inside the simulation.
+  * `cursor_tile_space: Option<TileSpacePosition>` — tile snapped position supplied as data, never derived inside the simulation.
 
-* [ ] Change `RenderingBackend::run` to pass `FrameInput` into the callback (`FnMut(Duration, FrameInput, &mut Scene)`).
-* [ ] Update `MacroquadBackend` to populate `FrameInput` (space bar edge detection + mouse position translation) while remaining **purely observational**.
-* [ ] Have the CLI adapter fabricate a `FrameInput::default()` so headless tests keep compiling.
+* [x] Change `RenderingBackend::run` to pass `FrameInput` into the callback (`FnMut(Duration, FrameInput, &mut Scene)`).
+* [x] Update `MacroquadBackend` to populate `FrameInput` (space bar edge detection + mouse position translation) while remaining **purely observational**.
+* [x] Have the CLI adapter fabricate a `FrameInput::default()` so headless tests keep compiling.
 
 **Goal**
 
@@ -172,14 +172,14 @@ This proposal:
 
 **Deliverables**
 
-* [ ] Extend `Simulation` (in `adapters/cli`) with a `pending_input: FrameInput` cache consumed once per frame.
-* [ ] Add `Simulation::handle_input(&mut self, input: FrameInput)` that:
+* [x] Extend `Simulation` (in `adapters/cli`) with a `pending_input: FrameInput` cache consumed once per frame.
+* [x] Add `Simulation::handle_input(&mut self, input: FrameInput)` that:
 
   * Detects toggle edges and pushes `Command::SetPlayMode { … }` into the command queue.
   * Stores the most recent cursor positions in tile/world space for rendering.
 
-* [ ] Call `handle_input` from the adapter right before `advance`.
-* [ ] Update `Simulation::populate_scene` to:
+* [x] Call `handle_input` from the adapter right before `advance`.
+* [x] Update `Simulation::populate_scene` to:
 
   * Always attach the current `PlayMode` to the outgoing `Scene`.
   * When in Builder mode, emit a `PlacementPreview` descriptor built solely from cached input + grid metrics.
@@ -194,9 +194,9 @@ This proposal:
 
 **Deliverables**
 
-* [ ] Add `PlayMode` passthrough and a `PlacementPreview` struct (tile coordinate + size) to `Scene` in `adapters/rendering`.
+* [x] Add `PlayMode` passthrough and a `PlacementPreview` struct (tile coordinate + size) to `Scene` in `adapters/rendering`.
 * [ ] Ensure `Scene::new`/`Scene` tests cover the new fields without introducing builder-only defaults.
-* [ ] Macroquad (and any future renderer) draws previews strictly from `Scene.placement_preview` — **no additional math or grid queries** performed in the adapter.
+* [x] Macroquad (and any future renderer) draws previews strictly from `Scene.placement_preview` — **no additional math or grid queries** performed in the adapter.
 
 **Goal**
 

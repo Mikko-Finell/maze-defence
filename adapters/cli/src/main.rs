@@ -13,10 +13,10 @@ use std::{str::FromStr, time::Duration};
 
 use anyhow::Result;
 use clap::Parser;
-use maze_defence_core::{Command, Event, TileCoord};
+use maze_defence_core::{Command, Event, PlayMode, TileCoord};
 use maze_defence_rendering::{
-    BugPresentation, Color, Presentation, RenderingBackend, Scene, TargetCellPresentation,
-    TargetPresentation, TileGridPresentation, WallPresentation,
+    BugPresentation, Color, FrameInput, PlacementPreview, Presentation, RenderingBackend, Scene,
+    TargetCellPresentation, TargetPresentation, TileGridPresentation, WallPresentation,
 };
 use maze_defence_rendering_macroquad::MacroquadBackend;
 use maze_defence_system_bootstrap::Bootstrap;
@@ -148,12 +148,19 @@ fn main() -> Result<()> {
         (banner, grid_scene, wall_scene)
     };
 
-    let mut scene = Scene::new(grid_scene, wall_scene, Vec::new());
+    let mut scene = Scene::new(
+        grid_scene,
+        wall_scene,
+        Vec::new(),
+        query::play_mode(simulation.world()),
+        None,
+    );
     simulation.populate_scene(&mut scene);
 
     let presentation = Presentation::new(banner, Color::from_rgb_u8(85, 142, 52), scene);
 
-    MacroquadBackend::default().run(presentation, move |dt, scene| {
+    MacroquadBackend::default().run(presentation, move |dt, input, scene| {
+        simulation.handle_input(input);
         simulation.advance(dt);
         simulation.populate_scene(scene);
     })
@@ -165,6 +172,8 @@ struct Simulation {
     movement: Movement,
     pending_events: Vec<Event>,
     scratch_commands: Vec<Command>,
+    queued_commands: Vec<Command>,
+    pending_input: FrameInput,
 }
 
 impl Simulation {
@@ -200,6 +209,8 @@ impl Simulation {
             movement: Movement::default(),
             pending_events,
             scratch_commands: Vec::new(),
+            queued_commands: Vec::new(),
+            pending_input: FrameInput::default(),
         };
         simulation.process_pending_events();
         simulation
@@ -209,9 +220,29 @@ impl Simulation {
         &self.world
     }
 
+    fn handle_input(&mut self, input: FrameInput) {
+        if input.mode_toggle {
+            let current_mode = query::play_mode(&self.world);
+            let next_mode = match current_mode {
+                PlayMode::Attack => PlayMode::Builder,
+                PlayMode::Builder => PlayMode::Attack,
+            };
+            self.queued_commands
+                .push(Command::SetPlayMode { mode: next_mode });
+        }
+
+        self.pending_input = FrameInput {
+            mode_toggle: false,
+            cursor_world_space: input.cursor_world_space,
+            cursor_tile_space: input.cursor_tile_space,
+        };
+    }
+
     fn advance(&mut self, dt: Duration) {
+        self.pending_events.clear();
+        self.flush_queued_commands();
+
         if !dt.is_zero() {
-            self.pending_events.clear();
             world::apply(
                 &mut self.world,
                 Command::Tick { dt },
@@ -233,6 +264,15 @@ impl Simulation {
                 Color::from_rgb_u8(color.red(), color.green(), color.blue()),
             )
         }));
+
+        scene.play_mode = query::play_mode(&self.world);
+        scene.placement_preview = if scene.play_mode == PlayMode::Builder {
+            self.pending_input
+                .cursor_tile_space
+                .map(|tile| PlacementPreview::new(tile, 1))
+        } else {
+            None
+        };
     }
 
     fn process_pending_events(&mut self) {
@@ -266,5 +306,15 @@ impl Simulation {
 
         self.pending_events = events;
         self.pending_events.clear();
+    }
+
+    fn flush_queued_commands(&mut self) {
+        if self.queued_commands.is_empty() {
+            return;
+        }
+
+        for command in self.queued_commands.drain(..) {
+            world::apply(&mut self.world, command, &mut self.pending_events);
+        }
     }
 }

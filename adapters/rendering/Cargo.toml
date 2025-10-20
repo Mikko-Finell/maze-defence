@@ -5,3 +5,5 @@ edition.workspace = true
 
 [dependencies]
 anyhow.workspace = true
+glam = "0.24"
+maze-defence-core = { path = "../../core" }
