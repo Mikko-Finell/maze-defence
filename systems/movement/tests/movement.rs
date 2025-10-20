@@ -59,9 +59,11 @@ fn emits_step_commands_toward_target() {
             .iter()
             .find(|snapshot| &snapshot.id == bug_id)
             .expect("missing bug snapshot");
-        let before = nearest_target_distance(bug.cell, &target_cells);
+        let goal = query::goal_for(&world, bug.cell).expect("expected goal for bug");
+        let goal_cell = goal.cell();
+        let before = bug.cell.manhattan_distance(goal_cell);
         let destination = advance_cell(bug.cell, *direction);
-        let after = nearest_target_distance(destination, &target_cells);
+        let after = destination.manhattan_distance(goal_cell);
         assert!(
             after < before,
             "bug {} did not move closer to the target",
@@ -235,18 +237,6 @@ fn advance_cell(cell: CellCoord, direction: Direction) -> CellCoord {
         Direction::South => CellCoord::new(cell.column(), cell.row() + 1),
         Direction::West => CellCoord::new(cell.column().saturating_sub(1), cell.row()),
     }
-}
-
-fn nearest_target_distance(cell: CellCoord, targets: &[CellCoord]) -> u32 {
-    targets
-        .iter()
-        .map(|target| manhattan_distance(cell, *target))
-        .min()
-        .unwrap_or(0)
-}
-
-fn manhattan_distance(from: CellCoord, to: CellCoord) -> u32 {
-    from.column().abs_diff(to.column()) + from.row().abs_diff(to.row())
 }
 
 fn select_blocked_bug(
