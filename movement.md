@@ -24,7 +24,7 @@
    - Provide helper methods for translating `(row, column)` to indices; keep a `HashSet` fallback only if extremely sparse maps emerge in future use-cases.
    - Update occupancy atomically when bugs move.
 3. [DONE] Track wall target cells as `CellCoord` equivalents:
-   - Convert `TargetCell` values into traversable `CellCoord` nodes, treating the derived exit row (`rows * cells_per_tile + 1`) as a valid node outside the wall.
+   - Convert `TargetCell` values into traversable `CellCoord` nodes, treating the derived exit row (`rows * cells_per_tile + 1` to account for the top walkway) as a valid node outside the wall.
    - Maintain adjacency information to connect interior edge cells to the target cell so A* can path to it.
 4. [DONE] Update `apply` logic:
    - `Tick` accumulates time on each bug and emits `Event::TimeAdvanced { dt }`.
