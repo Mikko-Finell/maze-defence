@@ -14,7 +14,7 @@ use std::{collections::VecDeque, time::Duration};
 use maze_defence_core::{BugId, CellCoord, Command, Direction, Event, TileCoord, WELCOME_BANNER};
 
 const BUG_GENERATION_SEED: u64 = 0x42f0_e1eb_d4a5_3c21;
-const BUG_COUNT: usize = 10;
+const BUG_COUNT: usize = 20;
 
 const DEFAULT_GRID_COLUMNS: TileCoord = TileCoord::new(10);
 const DEFAULT_GRID_ROWS: TileCoord = TileCoord::new(10);
@@ -765,31 +765,29 @@ fn generate_bugs(columns: TileCoord, rows: TileCoord) -> Vec<BugSeed> {
     };
     let target_count = BUG_COUNT.min(available_cells);
 
-    let mut bugs: Vec<BugSeed> = Vec::with_capacity(target_count);
-    let mut rng_state = BUG_GENERATION_SEED;
+    let mut cells: Vec<CellCoord> = Vec::with_capacity(available_cells);
+    for row in 0..row_count {
+        for column in 0..column_count {
+            cells.push(CellCoord::new(column, row));
+        }
+    }
 
-    for index in 0..target_count {
+    let mut rng_state = BUG_GENERATION_SEED;
+    for index in (1..cells.len()).rev() {
+        rng_state = next_random(rng_state);
+        let swap_index = (rng_state % (index as u64 + 1)) as usize;
+        cells.swap(index, swap_index);
+    }
+
+    let mut bugs: Vec<BugSeed> = Vec::with_capacity(target_count);
+    for (index, cell) in cells.into_iter().take(target_count).enumerate() {
         let color = BUG_COLORS[index % BUG_COLORS.len()];
         let bug_id = BugId::new(index as u32);
-
-        loop {
-            rng_state = next_random(rng_state);
-            let column = (rng_state as u32) % column_count;
-            rng_state = next_random(rng_state);
-            let row = (rng_state as u32) % row_count;
-            let cell = CellCoord::new(column, row);
-
-            if bugs.iter().any(|bug| bug.cell == cell) {
-                continue;
-            }
-
-            bugs.push(BugSeed {
-                id: bug_id,
-                cell,
-                color,
-            });
-            break;
-        }
+        bugs.push(BugSeed {
+            id: bug_id,
+            cell,
+            color,
+        });
     }
 
     bugs

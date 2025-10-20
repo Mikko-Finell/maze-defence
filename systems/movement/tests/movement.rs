@@ -59,7 +59,14 @@ fn step_commands_target_free_cells() {
     let bug_view = query::bug_view(&world);
     let occupancy_view = query::occupancy_view(&world);
     let mut commands = Vec::new();
-    movement.handle(&tick_events, &bug_view, occupancy_view, &mut commands);
+    let target_cells = query::available_target_cells(&world);
+    movement.handle(
+        &tick_events,
+        &bug_view,
+        occupancy_view,
+        &target_cells,
+        &mut commands,
+    );
 
     for command in &commands {
         if let Command::StepBug { bug_id, direction } = command {
@@ -143,7 +150,14 @@ fn pump_system(world: &mut World, movement: &mut Movement, mut events: Vec<Event
         let bug_view = query::bug_view(world);
         let occupancy_view = query::occupancy_view(world);
         let mut commands = Vec::new();
-        movement.handle(&events, &bug_view, occupancy_view, &mut commands);
+        let target_cells = query::available_target_cells(world);
+        movement.handle(
+            &events,
+            &bug_view,
+            occupancy_view,
+            &target_cells,
+            &mut commands,
+        );
         if commands.is_empty() {
             break;
         }
