@@ -1,4 +1,4 @@
-# Towers Architecture Proposal
+# Towers Architecture
 
 ## Intent
 
@@ -6,7 +6,7 @@ Introduce towers as first-class, world-owned blockers that are placed/removed on
 
 ---
 
-## Guiding principles (from all four, tightened)
+## Guiding principles
 
 * **World authority**: All mutations flow through `World::apply`. Systems emit messages; adapters render and report input.
 * **Flat contracts**: Core defines minimal, adapter-agnostic types (serde-friendly; no visual hints).
