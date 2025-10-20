@@ -145,19 +145,19 @@ impl SceneMetrics {
 
         let scaled_width = world_width * scale;
         let scaled_height = world_height * scale;
-        let offset_x = (screen_width - scaled_width) * 0.5;
-        let offset_y = (screen_height - scaled_height) * 0.5;
-
-        let grid_width_scaled = tile_grid.width() * scale;
-        let grid_height_scaled = tile_grid.height() * scale;
-        let bordered_grid_width_scaled = tile_grid.bordered_width() * scale;
-        let bordered_grid_height_scaled = tile_grid.bordered_height() * scale;
         let tile_step = tile_grid.tile_length * scale;
         let cell_step = if tile_grid.cells_per_tile == 0 {
             0.0
         } else {
             tile_step / tile_grid.cells_per_tile as f32
         };
+        let offset_x = (screen_width - scaled_width) * 0.5 + cell_step;
+        let offset_y = (screen_height - scaled_height) * 0.5;
+
+        let grid_width_scaled = tile_grid.width() * scale;
+        let grid_height_scaled = tile_grid.height() * scale;
+        let bordered_grid_width_scaled = tile_grid.bordered_width() * scale;
+        let bordered_grid_height_scaled = tile_grid.bordered_height() * scale;
         let grid_offset_x =
             offset_x + TileGridPresentation::SIDE_BORDER_CELL_LAYERS as f32 * cell_step;
         let grid_offset_y =
