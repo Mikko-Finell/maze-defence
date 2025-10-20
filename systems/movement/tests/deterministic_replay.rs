@@ -16,7 +16,7 @@ fn deterministic_replay_produces_expected_snapshot() {
     assert_eq!(first, second, "replay diverged between runs");
 
     let fingerprint = first.fingerprint();
-    let expected = 0xef51_c7d3_6fe5_b4d8;
+    let expected = 0x7a9b_b13b_6f0b_e765;
     assert_eq!(
         fingerprint, expected,
         "fingerprint mismatch: {fingerprint:#x}"
@@ -130,9 +130,7 @@ impl ReplayOutcome {
 struct BugState {
     id: maze_defence_core::BugId,
     cell: CellCoord,
-    next_hop: Option<CellCoord>,
     ready_for_step: bool,
-    needs_path: bool,
     accumulated_micros: u128,
     color: (u8, u8, u8),
 }
@@ -142,9 +140,7 @@ impl From<query::BugSnapshot> for BugState {
         Self {
             id: snapshot.id,
             cell: snapshot.cell,
-            next_hop: snapshot.next_hop,
             ready_for_step: snapshot.ready_for_step,
-            needs_path: snapshot.needs_path,
             accumulated_micros: snapshot.accumulated.as_micros(),
             color: (
                 snapshot.color.red(),
@@ -160,9 +156,6 @@ enum EventRecord {
     TimeAdvanced {
         dt_micros: u128,
     },
-    BugPathNeeded {
-        bug_id: maze_defence_core::BugId,
-    },
     BugAdvanced {
         bug_id: maze_defence_core::BugId,
         from: CellCoord,
@@ -176,7 +169,6 @@ impl From<&Event> for EventRecord {
             Event::TimeAdvanced { dt } => Self::TimeAdvanced {
                 dt_micros: dt.as_micros(),
             },
-            Event::BugPathNeeded { bug_id } => Self::BugPathNeeded { bug_id: *bug_id },
             Event::BugAdvanced { bug_id, from, to } => Self::BugAdvanced {
                 bug_id: *bug_id,
                 from: *from,

@@ -9,7 +9,7 @@
 
 //! Authoritative world state management for Maze Defence.
 
-use std::{collections::VecDeque, time::Duration};
+use std::time::Duration;
 
 use maze_defence_core::{BugId, CellCoord, Command, Direction, Event, TileCoord, WELCOME_BANNER};
 
@@ -192,10 +192,6 @@ impl World {
         self.bugs.iter_mut()
     }
 
-    fn bug_mut(&mut self, bug_id: BugId) -> Option<&mut Bug> {
-        self.bugs.iter_mut().find(|bug| bug.id == bug_id)
-    }
-
     fn bug_index(&self, bug_id: BugId) -> Option<usize> {
         self.bugs.iter().position(|bug| bug.id == bug_id)
     }
@@ -207,6 +203,9 @@ impl World {
         }
 
         let mut exited_bugs: Vec<BugId> = Vec::new();
+        let columns = self.tile_grid.columns().get();
+        let rows = self.tile_grid.rows().get();
+        let target_columns: Vec<u32> = self.targets.iter().map(|cell| cell.column()).collect();
         for request in requests {
             let Some(index) = self.bug_index(request.bug_id) else {
                 continue;
@@ -220,34 +219,13 @@ impl World {
                 continue;
             }
 
-            let Some(next_cell) = bug.next_step() else {
-                if bug.mark_path_needed() {
-                    out_events.push(Event::BugPathNeeded { bug_id: bug.id });
-                }
+            let Some(next_cell) =
+                advance_cell(from, request.direction, columns, rows, &target_columns)
+            else {
                 continue;
             };
-
-            let Some(expected_direction) = direction_between(from, next_cell) else {
-                bug.clear_path();
-                if bug.mark_path_needed() {
-                    out_events.push(Event::BugPathNeeded { bug_id: bug.id });
-                }
-                continue;
-            };
-
-            if expected_direction != request.direction {
-                bug.clear_path();
-                if bug.mark_path_needed() {
-                    out_events.push(Event::BugPathNeeded { bug_id: bug.id });
-                }
-                continue;
-            }
 
             if !self.occupancy.can_enter(next_cell) {
-                bug.clear_path();
-                if bug.mark_path_needed() {
-                    out_events.push(Event::BugPathNeeded { bug_id: bug.id });
-                }
                 continue;
             }
 
@@ -267,12 +245,6 @@ impl World {
                 self.occupancy.vacate(next_cell);
                 exited_bugs.push(bug.id);
                 continue;
-            }
-
-            if bug.next_step().is_none() && bug.accumulator >= self.step_quantum {
-                if bug.mark_path_needed() {
-                    out_events.push(Event::BugPathNeeded { bug_id: bug.id });
-                }
             }
 
             let _ = before;
@@ -299,52 +271,18 @@ pub fn apply(world: &mut World, command: Command, out_events: &mut Vec<Event>) {
             world.targets = target_cells_from_wall(&world.wall);
             world.occupancy = OccupancyGrid::new(columns.get(), rows.get());
             world.reset_bugs();
-
-            for bug in world.bugs.iter_mut() {
-                out_events.push(Event::BugPathNeeded { bug_id: bug.id });
-            }
         }
         Command::Tick { dt } => {
             world.tick_index = world.tick_index.saturating_add(1);
             out_events.push(Event::TimeAdvanced { dt });
 
-            let step_quantum = world.step_quantum;
             for bug in world.iter_bugs_mut() {
                 bug.accumulator = bug.accumulator.saturating_add(dt);
-                if bug.accumulator >= step_quantum && bug.next_step().is_none() {
-                    if bug.mark_path_needed() {
-                        out_events.push(Event::BugPathNeeded { bug_id: bug.id });
-                    }
-                }
             }
         }
         Command::ConfigureBugStep { step_duration } => {
             let clamped = step_duration.max(MIN_STEP_QUANTUM);
             world.step_quantum = clamped;
-
-            let step_quantum = world.step_quantum;
-            for bug in world.iter_bugs_mut() {
-                if bug.accumulator >= step_quantum && bug.next_step().is_none() {
-                    if bug.mark_path_needed() {
-                        out_events.push(Event::BugPathNeeded { bug_id: bug.id });
-                    }
-                }
-            }
-        }
-        Command::SetBugPath { bug_id, path } => {
-            let columns = world.tile_grid.columns();
-            let rows = world.tile_grid.rows();
-            if let Some(bug) = world.bug_mut(bug_id) {
-                if bug.assign_path(path, columns, rows) {
-                    if bug.next_step().is_some() {
-                        bug.clear_path_needed();
-                    } else if bug.mark_path_needed() {
-                        out_events.push(Event::BugPathNeeded { bug_id });
-                    }
-                } else if bug.mark_path_needed() {
-                    out_events.push(Event::BugPathNeeded { bug_id });
-                }
-            }
         }
         Command::StepBug { bug_id, direction } => {
             world
@@ -396,9 +334,7 @@ pub mod query {
                 id: bug.id,
                 cell: bug.cell,
                 color: bug.color,
-                next_hop: bug.next_step(),
                 ready_for_step: bug.ready_for_step(world.step_quantum),
-                needs_path: bug.path_needed,
                 accumulated: bug.accumulator,
             })
             .collect();
@@ -447,12 +383,8 @@ pub mod query {
         pub cell: CellCoord,
         /// Appearance assigned to the bug.
         pub color: super::BugColor,
-        /// Head of the queued path, if any.
-        pub next_hop: Option<CellCoord>,
         /// Indicates whether the bug accrued enough time to advance.
         pub ready_for_step: bool,
-        /// Indicates whether the world awaits a new path for the bug.
-        pub needs_path: bool,
         /// Duration accumulated toward the next step.
         pub accumulated: Duration,
     }
@@ -530,9 +462,7 @@ struct Bug {
     id: BugId,
     cell: CellCoord,
     color: BugColor,
-    path: VecDeque<CellCoord>,
     accumulator: Duration,
-    path_needed: bool,
 }
 
 impl Bug {
@@ -541,56 +471,16 @@ impl Bug {
             id,
             cell,
             color,
-            path: VecDeque::new(),
             accumulator: Duration::ZERO,
-            path_needed: true,
         }
-    }
-
-    fn assign_path(&mut self, path: Vec<CellCoord>, columns: TileCoord, rows: TileCoord) -> bool {
-        let deque: VecDeque<CellCoord> = path.into();
-        if let Some(first) = deque.front().copied() {
-            let column_bound = columns.get();
-            let row_bound = rows.get().saturating_add(1);
-            if !is_valid_cell(first, column_bound, row_bound) {
-                return false;
-            }
-
-            if direction_between(self.cell, first).is_none() {
-                return false;
-            }
-        }
-
-        self.path = deque;
-        true
-    }
-
-    fn next_step(&self) -> Option<CellCoord> {
-        self.path.front().copied()
     }
 
     fn advance(&mut self, destination: CellCoord) {
-        let _ = self.path.pop_front();
         self.cell = destination;
-    }
-
-    fn mark_path_needed(&mut self) -> bool {
-        let was_needed = self.path_needed;
-        self.path_needed = true;
-        !was_needed
-    }
-
-    fn clear_path_needed(&mut self) {
-        self.path_needed = false;
     }
 
     fn ready_for_step(&self, step_quantum: Duration) -> bool {
         self.accumulator >= step_quantum
-    }
-
-    fn clear_path(&mut self) {
-        self.path.clear();
-        self.path_needed = true;
     }
 }
 
@@ -709,10 +599,6 @@ impl OccupancyGrid {
     }
 }
 
-fn is_valid_cell(cell: CellCoord, columns: u32, rows: u32) -> bool {
-    cell.column() < columns && cell.row() < rows
-}
-
 fn target_cells(columns: TileCoord, rows: TileCoord) -> Vec<TargetCell> {
     let column_count = columns.get();
     let row_count = rows.get();
@@ -733,24 +619,42 @@ fn target_cells(columns: TileCoord, rows: TileCoord) -> Vec<TargetCell> {
     )]
 }
 
-fn direction_between(from: CellCoord, to: CellCoord) -> Option<Direction> {
-    let column_diff = from.column().abs_diff(to.column());
-    let row_diff = from.row().abs_diff(to.row());
-
-    if column_diff + row_diff != 1 {
-        return None;
-    }
-
-    if column_diff == 1 {
-        if to.column() > from.column() {
-            Some(Direction::East)
-        } else {
-            Some(Direction::West)
+fn advance_cell(
+    from: CellCoord,
+    direction: Direction,
+    columns: u32,
+    rows: u32,
+    target_columns: &[u32],
+) -> Option<CellCoord> {
+    match direction {
+        Direction::North => {
+            let next_row = from.row().checked_sub(1)?;
+            Some(CellCoord::new(from.column(), next_row))
         }
-    } else if to.row() > from.row() {
-        Some(Direction::South)
-    } else {
-        Some(Direction::North)
+        Direction::East => {
+            let next_column = from.column().checked_add(1)?;
+            if next_column < columns {
+                Some(CellCoord::new(next_column, from.row()))
+            } else {
+                None
+            }
+        }
+        Direction::South => {
+            let next_row = from.row().checked_add(1)?;
+            if next_row < rows {
+                Some(CellCoord::new(from.column(), next_row))
+            } else if next_row == rows
+                && target_columns.iter().any(|column| *column == from.column())
+            {
+                Some(CellCoord::new(from.column(), rows))
+            } else {
+                None
+            }
+        }
+        Direction::West => {
+            let next_column = from.column().checked_sub(1)?;
+            Some(CellCoord::new(next_column, from.row()))
+        }
     }
 }
 
@@ -845,9 +749,7 @@ mod tests {
         assert_eq!(tile_grid.columns(), expected_columns);
         assert_eq!(tile_grid.rows(), expected_rows);
         assert_eq!(tile_grid.tile_length(), expected_tile_length);
-        let cell_capacity = expected_columns.get() as usize * expected_rows.get() as usize;
-        let expected_bugs = BUG_COUNT.min(cell_capacity.saturating_sub(1));
-        assert_eq!(events.len(), expected_bugs);
+        assert!(events.is_empty());
     }
 
     #[test]
@@ -871,8 +773,7 @@ mod tests {
             assert!(bug.cell.column() < columns.get());
             assert!(bug.cell.row() < rows.get());
         }
-        let cell_capacity = columns.get() as usize * rows.get() as usize;
-        assert_eq!(events.len(), BUG_COUNT.min(cell_capacity.saturating_sub(1)));
+        assert!(events.is_empty());
     }
 
     #[test]
@@ -950,7 +851,7 @@ mod tests {
         let cell = target_cells[0];
         assert_eq!(cell.column().get(), 4);
         assert_eq!(cell.row().get(), 7);
-        assert_eq!(events.len(), BUG_COUNT);
+        assert!(events.is_empty());
     }
 
     #[test]
@@ -974,7 +875,7 @@ mod tests {
         let cell = target_cells[0];
         assert_eq!(cell.column().get(), 5);
         assert_eq!(cell.row().get(), 6);
-        assert_eq!(events.len(), BUG_COUNT);
+        assert!(events.is_empty());
     }
 
     #[test]
