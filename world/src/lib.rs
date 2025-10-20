@@ -591,6 +591,12 @@ impl BugSpawnerRegistry {
             let _ = self.cells.insert(CellCoord::new(0, row));
             let _ = self.cells.insert(CellCoord::new(last_column, row));
         }
+
+        for column in 0..columns {
+            let _ = self
+                .cells
+                .remove(&CellCoord::new(column, last_row));
+        }
     }
 
     fn contains(&self, cell: CellCoord) -> bool {
@@ -842,6 +848,10 @@ mod tests {
         for row in 0..rows {
             let _ = cells.insert(CellCoord::new(0, row));
             let _ = cells.insert(CellCoord::new(last_column, row));
+        }
+
+        for column in 0..columns {
+            let _ = cells.remove(&CellCoord::new(column, last_row));
         }
 
         cells
