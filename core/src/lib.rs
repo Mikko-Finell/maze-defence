@@ -43,13 +43,6 @@ pub enum Command {
         /// Duration of simulated time that elapsed since the previous tick.
         dt: Duration,
     },
-    /// Supplies a freshly computed path for the bug to follow.
-    SetBugPath {
-        /// Identifier of the bug that should adopt the path.
-        bug_id: BugId,
-        /// Ordered list of cell coordinates that subdivide each tile.
-        path: Vec<CellCoord>,
-    },
     /// Requests that a bug advance a single step in the specified direction.
     StepBug {
         /// Identifier of the bug attempting to move.
@@ -66,11 +59,6 @@ pub enum Event {
     TimeAdvanced {
         /// Duration of simulated time that elapsed in the tick.
         dt: Duration,
-    },
-    /// Signals that a bug requires a new path to continue navigating.
-    BugPathNeeded {
-        /// Identifier of the bug that needs a path recomputed.
-        bug_id: BugId,
     },
     /// Confirms that a bug successfully moved between two cells.
     BugAdvanced {

@@ -23,7 +23,6 @@ pub struct Movement {
     frontier: BinaryHeap<Reverse<NodeState>>,
     came_from: Vec<Option<CellCoord>>,
     g_score: Vec<u32>,
-    needs_path: Vec<BugId>,
     targets: Vec<CellCoord>,
     target_columns: Vec<u32>,
     prepared_dimensions: Option<(u32, u32)>,
@@ -47,37 +46,17 @@ impl Movement {
             return;
         }
 
-        self.collect_path_requests(events, bug_view);
-        self.process_path_requests(bug_view, occupancy_view, columns, rows, out);
-
-        if events
+        if !events
             .iter()
             .any(|event| matches!(event, Event::TimeAdvanced { .. }))
         {
-            self.emit_step_commands(bug_view, occupancy_view, out);
+            return;
         }
+
+        self.emit_step_commands(bug_view, occupancy_view, columns, rows, out);
     }
 
-    fn collect_path_requests(&mut self, events: &[Event], bug_view: &BugView) {
-        self.needs_path.clear();
-        self.needs_path
-            .extend(events.iter().filter_map(|event| match event {
-                Event::BugPathNeeded { bug_id } => Some(*bug_id),
-                _ => None,
-            }));
-
-        self.needs_path.extend(
-            bug_view
-                .iter()
-                .filter(|bug| bug.needs_path)
-                .map(|bug| bug.id),
-        );
-
-        self.needs_path.sort_unstable();
-        self.needs_path.dedup();
-    }
-
-    fn process_path_requests(
+    fn emit_step_commands(
         &mut self,
         bug_view: &BugView,
         occupancy_view: OccupancyView<'_>,
@@ -85,36 +64,12 @@ impl Movement {
         rows: u32,
         out: &mut Vec<Command>,
     ) {
-        let requests = std::mem::take(&mut self.needs_path);
-        for bug_id in requests.iter().copied() {
-            let Some(snapshot) = bug_view.iter().find(|bug| bug.id == bug_id) else {
-                continue;
-            };
-
-            if let Some(next_hop) = self.plan_next_hop(snapshot, occupancy_view, columns, rows)
-            {
-                out.push(Command::SetBugPath {
-                    bug_id,
-                    path: vec![next_hop],
-                });
-            }
-        }
-        self.needs_path = requests;
-        self.needs_path.clear();
-    }
-
-    fn emit_step_commands(
-        &mut self,
-        bug_view: &BugView,
-        occupancy_view: OccupancyView<'_>,
-        out: &mut Vec<Command>,
-    ) {
         for bug in bug_view.iter() {
             if !bug.ready_for_step {
                 continue;
             }
 
-            let Some(next_cell) = bug.next_hop else {
+            let Some(next_cell) = self.plan_next_hop(bug, columns, rows) else {
                 continue;
             };
 
@@ -131,13 +86,7 @@ impl Movement {
         }
     }
 
-    fn plan_next_hop(
-        &mut self,
-        bug: &BugSnapshot,
-        _occupancy_view: OccupancyView<'_>,
-        columns: u32,
-        rows: u32,
-    ) -> Option<CellCoord> {
+    fn plan_next_hop(&mut self, bug: &BugSnapshot, columns: u32, rows: u32) -> Option<CellCoord> {
         if self.targets.is_empty() {
             return None;
         }
@@ -159,12 +108,7 @@ impl Movement {
 
         while let Some(Reverse(current)) = self.frontier.pop() {
             if self.targets.iter().any(|target| *target == current.cell) {
-                return self.reconstruct_first_hop(
-                    bug.cell,
-                    current.cell,
-                    columns,
-                    rows_with_exit,
-                );
+                return self.reconstruct_first_hop(bug.cell, current.cell, columns, rows_with_exit);
             }
 
             let neighbors = enumerate_neighbors(current.cell, columns, rows, &self.target_columns);

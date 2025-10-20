@@ -1,11 +1,11 @@
 use std::time::Duration;
 
-use maze_defence_core::{BugId, CellCoord, Command, Direction, Event, TileCoord};
+use maze_defence_core::{CellCoord, Command, Direction, Event, TileCoord};
 use maze_defence_system_movement::Movement;
 use maze_defence_world::{self as world, query, World};
 
 #[test]
-fn assigns_paths_for_all_bugs() {
+fn emits_step_commands_toward_target() {
     let mut world = World::new();
     let mut events = Vec::new();
     world::apply(
@@ -21,12 +21,52 @@ fn assigns_paths_for_all_bugs() {
     let mut movement = Movement::default();
     pump_system(&mut world, &mut movement, events);
 
+    let mut tick_events = Vec::new();
+    world::apply(
+        &mut world,
+        Command::Tick {
+            dt: Duration::from_millis(250),
+        },
+        &mut tick_events,
+    );
+
     let bug_view = query::bug_view(&world);
-    for bug in bug_view.iter() {
-        if bug.cell.row() == 3 {
-            continue;
-        }
-        assert!(bug.next_hop.is_some(), "bug {} missing path", bug.id.get());
+    let occupancy_view = query::occupancy_view(&world);
+    let target_cells = query::target_cells(&world);
+    let mut commands = Vec::new();
+    movement.handle(
+        &tick_events,
+        &bug_view,
+        occupancy_view,
+        &target_cells,
+        &mut commands,
+    );
+
+    let step_commands: Vec<_> = commands
+        .iter()
+        .filter_map(|command| match command {
+            Command::StepBug { bug_id, direction } => Some((bug_id, direction)),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        !step_commands.is_empty(),
+        "expected movement system to emit step commands"
+    );
+
+    for (bug_id, direction) in step_commands {
+        let bug = bug_view
+            .iter()
+            .find(|snapshot| &snapshot.id == bug_id)
+            .expect("missing bug snapshot");
+        let before = nearest_target_distance(bug.cell, &target_cells);
+        let destination = advance_cell(bug.cell, *direction);
+        let after = nearest_target_distance(destination, &target_cells);
+        assert!(
+            after < before,
+            "bug {} did not move closer to the target",
+            bug.id.get()
+        );
     }
 }
 
@@ -87,7 +127,7 @@ fn step_commands_target_free_cells() {
 }
 
 #[test]
-fn replans_when_world_requests_new_path() {
+fn replans_after_failed_step() {
     let mut world = World::new();
     let mut events = Vec::new();
     world::apply(
@@ -112,34 +152,54 @@ fn replans_when_world_requests_new_path() {
         &mut tick_events,
     );
 
-    let bug_id = BugId::new(0);
+    let tile_grid = query::tile_grid(&world);
+    let target_cells = query::target_cells(&world);
+    let target_columns: Vec<u32> = target_cells.iter().map(|cell| cell.column()).collect();
+    let bug_view = query::bug_view(&world);
+    let occupancy_view_initial = query::occupancy_view(&world);
+    let (bug_id, blocked_direction) = select_blocked_bug(
+        &bug_view,
+        occupancy_view_initial,
+        tile_grid.columns().get(),
+        tile_grid.rows().get(),
+        &target_columns,
+    )
+    .expect("expected at least one bug on a boundary");
+
     let mut bad_step_events = Vec::new();
     world::apply(
         &mut world,
         Command::StepBug {
             bug_id,
-            direction: Direction::East,
+            direction: blocked_direction,
         },
         &mut bad_step_events,
     );
+    assert!(bad_step_events.is_empty());
 
     let bug_view_after_failure = query::bug_view(&world);
-    let failed_bug = bug_view_after_failure
-        .iter()
-        .find(|bug| bug.id == bug_id)
-        .expect("bug missing after failed step");
-    assert!(failed_bug.needs_path);
+    let occupancy_view = query::occupancy_view(&world);
+    let mut commands = Vec::new();
+    movement.handle(
+        &tick_events,
+        &bug_view_after_failure,
+        occupancy_view,
+        &target_cells,
+        &mut commands,
+    );
 
-    tick_events.extend(bad_step_events);
-    pump_system(&mut world, &mut movement, tick_events);
+    let replanned_direction = commands.iter().find_map(|command| match command {
+        Command::StepBug {
+            bug_id: step_id,
+            direction,
+        } if step_id == &bug_id => Some(*direction),
+        _ => None,
+    });
 
-    let post_replan_view = query::bug_view(&world);
-    let replanned_bug = post_replan_view
-        .iter()
-        .find(|bug| bug.id == bug_id)
-        .expect("bug missing after replanning");
-    assert!(replanned_bug.next_hop.is_some());
-    assert!(!replanned_bug.needs_path);
+    assert!(
+        matches!(replanned_direction, Some(direction) if direction != blocked_direction),
+        "expected a new direction different from the blocked move"
+    );
 }
 
 fn pump_system(world: &mut World, movement: &mut Movement, mut events: Vec<Event>) {
@@ -175,4 +235,69 @@ fn advance_cell(cell: CellCoord, direction: Direction) -> CellCoord {
         Direction::South => CellCoord::new(cell.column(), cell.row() + 1),
         Direction::West => CellCoord::new(cell.column().saturating_sub(1), cell.row()),
     }
+}
+
+fn nearest_target_distance(cell: CellCoord, targets: &[CellCoord]) -> u32 {
+    targets
+        .iter()
+        .map(|target| manhattan_distance(cell, *target))
+        .min()
+        .unwrap_or(0)
+}
+
+fn manhattan_distance(from: CellCoord, to: CellCoord) -> u32 {
+    from.column().abs_diff(to.column()) + from.row().abs_diff(to.row())
+}
+
+fn select_blocked_bug(
+    bug_view: &query::BugView,
+    occupancy_view: query::OccupancyView<'_>,
+    columns: u32,
+    rows: u32,
+    target_columns: &[u32],
+) -> Option<(maze_defence_core::BugId, Direction)> {
+    for bug in bug_view.iter() {
+        let column = bug.cell.column();
+        let row = bug.cell.row();
+
+        if column + 1 >= columns {
+            if column > 0 {
+                let west = CellCoord::new(column - 1, row);
+                if occupancy_view.is_free(west) {
+                    return Some((bug.id, Direction::East));
+                }
+            }
+        }
+
+        if column == 0 {
+            let east = CellCoord::new(column + 1, row);
+            if occupancy_view.is_free(east) {
+                return Some((bug.id, Direction::West));
+            }
+        }
+
+        if row == 0 {
+            let south = CellCoord::new(column, row + 1);
+            if occupancy_view.is_free(south) {
+                return Some((bug.id, Direction::North));
+            }
+        }
+
+        if row + 1 == rows && !target_columns.contains(&column) {
+            if column > 0 {
+                let west = CellCoord::new(column - 1, row);
+                if occupancy_view.is_free(west) {
+                    return Some((bug.id, Direction::South));
+                }
+            }
+            if column + 1 < columns {
+                let east = CellCoord::new(column + 1, row);
+                if occupancy_view.is_free(east) {
+                    return Some((bug.id, Direction::South));
+                }
+            }
+        }
+    }
+
+    None
 }
