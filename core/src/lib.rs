@@ -16,7 +16,7 @@
 //! react to deterministically. Systems consume event streams, query immutable
 //! snapshots, and respond exclusively with new command batches.
 
-use std::time::Duration;
+use std::{num::NonZeroU32, time::Duration};
 
 /// Canonical banner emitted when the experience boots.
 pub const WELCOME_BANNER: &str = "Welcome to Maze Defence.";
@@ -32,6 +32,8 @@ pub enum Command {
         rows: TileCoord,
         /// Length of each square tile measured in world units.
         tile_length: f32,
+        /// Number of navigation cells carved out of each tile edge.
+        cells_per_tile: NonZeroU32,
     },
     /// Updates the duration a bug must accumulate before attempting another step.
     ConfigureBugStep {

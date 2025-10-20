@@ -9,7 +9,7 @@
 
 //! Command-line adapter that boots the Maze Defence experience.
 
-use std::{str::FromStr, time::Duration};
+use std::{num::NonZeroU32, str::FromStr, time::Duration};
 
 use anyhow::Result;
 use clap::Parser;
@@ -115,7 +115,13 @@ fn main() -> Result<()> {
     };
 
     let bug_step_duration = Duration::from_millis(args.bug_step_ms);
-    let mut simulation = Simulation::new(columns, rows, DEFAULT_TILE_LENGTH, bug_step_duration);
+    let mut simulation = Simulation::new(
+        columns,
+        rows,
+        DEFAULT_TILE_LENGTH,
+        args.cells_per_tile,
+        bug_step_duration,
+    );
     let bootstrap = Bootstrap::default();
     let (banner, grid_scene, wall_scene) = {
         let world = simulation.world();
@@ -132,7 +138,7 @@ fn main() -> Result<()> {
         let target_cells: Vec<TargetCellPresentation> = target
             .cells()
             .iter()
-            .map(|cell| TargetCellPresentation::new(cell.column().get(), cell.row().get()))
+            .map(|cell| TargetCellPresentation::new(cell.column(), cell.row()))
             .collect();
         let wall_scene = WallPresentation::new(
             args.wall_thickness,
@@ -162,7 +168,13 @@ struct Simulation {
 }
 
 impl Simulation {
-    fn new(columns: u32, rows: u32, tile_length: f32, bug_step: Duration) -> Self {
+    fn new(
+        columns: u32,
+        rows: u32,
+        tile_length: f32,
+        cells_per_tile: u32,
+        bug_step: Duration,
+    ) -> Self {
         let mut world = World::new();
         let mut pending_events = Vec::new();
         world::apply(
@@ -171,6 +183,8 @@ impl Simulation {
                 columns: TileCoord::new(columns),
                 rows: TileCoord::new(rows),
                 tile_length,
+                cells_per_tile: NonZeroU32::new(cells_per_tile)
+                    .expect("cells_per_tile validated by clap"),
             },
             &mut pending_events,
         );

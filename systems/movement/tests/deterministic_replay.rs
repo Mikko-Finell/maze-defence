@@ -1,6 +1,7 @@
 use std::{
     collections::hash_map::DefaultHasher,
     hash::{Hash, Hasher},
+    num::NonZeroU32,
     time::Duration,
 };
 
@@ -16,7 +17,7 @@ fn deterministic_replay_produces_expected_snapshot() {
     assert_eq!(first, second, "replay diverged between runs");
 
     let fingerprint = first.fingerprint();
-    let expected = 0x5594_ab59_794f_5f2d;
+    let expected = 0x2ff9_708e_e7cd_6e25;
     assert_eq!(
         fingerprint, expected,
         "fingerprint mismatch: {fingerprint:#x}"
@@ -93,6 +94,7 @@ fn scripted_commands() -> Vec<Command> {
             columns: TileCoord::new(5),
             rows: TileCoord::new(4),
             tile_length: 1.0,
+            cells_per_tile: NonZeroU32::new(2).unwrap(),
         },
         Command::Tick {
             dt: Duration::from_millis(500),
