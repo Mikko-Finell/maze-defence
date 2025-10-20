@@ -152,8 +152,15 @@ This proposal:
 
 **Deliverables**
 
-* [ ] Extend rendering backend input to include a **per-frame input struct** (e.g. `{ space_pressed, cursor_tile_space }`).
-* [ ] Adapter reports info only — it does *not* interpret or mutate world state.
+* [ ] Add a shared `FrameInput` type to `adapters/rendering` exposing **only** the information the simulation may consume:
+
+  * `mode_toggle: bool` — true on the frame the adapter detected a toggle press.
+  * `cursor_world_space: Option<glam::Vec2>` — world-space cursor, already clamped to the playable grid bounds.
+  * `cursor_tile_space: Option<TileCoord>` — tile snapped position supplied as data, never derived inside the simulation.
+
+* [ ] Change `RenderingBackend::run` to pass `FrameInput` into the callback (`FnMut(Duration, FrameInput, &mut Scene)`).
+* [ ] Update `MacroquadBackend` to populate `FrameInput` (space bar edge detection + mouse position translation) while remaining **purely observational**.
+* [ ] Have the CLI adapter fabricate a `FrameInput::default()` so headless tests keep compiling.
 
 **Goal**
 
@@ -165,15 +172,17 @@ This proposal:
 
 **Deliverables**
 
-* [ ] `Simulation::handle_input`:
+* [ ] Extend `Simulation` (in `adapters/cli`) with a `pending_input: FrameInput` cache consumed once per frame.
+* [ ] Add `Simulation::handle_input(&mut self, input: FrameInput)` that:
 
-  * If toggle pressed → emit `Command::SetPlayMode`.
-  * Cache cursor world/tile position for preview later.
-* [ ] `Simulation::populate_scene`:
+  * Detects toggle edges and pushes `Command::SetPlayMode { … }` into the command queue.
+  * Stores the most recent cursor positions in tile/world space for rendering.
 
-  * Read `play_mode` from world and store on scene.
-  * If mode = Builder → compute half-tile snapped preview position + clamp to grid bounds.
-  * Attach preview overlay to `Scene` (projection only — no world state mutated).
+* [ ] Call `handle_input` from the adapter right before `advance`.
+* [ ] Update `Simulation::populate_scene` to:
+
+  * Always attach the current `PlayMode` to the outgoing `Scene`.
+  * When in Builder mode, emit a `PlacementPreview` descriptor built solely from cached input + grid metrics.
 
 **Goal**
 
@@ -185,11 +194,9 @@ This proposal:
 
 **Deliverables**
 
-* [ ] Extend `Scene` with:
-
-  * `play_mode`
-  * `placement_preview: Option<…>` — tile-space, declarative only.
-* [ ] Macroquad (or other renderer) checks for preview and draws translucent square using values it's given — no math of its own.
+* [ ] Add `PlayMode` passthrough and a `PlacementPreview` struct (tile coordinate + size) to `Scene` in `adapters/rendering`.
+* [ ] Ensure `Scene::new`/`Scene` tests cover the new fields without introducing builder-only defaults.
+* [ ] Macroquad (and any future renderer) draws previews strictly from `Scene.placement_preview` — **no additional math or grid queries** performed in the adapter.
 
 **Goal**
 
@@ -204,8 +211,9 @@ This proposal:
 * [ ] World unit test: SetPlayMode → bugs/occupancy vanish & reappear correctly.
 * [ ] Mode idempotence test (same mode twice = no extra events).
 * [ ] Movement/system test: no commands in builder mode.
-* [ ] Snapping/clamping tests for preview coordinates.
-* [ ] (Optional) Basic rendering contract check: preview default = None in Attack mode.
+* [ ] Simulation test covering `handle_input` edge detection and preview caching (headless, no renderer).
+* [ ] Rendering crate unit tests validating snapping/clamping math for `PlacementPreview`.
+* [ ] (Optional) Macroquad smoke test ensuring preview defaults to `None` while in Attack mode.
 
 **Goal**
 
