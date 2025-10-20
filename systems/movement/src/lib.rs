@@ -14,7 +14,7 @@ use std::{
     collections::BinaryHeap,
 };
 
-use maze_defence_core::{BugId, CellCoord, Command, Direction, Event};
+use maze_defence_core::{select_goal, BugId, CellCoord, Command, Direction, Event, Goal};
 use maze_defence_world::query::{BugSnapshot, BugView, OccupancyView};
 
 /// Pure system that reacts to world events and emits movement commands.
@@ -24,7 +24,6 @@ pub struct Movement {
     came_from: Vec<Option<CellCoord>>,
     g_score: Vec<u32>,
     targets: Vec<CellCoord>,
-    target_columns: Vec<u32>,
     prepared_dimensions: Option<(u32, u32)>,
     workspace_nodes: usize,
     active_nodes: usize,
@@ -69,7 +68,15 @@ impl Movement {
                 continue;
             }
 
-            let Some(next_cell) = self.plan_next_hop(bug, columns, rows) else {
+            let Some(goal) = select_goal(bug.cell, &self.targets) else {
+                continue;
+            };
+
+            if bug.cell == goal.cell() {
+                continue;
+            }
+
+            let Some(next_cell) = self.plan_next_hop(bug, goal, columns, rows) else {
                 continue;
             };
 
@@ -86,15 +93,13 @@ impl Movement {
         }
     }
 
-    fn plan_next_hop(&mut self, bug: &BugSnapshot, columns: u32, rows: u32) -> Option<CellCoord> {
-        if self.targets.is_empty() {
-            return None;
-        }
-
-        if self.targets.iter().any(|target| *target == bug.cell) {
-            return None;
-        }
-
+    fn plan_next_hop(
+        &mut self,
+        bug: &BugSnapshot,
+        goal: Goal,
+        columns: u32,
+        rows: u32,
+    ) -> Option<CellCoord> {
         let rows_with_exit = rows.saturating_add(1);
         let start_index = index(columns, rows_with_exit, bug.cell)?;
 
@@ -103,15 +108,15 @@ impl Movement {
         self.frontier.push(Reverse(NodeState::new(
             bug.cell,
             0,
-            heuristic_to_targets(bug.cell, &self.targets),
+            heuristic_to_goal(bug.cell, goal.cell()),
         )));
 
         while let Some(Reverse(current)) = self.frontier.pop() {
-            if self.targets.iter().any(|target| *target == current.cell) {
-                return self.reconstruct_first_hop(bug.cell, current.cell, columns, rows_with_exit);
+            if current.cell == goal.cell() {
+                return self.reconstruct_first_hop(bug.cell, goal.cell(), columns, rows_with_exit);
             }
 
-            let neighbors = enumerate_neighbors(current.cell, columns, rows, &self.target_columns);
+            let neighbors = enumerate_neighbors(current.cell, columns, rows, goal.cell());
             for neighbor in neighbors {
                 let Some(neighbor_index) = index(columns, rows_with_exit, neighbor) else {
                     continue;
@@ -127,7 +132,7 @@ impl Movement {
                 self.frontier.push(Reverse(NodeState::new(
                     neighbor,
                     tentative,
-                    heuristic_to_targets(neighbor, &self.targets),
+                    heuristic_to_goal(neighbor, goal.cell()),
                 )));
             }
         }
@@ -161,7 +166,6 @@ impl Movement {
     fn prepare_workspace(&mut self, columns: u32, rows: u32, targets: &[CellCoord]) -> usize {
         if targets.is_empty() {
             self.targets.clear();
-            self.target_columns.clear();
             self.prepared_dimensions = Some((columns, rows));
             self.active_nodes = 0;
             return 0;
@@ -170,7 +174,6 @@ impl Movement {
         if self.prepared_dimensions != Some((columns, rows)) || self.targets.as_slice() != targets {
             self.targets.clear();
             self.targets.extend_from_slice(targets);
-            self.target_columns = self.targets.iter().map(|cell| cell.column()).collect();
             self.prepared_dimensions = Some((columns, rows));
         }
 
@@ -231,12 +234,7 @@ impl PartialOrd for NodeState {
     }
 }
 
-fn enumerate_neighbors(
-    cell: CellCoord,
-    columns: u32,
-    rows: u32,
-    target_columns: &[u32],
-) -> NeighborIter {
+fn enumerate_neighbors(cell: CellCoord, columns: u32, rows: u32, goal: CellCoord) -> NeighborIter {
     let mut neighbors = NeighborIter::default();
     if cell.row() < rows {
         if cell.row() > 0 {
@@ -250,10 +248,8 @@ fn enumerate_neighbors(
         }
         if cell.row() + 1 < rows {
             neighbors.push(CellCoord::new(cell.column(), cell.row() + 1));
-        } else if cell.row() + 1 == rows {
-            if target_columns.iter().any(|column| *column == cell.column()) {
-                neighbors.push(CellCoord::new(cell.column(), rows));
-            }
+        } else if cell.row() + 1 == rows && goal.row() >= rows && cell.column() == goal.column() {
+            neighbors.push(CellCoord::new(cell.column(), rows));
         }
     }
 
@@ -317,16 +313,8 @@ fn direction_between(from: CellCoord, to: CellCoord) -> Option<Direction> {
     }
 }
 
-fn heuristic_to_targets(cell: CellCoord, targets: &[CellCoord]) -> u32 {
-    targets
-        .iter()
-        .map(|target| manhattan_distance(cell, *target))
-        .min()
-        .unwrap_or(0)
-}
-
-fn manhattan_distance(from: CellCoord, to: CellCoord) -> u32 {
-    from.column().abs_diff(to.column()) + from.row().abs_diff(to.row())
+fn heuristic_to_goal(cell: CellCoord, goal: CellCoord) -> u32 {
+    cell.manhattan_distance(goal)
 }
 
 fn index(columns: u32, rows: u32, cell: CellCoord) -> Option<usize> {
@@ -372,7 +360,6 @@ mod tests {
 
         assert_eq!(movement.prepare_workspace(0, 0, &[]), 0);
         assert!(movement.targets.is_empty());
-        assert!(movement.target_columns.is_empty());
         assert_eq!(movement.active_nodes, 0);
 
         let targets = vec![CellCoord::new(1, 4)];
@@ -385,9 +372,9 @@ mod tests {
     }
 
     #[test]
-    fn manhattan_distance_matches_expectation() {
+    fn heuristic_matches_manhattan_distance() {
         let from = CellCoord::new(0, 0);
-        let to = CellCoord::new(3, 4);
-        assert_eq!(manhattan_distance(from, to), 7);
+        let goal = CellCoord::new(3, 4);
+        assert_eq!(heuristic_to_goal(from, goal), 7);
     }
 }

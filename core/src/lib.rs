@@ -127,6 +127,49 @@ impl CellCoord {
     pub const fn row(&self) -> u32 {
         self.row
     }
+
+    /// Computes the Manhattan distance between two cell coordinates.
+    #[must_use]
+    pub fn manhattan_distance(self, other: CellCoord) -> u32 {
+        self.column().abs_diff(other.column()) + self.row().abs_diff(other.row())
+    }
+}
+
+/// Canonical representation of "The Goal" for a bug.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct Goal {
+    cell: CellCoord,
+}
+
+impl Goal {
+    /// Creates a goal anchored at the provided cell coordinate.
+    #[must_use]
+    pub const fn at(cell: CellCoord) -> Self {
+        Self { cell }
+    }
+
+    /// Returns the cell that defines the goal.
+    #[must_use]
+    pub const fn cell(&self) -> CellCoord {
+        self.cell
+    }
+}
+
+/// Selects the goal cell nearest to the provided origin.
+#[must_use]
+pub fn select_goal(origin: CellCoord, candidates: &[CellCoord]) -> Option<Goal> {
+    candidates
+        .iter()
+        .copied()
+        .min_by(|left, right| {
+            let left_distance = origin.manhattan_distance(*left);
+            let right_distance = origin.manhattan_distance(*right);
+            left_distance
+                .cmp(&right_distance)
+                .then_with(|| left.column().cmp(&right.column()))
+                .then_with(|| left.row().cmp(&right.row()))
+        })
+        .map(Goal::at)
 }
 
 /// Index within the tile grid measured in whole tiles rather than cells.
@@ -144,5 +187,31 @@ impl TileCoord {
     #[must_use]
     pub const fn get(&self) -> u32 {
         self.0
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{select_goal, CellCoord, Goal};
+
+    #[test]
+    fn manhattan_distance_matches_expectation() {
+        let origin = CellCoord::new(1, 1);
+        let destination = CellCoord::new(4, 3);
+        assert_eq!(origin.manhattan_distance(destination), 5);
+        assert_eq!(destination.manhattan_distance(origin), 5);
+    }
+
+    #[test]
+    fn select_goal_prefers_closest_cell() {
+        let origin = CellCoord::new(3, 2);
+        let candidates = [
+            CellCoord::new(0, 5),
+            CellCoord::new(3, 5),
+            CellCoord::new(4, 4),
+        ];
+
+        let goal = select_goal(origin, &candidates);
+        assert_eq!(goal, Some(Goal::at(CellCoord::new(3, 5))));
     }
 }

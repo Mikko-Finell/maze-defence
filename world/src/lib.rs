@@ -298,7 +298,7 @@ pub mod query {
     use std::time::Duration;
 
     use super::{OccupancyGrid, Target, TileGrid, Wall, World};
-    use maze_defence_core::{BugId, CellCoord};
+    use maze_defence_core::{select_goal, BugId, CellCoord, Goal};
 
     /// Retrieves the welcome banner that adapters may display to players.
     #[must_use]
@@ -322,6 +322,12 @@ pub mod query {
     #[must_use]
     pub fn target(world: &World) -> &Target {
         world.wall.target()
+    }
+
+    /// Computes the canonical goal for an entity starting from the provided cell.
+    #[must_use]
+    pub fn goal_for(world: &World, origin: CellCoord) -> Option<Goal> {
+        select_goal(origin, &world.targets)
     }
 
     /// Captures a read-only view of the bugs inhabiting the maze.
@@ -724,6 +730,7 @@ fn next_random(state: u64) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use maze_defence_core::Goal;
 
     #[test]
     fn apply_configures_tile_grid() {
@@ -895,6 +902,28 @@ mod tests {
 
         assert!(query::target(&world).cells().is_empty());
         assert!(events.is_empty());
+    }
+
+    #[test]
+    fn goal_for_returns_nearest_target_cell() {
+        let mut world = World::new();
+        let mut events = Vec::new();
+
+        apply(
+            &mut world,
+            Command::ConfigureTileGrid {
+                columns: TileCoord::new(5),
+                rows: TileCoord::new(4),
+                tile_length: 1.0,
+            },
+            &mut events,
+        );
+
+        assert!(events.is_empty());
+
+        let goal = query::goal_for(&world, CellCoord::new(0, 0));
+        let expected = CellCoord::new(2, 4);
+        assert_eq!(goal, Some(Goal::at(expected)));
     }
 
     #[test]
