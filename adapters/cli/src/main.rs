@@ -13,7 +13,7 @@ use std::{str::FromStr, time::Duration};
 
 use anyhow::Result;
 use clap::Parser;
-use maze_defence_core::{Command, Event, PlayMode, TileCoord};
+use maze_defence_core::{BugColor, Command, Event, PlayMode, TileCoord};
 use maze_defence_rendering::{
     BugPresentation, Color, FrameInput, PlacementPreview, Presentation, RenderingBackend, Scene,
     TargetCellPresentation, TargetPresentation, TileGridPresentation, TileSpacePosition,
@@ -28,6 +28,16 @@ const DEFAULT_GRID_COLUMNS: u32 = 10;
 const DEFAULT_GRID_ROWS: u32 = 10;
 const DEFAULT_TILE_LENGTH: f32 = 100.0;
 const DEFAULT_BUG_STEP_MS: u64 = 250;
+const DEFAULT_BUG_SPAWN_INTERVAL_MS: u64 = 1_000;
+const SPAWN_RNG_SEED: u64 = 0x4d59_5df4_d0f3_3173;
+const SPAWN_RNG_MULTIPLIER: u64 = 636_413_622_384_679_3005;
+const SPAWN_RNG_INCREMENT: u64 = 1;
+const SPAWN_COLORS: [BugColor; 4] = [
+    BugColor::from_rgb(0x2f, 0x95, 0x32),
+    BugColor::from_rgb(0xc8, 0x2a, 0x36),
+    BugColor::from_rgb(0xff, 0xc1, 0x07),
+    BugColor::from_rgb(0x58, 0x47, 0xff),
+];
 
 /// Command-line arguments for launching the Maze Defence experience.
 #[derive(Debug, Parser)]
@@ -61,6 +71,14 @@ struct CliArgs {
         value_parser = clap::value_parser!(u64).range(1..=60_000)
     )]
     bug_step_ms: u64,
+    /// Milliseconds between automatic bug spawns while in attack mode.
+    #[arg(
+        long = "bug-spawn-interval-ms",
+        value_name = "MILLISECONDS",
+        default_value_t = DEFAULT_BUG_SPAWN_INTERVAL_MS,
+        value_parser = clap::value_parser!(u64).range(1..=60_000)
+    )]
+    bug_spawn_interval_ms: u64,
 }
 
 /// Grid dimensions parsed from a WIDTHxHEIGHT command-line argument.
@@ -116,12 +134,14 @@ fn main() -> Result<()> {
     };
 
     let bug_step_duration = Duration::from_millis(args.bug_step_ms);
+    let bug_spawn_interval = Duration::from_millis(args.bug_spawn_interval_ms);
     let mut simulation = Simulation::new(
         columns,
         rows,
         DEFAULT_TILE_LENGTH,
         args.cells_per_tile,
         bug_step_duration,
+        bug_spawn_interval,
     );
     let bootstrap = Bootstrap::default();
     let (banner, grid_scene, wall_scene) = {
@@ -175,6 +195,10 @@ struct Simulation {
     scratch_commands: Vec<Command>,
     queued_commands: Vec<Command>,
     pending_input: FrameInput,
+    bug_spawn_interval: Duration,
+    bug_spawn_accumulator: Duration,
+    spawn_rng_state: u64,
+    spawn_color_index: usize,
 }
 
 impl Simulation {
@@ -184,6 +208,7 @@ impl Simulation {
         tile_length: f32,
         cells_per_tile: u32,
         bug_step: Duration,
+        bug_spawn_interval: Duration,
     ) -> Self {
         let mut world = World::new();
         let mut pending_events = Vec::new();
@@ -212,6 +237,10 @@ impl Simulation {
             scratch_commands: Vec::new(),
             queued_commands: Vec::new(),
             pending_input: FrameInput::default(),
+            bug_spawn_interval,
+            bug_spawn_accumulator: Duration::ZERO,
+            spawn_rng_state: SPAWN_RNG_SEED,
+            spawn_color_index: 0,
         };
         simulation.process_pending_events();
         simulation
@@ -243,6 +272,8 @@ impl Simulation {
         self.pending_events.clear();
         self.flush_queued_commands();
 
+        let play_mode = query::play_mode(&self.world);
+
         if !dt.is_zero() {
             world::apply(
                 &mut self.world,
@@ -250,6 +281,14 @@ impl Simulation {
                 &mut self.pending_events,
             );
         }
+
+        let spawn_attempts = self.update_spawn_timer(play_mode, dt);
+        for _ in 0..spawn_attempts {
+            if let Some(command) = self.random_spawn_command() {
+                world::apply(&mut self.world, command, &mut self.pending_events);
+            }
+        }
+
         self.process_pending_events();
     }
 
@@ -318,6 +357,52 @@ impl Simulation {
             world::apply(&mut self.world, command, &mut self.pending_events);
         }
     }
+
+    fn update_spawn_timer(&mut self, play_mode: PlayMode, dt: Duration) -> usize {
+        if play_mode != PlayMode::Attack {
+            self.bug_spawn_accumulator = Duration::ZERO;
+            return 0;
+        }
+
+        if self.bug_spawn_interval.is_zero() {
+            return 0;
+        }
+
+        self.bug_spawn_accumulator = self.bug_spawn_accumulator.saturating_add(dt);
+        let mut spawn_count = 0;
+        while self.bug_spawn_accumulator >= self.bug_spawn_interval {
+            self.bug_spawn_accumulator -= self.bug_spawn_interval;
+            spawn_count += 1;
+        }
+        spawn_count
+    }
+
+    fn random_spawn_command(&mut self) -> Option<Command> {
+        let spawners = query::bug_spawners(&self.world);
+        if spawners.is_empty() {
+            return None;
+        }
+
+        let rng_value = self.advance_rng();
+        let index = (rng_value % spawners.len() as u64) as usize;
+        let spawner = spawners[index];
+        let color = self.next_spawn_color();
+        Some(Command::SpawnBug { spawner, color })
+    }
+
+    fn advance_rng(&mut self) -> u64 {
+        self.spawn_rng_state = self
+            .spawn_rng_state
+            .wrapping_mul(SPAWN_RNG_MULTIPLIER)
+            .wrapping_add(SPAWN_RNG_INCREMENT);
+        self.spawn_rng_state
+    }
+
+    fn next_spawn_color(&mut self) -> BugColor {
+        let color = SPAWN_COLORS[self.spawn_color_index % SPAWN_COLORS.len()];
+        self.spawn_color_index = (self.spawn_color_index + 1) % SPAWN_COLORS.len();
+        color
+    }
 }
 
 #[cfg(test)]
@@ -332,6 +417,7 @@ mod tests {
             32.0,
             TileGridPresentation::DEFAULT_CELLS_PER_TILE,
             Duration::from_millis(200),
+            Duration::from_secs(1),
         )
     }
 
@@ -430,5 +516,40 @@ mod tests {
             scene.placement_preview,
             Some(PlacementPreview::new(preview_tile, 1))
         );
+    }
+
+    #[test]
+    fn advance_spawns_bug_after_interval() {
+        let mut simulation = new_simulation();
+
+        assert!(query::bug_view(simulation.world()).into_vec().is_empty());
+
+        simulation.advance(Duration::from_millis(500));
+        assert!(query::bug_view(simulation.world()).into_vec().is_empty());
+
+        simulation.advance(Duration::from_millis(500));
+        assert_eq!(query::bug_view(simulation.world()).into_vec().len(), 1);
+    }
+
+    #[test]
+    fn builder_mode_pauses_spawning() {
+        let mut simulation = new_simulation();
+
+        simulation.handle_input(FrameInput {
+            mode_toggle: true,
+            ..FrameInput::default()
+        });
+        simulation.advance(Duration::ZERO);
+        simulation.advance(Duration::from_secs(2));
+        assert!(query::bug_view(simulation.world()).into_vec().is_empty());
+
+        simulation.handle_input(FrameInput {
+            mode_toggle: true,
+            ..FrameInput::default()
+        });
+        simulation.advance(Duration::ZERO);
+        simulation.advance(Duration::from_secs(1));
+
+        assert_eq!(query::bug_view(simulation.world()).into_vec().len(), 1);
     }
 }

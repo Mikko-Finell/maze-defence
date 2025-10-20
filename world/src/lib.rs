@@ -15,9 +15,6 @@ use maze_defence_core::{
     BugColor, BugId, CellCoord, Command, Direction, Event, PlayMode, TileCoord, WELCOME_BANNER,
 };
 
-const BUG_GENERATION_SEED: u64 = 0x42f0_e1eb_d4a5_3c21;
-const BUG_COUNT: usize = 20;
-
 const DEFAULT_GRID_COLUMNS: TileCoord = TileCoord::new(10);
 const DEFAULT_GRID_ROWS: TileCoord = TileCoord::new(10);
 const DEFAULT_TILE_LENGTH: f32 = 100.0;
@@ -197,23 +194,8 @@ impl World {
             play_mode: PlayMode::Attack,
         };
         world.rebuild_bug_spawners();
-        world.reset_bugs();
+        world.clear_bugs();
         world
-    }
-
-    fn reset_bugs(&mut self) {
-        let generated = generate_bugs(
-            self.tile_grid.columns(),
-            self.tile_grid.rows(),
-            self.cells_per_tile,
-        );
-        self.bugs = generated
-            .into_iter()
-            .map(|seed| Bug::new(seed.id, seed.cell, seed.color))
-            .collect();
-        self.occupancy.fill_with(&self.bugs);
-        self.reservations.clear();
-        self.next_bug_id = self.bugs.len() as u32;
     }
 
     fn clear_bugs(&mut self) {
@@ -342,14 +324,7 @@ pub fn apply(world: &mut World, command: Command, out_events: &mut Vec<Event>) {
                 total_cell_rows(rows, normalized_cells),
             );
             world.rebuild_bug_spawners();
-            match world.play_mode {
-                PlayMode::Attack => {
-                    world.reset_bugs();
-                }
-                PlayMode::Builder => {
-                    world.clear_bugs();
-                }
-            }
+            world.clear_bugs();
         }
         Command::Tick { dt } => {
             if world.play_mode == PlayMode::Builder {
@@ -383,9 +358,7 @@ pub fn apply(world: &mut World, command: Command, out_events: &mut Vec<Event>) {
             world.play_mode = mode;
 
             match mode {
-                PlayMode::Attack => {
-                    world.reset_bugs();
-                }
+                PlayMode::Attack => {}
                 PlayMode::Builder => {
                     world.clear_bugs();
                 }
@@ -485,6 +458,12 @@ pub mod query {
         world.targets.clone()
     }
 
+    /// Enumerates the bug spawners ringing the maze.
+    #[must_use]
+    pub fn bug_spawners(world: &World) -> Vec<CellCoord> {
+        world.bug_spawners.iter().collect()
+    }
+
     /// Read-only snapshot describing all bugs within the maze.
     #[derive(Clone, Debug)]
     pub struct BugView {
@@ -579,13 +558,6 @@ impl Bug {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
-struct BugSeed {
-    id: BugId,
-    cell: CellCoord,
-    color: BugColor,
-}
-
 #[derive(Clone, Debug)]
 struct BugSpawnerRegistry {
     cells: BTreeSet<CellCoord>,
@@ -621,6 +593,10 @@ impl BugSpawnerRegistry {
 
     fn contains(&self, cell: CellCoord) -> bool {
         self.cells.contains(&cell)
+    }
+
+    fn iter(&self) -> impl Iterator<Item = CellCoord> + '_ {
+        self.cells.iter().copied()
     }
 
     #[cfg(test)]
@@ -688,15 +664,6 @@ impl OccupancyGrid {
 
     fn clear(&mut self) {
         self.cells.fill(None);
-    }
-
-    fn fill_with(&mut self, bugs: &[Bug]) {
-        self.clear();
-        for bug in bugs {
-            if let Some(index) = self.index(bug.cell) {
-                self.cells[index] = Some(bug.id);
-            }
-        }
     }
 
     pub(crate) fn can_enter(&self, cell: CellCoord) -> bool {
@@ -838,71 +805,6 @@ fn target_cells_from_wall(wall: &Wall) -> Vec<CellCoord> {
         .collect()
 }
 
-fn generate_bugs(columns: TileCoord, rows: TileCoord, cells_per_tile: u32) -> Vec<BugSeed> {
-    let interior_columns = interior_cell_columns(columns, cells_per_tile);
-    let interior_rows = interior_cell_rows(rows, cells_per_tile);
-
-    if interior_columns == 0 || interior_rows == 0 {
-        return Vec::new();
-    }
-
-    let available_cells_u64 = u64::from(interior_columns) * u64::from(interior_rows);
-    let available_cells = match usize::try_from(available_cells_u64) {
-        Ok(value) => value,
-        Err(_) => usize::MAX,
-    };
-    let exit_cell_count = if columns.get() == 0 || rows.get() == 0 {
-        0
-    } else {
-        usize::try_from(cells_per_tile).unwrap_or(usize::MAX)
-    };
-    let target_capacity = available_cells.saturating_sub(exit_cell_count);
-    let target_count = BUG_COUNT.min(target_capacity);
-
-    let start_column: u32 = 0;
-    let end_column = interior_columns;
-    let start_row: u32 = 0;
-    let end_row = interior_rows;
-
-    let mut cells: Vec<CellCoord> = Vec::with_capacity(available_cells);
-    for row in start_row..end_row {
-        for column in start_column..end_column {
-            cells.push(CellCoord::new(column, row));
-        }
-    }
-
-    let mut rng_state = BUG_GENERATION_SEED;
-    for index in (1..cells.len()).rev() {
-        rng_state = next_random(rng_state);
-        let swap_index = (rng_state % (index as u64 + 1)) as usize;
-        cells.swap(index, swap_index);
-    }
-
-    let mut bugs: Vec<BugSeed> = Vec::with_capacity(target_count);
-    for (index, cell) in cells.into_iter().take(target_count).enumerate() {
-        let color = BUG_COLORS[index % BUG_COLORS.len()];
-        let bug_id = BugId::new(index as u32);
-        bugs.push(BugSeed {
-            id: bug_id,
-            cell,
-            color,
-        });
-    }
-
-    bugs
-}
-
-const BUG_COLORS: [BugColor; 4] = [
-    BugColor::from_rgb(0x2f, 0x95, 0x32),
-    BugColor::from_rgb(0xc8, 0x2a, 0x36),
-    BugColor::from_rgb(0xff, 0xc1, 0x07),
-    BugColor::from_rgb(0x58, 0x47, 0xff),
-];
-
-fn next_random(state: u64) -> u64 {
-    state.wrapping_mul(636_413_622_384_679_3005).wrapping_add(1)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -940,11 +842,27 @@ mod tests {
     }
 
     #[test]
+    fn world_starts_without_bugs() {
+        let world = World::new();
+
+        assert!(query::bug_view(&world).into_vec().is_empty());
+    }
+
+    #[test]
     fn entering_builder_mode_clears_bugs_and_occupancy() {
         let mut world = World::new();
         let mut events = Vec::new();
 
+        apply(
+            &mut world,
+            Command::SpawnBug {
+                spawner: CellCoord::new(0, 0),
+                color: BugColor::from_rgb(0x2f, 0x95, 0x32),
+            },
+            &mut events,
+        );
         assert!(!query::bug_view(&world).into_vec().is_empty());
+        events.clear();
 
         apply(
             &mut world,
@@ -968,7 +886,7 @@ mod tests {
     }
 
     #[test]
-    fn returning_to_attack_mode_reseeds_bugs() {
+    fn returning_to_attack_mode_preserves_empty_maze() {
         let mut world = World::new();
         let mut events = Vec::new();
 
@@ -996,7 +914,7 @@ mod tests {
             }]
         );
         assert_eq!(query::play_mode(&world), PlayMode::Attack);
-        assert!(!query::bug_view(&world).into_vec().is_empty());
+        assert!(query::bug_view(&world).into_vec().is_empty());
     }
 
     #[test]
@@ -1551,6 +1469,16 @@ mod tests {
         );
 
         assert!(events.is_empty());
+
+        apply(
+            &mut world,
+            Command::SpawnBug {
+                spawner: CellCoord::new(0, 0),
+                color: BugColor::from_rgb(0x2f, 0x95, 0x32),
+            },
+            &mut events,
+        );
+        events.clear();
 
         apply(
             &mut world,

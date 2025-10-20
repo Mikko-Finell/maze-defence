@@ -4,7 +4,7 @@ use std::{
     time::Duration,
 };
 
-use maze_defence_core::{CellCoord, Command, Event, PlayMode, TileCoord};
+use maze_defence_core::{BugColor, CellCoord, Command, Event, PlayMode, TileCoord};
 use maze_defence_system_movement::Movement;
 use maze_defence_world::{self as world, query, World};
 
@@ -16,7 +16,7 @@ fn deterministic_replay_produces_expected_snapshot() {
     assert_eq!(first, second, "replay diverged between runs");
 
     let fingerprint = first.fingerprint();
-    let expected = 0x5594_ab59_794f_5f2d;
+    let expected = 0x3e3b_f1e4_5743_41f4;
     assert_eq!(
         fingerprint, expected,
         "fingerprint mismatch: {fingerprint:#x}"
@@ -95,6 +95,10 @@ fn scripted_commands() -> Vec<Command> {
             tile_length: 1.0,
             cells_per_tile: 1,
         },
+        Command::SpawnBug {
+            spawner: CellCoord::new(0, 0),
+            color: BugColor::from_rgb(0x2f, 0x95, 0x32),
+        },
         Command::Tick {
             dt: Duration::from_millis(500),
         },
@@ -118,6 +122,16 @@ fn movement_pauses_in_builder_mode() {
     let mut world = World::new();
     let mut movement = Movement::default();
     let mut events = Vec::new();
+
+    world::apply(
+        &mut world,
+        Command::SpawnBug {
+            spawner: CellCoord::new(0, 0),
+            color: BugColor::from_rgb(0x2f, 0x95, 0x32),
+        },
+        &mut events,
+    );
+    events.clear();
 
     world::apply(
         &mut world,
