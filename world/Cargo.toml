@@ -6,5 +6,8 @@ edition.workspace = true
 [lib]
 path = "src/lib.rs"
 
+[features]
+tower_scaffolding = []
+
 [dependencies]
 maze-defence-core = { path = "../core" }

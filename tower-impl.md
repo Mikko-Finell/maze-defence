@@ -18,7 +18,7 @@ Do not start working before you're read `tower-spec.md` so you understand the co
 
 **Goal:** Prepare authoritative storage & occupancy folding.
 
-**Status:** TODO
+**Status:** Done
 
 * Add `world::towers` module with `BTreeMap<TowerId, TowerState>`, `next_tower_id`.
 * Add `tower_occupancy: BitGrid` and integrate it into `is_cell_blocked` (behind feature gate so it’s dormant until towers exist).
