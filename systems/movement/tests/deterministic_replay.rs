@@ -113,6 +113,64 @@ fn scripted_commands() -> Vec<Command> {
     ]
 }
 
+#[test]
+fn movement_pauses_in_builder_mode() {
+    let mut world = World::new();
+    let mut movement = Movement::default();
+    let mut events = Vec::new();
+
+    world::apply(
+        &mut world,
+        Command::Tick {
+            dt: Duration::from_millis(500),
+        },
+        &mut events,
+    );
+
+    let bug_view = query::bug_view(&world);
+    assert!(
+        bug_view.iter().any(|bug| bug.ready_for_step),
+        "expected at least one bug ready for a step"
+    );
+    let occupancy_view = query::occupancy_view(&world);
+    let target_cells = query::target_cells(&world);
+
+    let mut commands = Vec::new();
+    movement.handle(
+        &[Event::TimeAdvanced {
+            dt: Duration::from_millis(500),
+        }],
+        &bug_view,
+        occupancy_view,
+        &target_cells,
+        &mut commands,
+    );
+    assert!(
+        !commands.is_empty(),
+        "expected movement to propose steps while in attack mode"
+    );
+
+    commands.clear();
+    movement.handle(
+        &[
+            Event::PlayModeChanged {
+                mode: PlayMode::Builder,
+            },
+            Event::TimeAdvanced {
+                dt: Duration::from_millis(500),
+            },
+        ],
+        &bug_view,
+        occupancy_view,
+        &target_cells,
+        &mut commands,
+    );
+    assert!(
+        commands.is_empty(),
+        "movement must not emit commands while builder mode is active"
+    );
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 struct ReplayOutcome {
     bugs: Vec<BugState>,

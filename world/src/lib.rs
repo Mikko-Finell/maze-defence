@@ -314,6 +314,9 @@ pub fn apply(world: &mut World, command: Command, out_events: &mut Vec<Event>) {
             }
         }
         Command::Tick { dt } => {
+            if world.play_mode == PlayMode::Builder {
+                return;
+            }
             world.tick_index = world.tick_index.saturating_add(1);
             out_events.push(Event::TimeAdvanced { dt });
 
@@ -326,6 +329,9 @@ pub fn apply(world: &mut World, command: Command, out_events: &mut Vec<Event>) {
             world.step_quantum = clamped;
         }
         Command::StepBug { bug_id, direction } => {
+            if world.play_mode == PlayMode::Builder {
+                return;
+            }
             world
                 .reservations
                 .queue(world.tick_index, StepRequest { bug_id, direction });
@@ -840,6 +846,7 @@ fn next_random(state: u64) -> u64 {
 mod tests {
     use super::*;
     use maze_defence_core::{Goal, PlayMode};
+    use std::time::Duration;
 
     #[test]
     fn world_defaults_to_attack_mode() {
@@ -978,6 +985,61 @@ mod tests {
         assert!(query::occupancy_view(&world)
             .iter()
             .all(|slot| slot.is_none()));
+    }
+
+    #[test]
+    fn tick_is_ignored_in_builder_mode() {
+        let mut world = World::new();
+        let mut events = Vec::new();
+
+        apply(
+            &mut world,
+            Command::SetPlayMode {
+                mode: PlayMode::Builder,
+            },
+            &mut events,
+        );
+        events.clear();
+
+        let tick_before = world.tick_index;
+        apply(
+            &mut world,
+            Command::Tick {
+                dt: Duration::from_millis(500),
+            },
+            &mut events,
+        );
+
+        assert!(events.is_empty());
+        assert_eq!(world.tick_index, tick_before);
+        assert!(world.reservations.requests.is_empty());
+    }
+
+    #[test]
+    fn step_bug_is_ignored_in_builder_mode() {
+        let mut world = World::new();
+        let mut events = Vec::new();
+
+        apply(
+            &mut world,
+            Command::SetPlayMode {
+                mode: PlayMode::Builder,
+            },
+            &mut events,
+        );
+        events.clear();
+
+        apply(
+            &mut world,
+            Command::StepBug {
+                bug_id: BugId::new(0),
+                direction: Direction::North,
+            },
+            &mut events,
+        );
+
+        assert!(events.is_empty());
+        assert!(world.reservations.requests.is_empty());
     }
 
     #[test]
