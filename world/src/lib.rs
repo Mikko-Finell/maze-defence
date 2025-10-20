@@ -9,10 +9,10 @@
 
 //! Authoritative world state management for Maze Defence.
 
-use std::time::Duration;
+use std::{collections::BTreeSet, time::Duration};
 
 use maze_defence_core::{
-    BugId, CellCoord, Command, Direction, Event, PlayMode, TileCoord, WELCOME_BANNER,
+    BugColor, BugId, CellCoord, Command, Direction, Event, PlayMode, TileCoord, WELCOME_BANNER,
 };
 
 const BUG_GENERATION_SEED: u64 = 0x42f0_e1eb_d4a5_3c21;
@@ -161,6 +161,8 @@ pub struct World {
     wall: Wall,
     targets: Vec<CellCoord>,
     bugs: Vec<Bug>,
+    bug_spawners: BugSpawnerRegistry,
+    next_bug_id: u32,
     occupancy: OccupancyGrid,
     reservations: ReservationFrame,
     tick_index: u64,
@@ -176,13 +178,14 @@ impl World {
         let cells_per_tile = DEFAULT_CELLS_PER_TILE;
         let wall = Wall::new(tile_grid.columns(), tile_grid.rows(), cells_per_tile);
         let targets = target_cells_from_wall(&wall);
-        let occupancy = OccupancyGrid::new(
-            total_cell_columns(tile_grid.columns(), cells_per_tile),
-            total_cell_rows(tile_grid.rows(), cells_per_tile),
-        );
+        let total_columns = total_cell_columns(tile_grid.columns(), cells_per_tile);
+        let total_rows = total_cell_rows(tile_grid.rows(), cells_per_tile);
+        let occupancy = OccupancyGrid::new(total_columns, total_rows);
         let mut world = Self {
             banner: WELCOME_BANNER,
             bugs: Vec::new(),
+            bug_spawners: BugSpawnerRegistry::new(),
+            next_bug_id: 0,
             occupancy,
             reservations: ReservationFrame::new(),
             wall,
@@ -193,6 +196,7 @@ impl World {
             step_quantum: DEFAULT_STEP_QUANTUM,
             play_mode: PlayMode::Attack,
         };
+        world.rebuild_bug_spawners();
         world.reset_bugs();
         world
     }
@@ -205,16 +209,18 @@ impl World {
         );
         self.bugs = generated
             .into_iter()
-            .map(|seed| Bug::from_seed(seed.id, seed.cell, seed.color))
+            .map(|seed| Bug::new(seed.id, seed.cell, seed.color))
             .collect();
         self.occupancy.fill_with(&self.bugs);
         self.reservations.clear();
+        self.next_bug_id = self.bugs.len() as u32;
     }
 
     fn clear_bugs(&mut self) {
         self.bugs.clear();
         self.occupancy.clear();
         self.reservations.clear();
+        self.next_bug_id = 0;
     }
 
     fn iter_bugs_mut(&mut self) -> impl Iterator<Item = &mut Bug> {
@@ -223,6 +229,37 @@ impl World {
 
     fn bug_index(&self, bug_id: BugId) -> Option<usize> {
         self.bugs.iter().position(|bug| bug.id == bug_id)
+    }
+
+    fn spawn_from_spawner(
+        &mut self,
+        cell: CellCoord,
+        color: BugColor,
+        out_events: &mut Vec<Event>,
+    ) {
+        if !self.bug_spawners.contains(cell) {
+            return;
+        }
+
+        if self.occupancy.index(cell).is_none() || !self.occupancy.can_enter(cell) {
+            return;
+        }
+
+        let bug_id = self.next_bug_identifier();
+        let bug = Bug::new(bug_id, cell, color);
+        self.occupancy.occupy(bug_id, cell);
+        self.bugs.push(bug);
+        out_events.push(Event::BugSpawned {
+            bug_id,
+            cell,
+            color,
+        });
+    }
+
+    fn next_bug_identifier(&mut self) -> BugId {
+        let bug_id = BugId::new(self.next_bug_id);
+        self.next_bug_id = self.next_bug_id.saturating_add(1);
+        bug_id
     }
 
     fn resolve_pending_steps(&mut self, out_events: &mut Vec<Event>) {
@@ -304,6 +341,7 @@ pub fn apply(world: &mut World, command: Command, out_events: &mut Vec<Event>) {
                 total_cell_columns(columns, normalized_cells),
                 total_cell_rows(rows, normalized_cells),
             );
+            world.rebuild_bug_spawners();
             match world.play_mode {
                 PlayMode::Attack => {
                     world.reset_bugs();
@@ -355,6 +393,20 @@ pub fn apply(world: &mut World, command: Command, out_events: &mut Vec<Event>) {
 
             out_events.push(Event::PlayModeChanged { mode });
         }
+        Command::SpawnBug { spawner, color } => {
+            if world.play_mode == PlayMode::Builder {
+                return;
+            }
+
+            world.spawn_from_spawner(spawner, color, out_events);
+        }
+    }
+}
+
+impl World {
+    fn rebuild_bug_spawners(&mut self) {
+        let (columns, rows) = self.occupancy.dimensions();
+        self.bug_spawners.assign_outer_rim(columns, rows);
     }
 }
 
@@ -363,7 +415,7 @@ pub mod query {
     use std::time::Duration;
 
     use super::{OccupancyGrid, Target, TileGrid, Wall, World};
-    use maze_defence_core::{select_goal, BugId, CellCoord, Goal, PlayMode};
+    use maze_defence_core::{select_goal, BugColor, BugId, CellCoord, Goal, PlayMode};
 
     /// Reports the active play mode for the world.
     #[must_use]
@@ -459,7 +511,7 @@ pub mod query {
         /// Grid cell currently occupied by the bug.
         pub cell: CellCoord,
         /// Appearance assigned to the bug.
-        pub color: super::BugColor,
+        pub color: BugColor,
         /// Indicates whether the bug accrued enough time to advance.
         pub ready_for_step: bool,
         /// Duration accumulated toward the next step.
@@ -500,40 +552,6 @@ pub mod query {
     }
 }
 
-/// Visual appearance applied to a bug.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct BugColor {
-    red: u8,
-    green: u8,
-    blue: u8,
-}
-
-impl BugColor {
-    /// Creates a new bug color from byte RGB components.
-    #[must_use]
-    pub const fn from_rgb(red: u8, green: u8, blue: u8) -> Self {
-        Self { red, green, blue }
-    }
-
-    /// Red component of the color.
-    #[must_use]
-    pub const fn red(&self) -> u8 {
-        self.red
-    }
-
-    /// Green component of the color.
-    #[must_use]
-    pub const fn green(&self) -> u8 {
-        self.green
-    }
-
-    /// Blue component of the color.
-    #[must_use]
-    pub const fn blue(&self) -> u8 {
-        self.blue
-    }
-}
-
 #[derive(Clone, Debug)]
 struct Bug {
     id: BugId,
@@ -543,7 +561,7 @@ struct Bug {
 }
 
 impl Bug {
-    fn from_seed(id: BugId, cell: CellCoord, color: BugColor) -> Self {
+    fn new(id: BugId, cell: CellCoord, color: BugColor) -> Self {
         Self {
             id,
             cell,
@@ -566,6 +584,49 @@ struct BugSeed {
     id: BugId,
     cell: CellCoord,
     color: BugColor,
+}
+
+#[derive(Clone, Debug)]
+struct BugSpawnerRegistry {
+    cells: BTreeSet<CellCoord>,
+}
+
+impl BugSpawnerRegistry {
+    fn new() -> Self {
+        Self {
+            cells: BTreeSet::new(),
+        }
+    }
+
+    fn assign_outer_rim(&mut self, columns: u32, rows: u32) {
+        self.cells.clear();
+
+        if columns == 0 || rows == 0 {
+            return;
+        }
+
+        let last_column = columns.saturating_sub(1);
+        let last_row = rows.saturating_sub(1);
+
+        for column in 0..columns {
+            let _ = self.cells.insert(CellCoord::new(column, 0));
+            let _ = self.cells.insert(CellCoord::new(column, last_row));
+        }
+
+        for row in 0..rows {
+            let _ = self.cells.insert(CellCoord::new(0, row));
+            let _ = self.cells.insert(CellCoord::new(last_column, row));
+        }
+    }
+
+    fn contains(&self, cell: CellCoord) -> bool {
+        self.cells.contains(&cell)
+    }
+
+    #[cfg(test)]
+    fn cells(&self) -> &BTreeSet<CellCoord> {
+        &self.cells
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -845,8 +906,31 @@ fn next_random(state: u64) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use maze_defence_core::{Goal, PlayMode};
+    use maze_defence_core::{BugColor, Goal, PlayMode};
     use std::time::Duration;
+
+    fn expected_outer_rim(columns: u32, rows: u32) -> BTreeSet<CellCoord> {
+        let mut cells = BTreeSet::new();
+
+        if columns == 0 || rows == 0 {
+            return cells;
+        }
+
+        let last_column = columns.saturating_sub(1);
+        let last_row = rows.saturating_sub(1);
+
+        for column in 0..columns {
+            let _ = cells.insert(CellCoord::new(column, 0));
+            let _ = cells.insert(CellCoord::new(column, last_row));
+        }
+
+        for row in 0..rows {
+            let _ = cells.insert(CellCoord::new(0, row));
+            let _ = cells.insert(CellCoord::new(last_column, row));
+        }
+
+        cells
+    }
 
     #[test]
     fn world_defaults_to_attack_mode() {
@@ -1040,6 +1124,187 @@ mod tests {
 
         assert!(events.is_empty());
         assert!(world.reservations.requests.is_empty());
+    }
+
+    #[test]
+    fn bug_spawner_creates_bug_when_cell_free() {
+        let mut world = World::new();
+        let mut events = Vec::new();
+
+        apply(
+            &mut world,
+            Command::ConfigureTileGrid {
+                columns: TileCoord::new(1),
+                rows: TileCoord::new(1),
+                tile_length: 25.0,
+                cells_per_tile: 1,
+            },
+            &mut events,
+        );
+
+        events.clear();
+        apply(
+            &mut world,
+            Command::SpawnBug {
+                spawner: CellCoord::new(0, 0),
+                color: BugColor::from_rgb(0x12, 0x34, 0x56),
+            },
+            &mut events,
+        );
+
+        assert_eq!(
+            events,
+            vec![Event::BugSpawned {
+                bug_id: BugId::new(0),
+                cell: CellCoord::new(0, 0),
+                color: BugColor::from_rgb(0x12, 0x34, 0x56),
+            }]
+        );
+
+        let snapshots = query::bug_view(&world).into_vec();
+        assert_eq!(snapshots.len(), 1);
+        let snapshot = &snapshots[0];
+        assert_eq!(snapshot.id, BugId::new(0));
+        assert_eq!(snapshot.cell, CellCoord::new(0, 0));
+        assert_eq!(snapshot.color, BugColor::from_rgb(0x12, 0x34, 0x56));
+        assert_eq!(
+            query::occupancy_view(&world).occupant(CellCoord::new(0, 0)),
+            Some(BugId::new(0))
+        );
+    }
+
+    #[test]
+    fn bug_spawner_requires_free_cell() {
+        let mut world = World::new();
+        let mut events = Vec::new();
+
+        apply(
+            &mut world,
+            Command::ConfigureTileGrid {
+                columns: TileCoord::new(1),
+                rows: TileCoord::new(1),
+                tile_length: 25.0,
+                cells_per_tile: 1,
+            },
+            &mut events,
+        );
+
+        events.clear();
+        apply(
+            &mut world,
+            Command::SpawnBug {
+                spawner: CellCoord::new(0, 0),
+                color: BugColor::from_rgb(0xaa, 0xbb, 0xcc),
+            },
+            &mut events,
+        );
+
+        assert_eq!(events.len(), 1);
+
+        events.clear();
+        apply(
+            &mut world,
+            Command::SpawnBug {
+                spawner: CellCoord::new(0, 0),
+                color: BugColor::from_rgb(0x10, 0x20, 0x30),
+            },
+            &mut events,
+        );
+
+        assert!(events.is_empty());
+        let snapshots = query::bug_view(&world).into_vec();
+        assert_eq!(snapshots.len(), 1);
+        assert_eq!(snapshots[0].color, BugColor::from_rgb(0xaa, 0xbb, 0xcc));
+    }
+
+    #[test]
+    fn bug_spawner_ignored_without_registration() {
+        let mut world = World::new();
+        let mut events = Vec::new();
+
+        apply(
+            &mut world,
+            Command::ConfigureTileGrid {
+                columns: TileCoord::new(3),
+                rows: TileCoord::new(3),
+                tile_length: 25.0,
+                cells_per_tile: 1,
+            },
+            &mut events,
+        );
+
+        world.clear_bugs();
+
+        events.clear();
+        apply(
+            &mut world,
+            Command::SpawnBug {
+                spawner: CellCoord::new(1, 1),
+                color: BugColor::from_rgb(0xaa, 0x00, 0xff),
+            },
+            &mut events,
+        );
+
+        assert!(events.is_empty());
+        assert!(query::bug_view(&world).into_vec().is_empty());
+    }
+
+    #[test]
+    fn bug_spawner_ignored_in_builder_mode() {
+        let mut world = World::new();
+        let mut events = Vec::new();
+
+        apply(
+            &mut world,
+            Command::SetPlayMode {
+                mode: PlayMode::Builder,
+            },
+            &mut events,
+        );
+
+        events.clear();
+        apply(
+            &mut world,
+            Command::SpawnBug {
+                spawner: CellCoord::new(0, 0),
+                color: BugColor::from_rgb(0, 0, 0),
+            },
+            &mut events,
+        );
+
+        assert!(events.is_empty());
+    }
+
+    #[test]
+    fn bug_spawners_cover_outer_rim_in_default_world() {
+        let world = World::new();
+        let (columns, rows) = world.occupancy.dimensions();
+        let expected = expected_outer_rim(columns, rows);
+
+        assert_eq!(world.bug_spawners.cells(), &expected);
+    }
+
+    #[test]
+    fn bug_spawners_rebuilt_after_configuring_grid() {
+        let mut world = World::new();
+        let mut events = Vec::new();
+
+        apply(
+            &mut world,
+            Command::ConfigureTileGrid {
+                columns: TileCoord::new(2),
+                rows: TileCoord::new(3),
+                tile_length: 50.0,
+                cells_per_tile: 2,
+            },
+            &mut events,
+        );
+
+        let (columns, rows) = world.occupancy.dimensions();
+        assert_eq!((columns, rows), (4, 6));
+        let expected = expected_outer_rim(columns, rows);
+
+        assert_eq!(world.bug_spawners.cells(), &expected);
     }
 
     #[test]
