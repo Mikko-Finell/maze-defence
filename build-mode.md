@@ -104,10 +104,10 @@ This proposal:
 
 **Deliverables**
 
-* [ ] Add `PlayMode` enum to core contract layer (Attack, Builder).
-* [ ] Add `Command::SetPlayMode { mode: PlayMode }`.
-* [ ] Add `Event::PlayModeChanged { mode: PlayMode }`.
-* [ ] Add/update any `#[derive]` or enum match exhaustiveness needed.
+* [x] Add `PlayMode` enum to core contract layer (Attack, Builder).
+* [x] Add `Command::SetPlayMode { mode: PlayMode }`.
+* [x] Add `Event::PlayModeChanged { mode: PlayMode }`.
+* [x] Add/update any `#[derive]` or enum match exhaustiveness needed.
 
 **Goal**
 
@@ -119,14 +119,14 @@ This proposal:
 
 **Deliverables**
 
-* [ ] Add `play_mode: PlayMode` to `World`, default = `Attack`.
-* [ ] Update `World::apply` to handle `SetPlayMode`:
+* [x] Add `play_mode: PlayMode` to `World`, default = `Attack`.
+* [x] Update `World::apply` to handle `SetPlayMode`:
 
   * Toggle modes only when actually changed (idempotent).
   * On Builder → clear **all** bugs + occupancy deterministically.
   * On Attack → reseed bugs deterministically (existing mechanism).
   * Emit `PlayModeChanged` after mutation.
-* [ ] Add public query accessor: `query::play_mode(world)`.
+* [x] Add public query accessor: `query::play_mode(world)`.
 
 **Goal**
 

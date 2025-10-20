@@ -21,6 +21,15 @@ use std::time::Duration;
 /// Canonical banner emitted when the experience boots.
 pub const WELCOME_BANNER: &str = "Welcome to Maze Defence.";
 
+/// Describes the active gameplay mode for the simulation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum PlayMode {
+    /// Standard attack mode where bugs advance toward the target.
+    Attack,
+    /// Builder mode that pauses simulation to enable planning and placement.
+    Builder,
+}
+
 /// Commands that express all permissible world mutations.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Command {
@@ -52,6 +61,11 @@ pub enum Command {
         /// Direction of travel for the attempted step.
         direction: Direction,
     },
+    /// Requests that the world transition to the provided play mode.
+    SetPlayMode {
+        /// Mode the world should activate.
+        mode: PlayMode,
+    },
 }
 
 /// Events broadcast by the world after processing commands.
@@ -70,6 +84,11 @@ pub enum Event {
         from: CellCoord,
         /// Cell the bug occupies after completing the move. Cells subdivide individual tiles.
         to: CellCoord,
+    },
+    /// Announces that the simulation entered a new play mode.
+    PlayModeChanged {
+        /// Mode that became active after processing commands.
+        mode: PlayMode,
     },
 }
 
