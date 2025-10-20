@@ -97,7 +97,7 @@ impl Movement {
         columns: u32,
         rows: u32,
     ) -> Option<CellCoord> {
-        let rows_with_exit = rows.saturating_add(1);
+        let rows_with_exit = self.rows_with_exit(rows);
         let start_index = index(columns, rows_with_exit, bug.cell)?;
 
         self.reset_workspace();
@@ -174,7 +174,7 @@ impl Movement {
             self.prepared_dimensions = Some((columns, rows));
         }
 
-        let rows_with_exit = rows.saturating_add(1);
+        let rows_with_exit = self.rows_with_exit(rows);
         let node_count_u64 = u64::from(columns) * u64::from(rows_with_exit);
         let node_count = usize::try_from(node_count_u64).unwrap_or(0);
         if node_count > self.workspace_nodes {
@@ -194,6 +194,16 @@ impl Movement {
         for entry in self.came_from.iter_mut().take(self.active_nodes) {
             *entry = None;
         }
+    }
+
+    fn rows_with_exit(&self, rows: u32) -> u32 {
+        let max_target_row = self
+            .targets
+            .iter()
+            .map(|cell| cell.row())
+            .max()
+            .unwrap_or(rows);
+        max_target_row.saturating_add(1)
     }
 }
 

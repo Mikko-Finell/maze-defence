@@ -14,6 +14,7 @@ fn emits_step_commands_toward_target() {
             columns: TileCoord::new(5),
             rows: TileCoord::new(4),
             tile_length: 1.0,
+            cells_per_tile: 1,
         },
         &mut events,
     );
@@ -82,6 +83,7 @@ fn step_commands_target_free_cells() {
             columns: TileCoord::new(5),
             rows: TileCoord::new(4),
             tile_length: 1.0,
+            cells_per_tile: 1,
         },
         &mut events,
     );
@@ -138,6 +140,7 @@ fn replans_after_failed_step() {
             columns: TileCoord::new(3),
             rows: TileCoord::new(3),
             tile_length: 1.0,
+            cells_per_tile: 1,
         },
         &mut events,
     );
@@ -162,8 +165,8 @@ fn replans_after_failed_step() {
     let (bug_id, blocked_direction) = select_blocked_bug(
         &bug_view,
         occupancy_view_initial,
-        tile_grid.columns().get(),
-        tile_grid.rows().get(),
+        tile_grid.playable_cell_columns(),
+        tile_grid.playable_cell_rows(),
         &target_columns,
     )
     .expect("expected at least one bug on a boundary");
