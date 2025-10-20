@@ -9,10 +9,7 @@
 
 //! Deterministic movement system that plans paths and proposes bug steps.
 
-use std::{
-    cmp::{Ordering, Reverse},
-    collections::BinaryHeap,
-};
+use std::{cmp::Ordering, collections::BinaryHeap};
 
 use maze_defence_core::{select_goal, BugId, CellCoord, Command, Direction, Event, Goal};
 use maze_defence_world::query::{BugSnapshot, BugView, OccupancyView};
@@ -20,7 +17,7 @@ use maze_defence_world::query::{BugSnapshot, BugView, OccupancyView};
 /// Pure system that reacts to world events and emits movement commands.
 #[derive(Debug, Default)]
 pub struct Movement {
-    frontier: BinaryHeap<Reverse<NodeState>>,
+    frontier: BinaryHeap<NodeState>,
     came_from: Vec<Option<CellCoord>>,
     g_score: Vec<u32>,
     targets: Vec<CellCoord>,
@@ -105,13 +102,13 @@ impl Movement {
 
         self.reset_workspace();
         self.g_score[start_index] = 0;
-        self.frontier.push(Reverse(NodeState::new(
+        self.frontier.push(NodeState::new(
             bug.cell,
             0,
             heuristic_to_goal(bug.cell, goal.cell()),
-        )));
+        ));
 
-        while let Some(Reverse(current)) = self.frontier.pop() {
+        while let Some(current) = self.frontier.pop() {
             if current.cell == goal.cell() {
                 return self.reconstruct_first_hop(bug.cell, goal.cell(), columns, rows_with_exit);
             }
@@ -129,11 +126,11 @@ impl Movement {
 
                 self.came_from[neighbor_index] = Some(current.cell);
                 self.g_score[neighbor_index] = tentative;
-                self.frontier.push(Reverse(NodeState::new(
+                self.frontier.push(NodeState::new(
                     neighbor,
                     tentative,
                     heuristic_to_goal(neighbor, goal.cell()),
-                )));
+                ));
             }
         }
 
