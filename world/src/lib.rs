@@ -22,8 +22,8 @@ const DEFAULT_CELLS_PER_TILE: u32 = 1;
 
 const DEFAULT_STEP_QUANTUM: Duration = Duration::from_millis(250);
 const MIN_STEP_QUANTUM: Duration = Duration::from_micros(1);
-const SIDE_BORDER_CELL_LAYERS: u32 = 1;
-const TOP_BORDER_CELL_LAYERS: u32 = 1;
+const SIDE_BORDER_CELL_LAYERS: u32 = 0;
+const TOP_BORDER_CELL_LAYERS: u32 = 0;
 
 /// Describes the discrete tile layout of the world.
 #[derive(Debug)]
@@ -381,7 +381,14 @@ pub fn apply(world: &mut World, command: Command, out_events: &mut Vec<Event>) {
 impl World {
     fn rebuild_bug_spawners(&mut self) {
         let (columns, rows) = self.occupancy.dimensions();
-        self.bug_spawners.assign_outer_rim(columns, rows);
+        let exit_row = exit_row_for_tile_grid(self.tile_grid.rows(), self.cells_per_tile);
+        let excluded_row = if rows == 0 {
+            None
+        } else {
+            exit_row.checked_sub(1)
+        };
+        self.bug_spawners
+            .assign_outer_rim(columns, rows, excluded_row);
     }
 }
 
@@ -572,7 +579,7 @@ impl BugSpawnerRegistry {
         }
     }
 
-    fn assign_outer_rim(&mut self, columns: u32, rows: u32) {
+    fn assign_outer_rim(&mut self, columns: u32, rows: u32, excluded_row: Option<u32>) {
         self.cells.clear();
 
         if columns == 0 || rows == 0 {
@@ -583,11 +590,18 @@ impl BugSpawnerRegistry {
         let last_row = rows.saturating_sub(1);
 
         for column in 0..columns {
-            let _ = self.cells.insert(CellCoord::new(column, 0));
-            let _ = self.cells.insert(CellCoord::new(column, last_row));
+            if excluded_row != Some(0) {
+                let _ = self.cells.insert(CellCoord::new(column, 0));
+            }
+            if excluded_row != Some(last_row) {
+                let _ = self.cells.insert(CellCoord::new(column, last_row));
+            }
         }
 
         for row in 0..rows {
+            if excluded_row == Some(row) {
+                continue;
+            }
             let _ = self.cells.insert(CellCoord::new(0, row));
             let _ = self.cells.insert(CellCoord::new(last_column, row));
         }
@@ -824,7 +838,11 @@ mod tests {
     use maze_defence_core::{BugColor, Goal, PlayMode};
     use std::time::Duration;
 
-    fn expected_outer_rim(columns: u32, rows: u32) -> BTreeSet<CellCoord> {
+    fn expected_outer_rim(
+        columns: u32,
+        rows: u32,
+        excluded_row: Option<u32>,
+    ) -> BTreeSet<CellCoord> {
         let mut cells = BTreeSet::new();
 
         if columns == 0 || rows == 0 {
@@ -835,11 +853,18 @@ mod tests {
         let last_row = rows.saturating_sub(1);
 
         for column in 0..columns {
-            let _ = cells.insert(CellCoord::new(column, 0));
-            let _ = cells.insert(CellCoord::new(column, last_row));
+            if excluded_row != Some(0) {
+                let _ = cells.insert(CellCoord::new(column, 0));
+            }
+            if excluded_row != Some(last_row) {
+                let _ = cells.insert(CellCoord::new(column, last_row));
+            }
         }
 
         for row in 0..rows {
+            if excluded_row == Some(row) {
+                continue;
+            }
             let _ = cells.insert(CellCoord::new(0, row));
             let _ = cells.insert(CellCoord::new(last_column, row));
         }
@@ -1066,7 +1091,7 @@ mod tests {
             &mut world,
             Command::ConfigureTileGrid {
                 columns: TileCoord::new(1),
-                rows: TileCoord::new(1),
+                rows: TileCoord::new(2),
                 tile_length: 25.0,
                 cells_per_tile: 1,
             },
@@ -1113,7 +1138,7 @@ mod tests {
             &mut world,
             Command::ConfigureTileGrid {
                 columns: TileCoord::new(1),
-                rows: TileCoord::new(1),
+                rows: TileCoord::new(2),
                 tile_length: 25.0,
                 cells_per_tile: 1,
             },
@@ -1210,7 +1235,7 @@ mod tests {
     fn bug_spawners_cover_outer_rim_in_default_world() {
         let world = World::new();
         let (columns, rows) = world.occupancy.dimensions();
-        let expected = expected_outer_rim(columns, rows);
+        let expected = expected_outer_rim(columns, rows, rows.checked_sub(1));
 
         assert_eq!(world.bug_spawners.cells(), &expected);
     }
@@ -1235,9 +1260,36 @@ mod tests {
         let expected_columns = total_cell_columns(TileCoord::new(2), 2);
         let expected_rows = total_cell_rows(TileCoord::new(3), 2);
         assert_eq!((columns, rows), (expected_columns, expected_rows));
-        let expected = expected_outer_rim(columns, rows);
+        let expected = expected_outer_rim(columns, rows, rows.checked_sub(1));
 
         assert_eq!(world.bug_spawners.cells(), &expected);
+    }
+
+    #[test]
+    fn bug_spawner_rejects_spawn_on_excluded_bottom_row() {
+        let mut world = World::new();
+        let mut events = Vec::new();
+        let (_columns, rows) = world.occupancy.dimensions();
+        let Some(excluded_row) = rows.checked_sub(1) else {
+            panic!("default world must contain at least one row");
+        };
+
+        let spawner = CellCoord::new(0, excluded_row);
+        assert!(!world.bug_spawners.contains(spawner));
+
+        apply(
+            &mut world,
+            Command::SpawnBug {
+                spawner,
+                color: BugColor::from_rgb(0x12, 0x34, 0x56),
+            },
+            &mut events,
+        );
+
+        assert!(events.is_empty());
+        assert!(!query::bug_view(&world)
+            .iter()
+            .any(|bug| bug.cell == spawner));
     }
 
     #[test]
@@ -1383,11 +1435,7 @@ mod tests {
             usize::try_from(cells_per_tile).expect("cells_per_tile fits in usize")
         );
         let expected_row = exit_row_for_tile_grid(TileCoord::new(7), cells_per_tile);
-        let expected_start =
-            SIDE_BORDER_CELL_LAYERS.saturating_add(4_u32.saturating_mul(cells_per_tile));
-        let expected_columns: Vec<u32> = (0..cells_per_tile)
-            .map(|offset| expected_start + offset)
-            .collect();
+        let expected_columns = exit_columns_for_tile_grid(TileCoord::new(9), cells_per_tile);
         let actual_columns: Vec<u32> = target_cells.iter().map(|cell| cell.column()).collect();
         assert_eq!(actual_columns, expected_columns);
         assert!(target_cells.iter().all(|cell| cell.row() == expected_row));
@@ -1418,11 +1466,7 @@ mod tests {
             usize::try_from(cells_per_tile).expect("cells_per_tile fits in usize")
         );
         let expected_row = exit_row_for_tile_grid(TileCoord::new(6), cells_per_tile);
-        let expected_start =
-            SIDE_BORDER_CELL_LAYERS.saturating_add(5_u32.saturating_mul(cells_per_tile));
-        let expected_columns: Vec<u32> = (0..cells_per_tile)
-            .map(|offset| expected_start + offset)
-            .collect();
+        let expected_columns = exit_columns_for_tile_grid(TileCoord::new(12), cells_per_tile);
         let actual_columns: Vec<u32> = target_cells.iter().map(|cell| cell.column()).collect();
         assert_eq!(actual_columns, expected_columns);
         assert!(target_cells.iter().all(|cell| cell.row() == expected_row));

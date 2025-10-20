@@ -186,10 +186,10 @@ impl TileGridPresentation {
     pub const DEFAULT_CELLS_PER_TILE: u32 = 4;
 
     /// Number of cell layers rendered outside the tile grid on each side.
-    pub const SIDE_BORDER_CELL_LAYERS: u32 = 1;
+    pub const SIDE_BORDER_CELL_LAYERS: u32 = 0;
 
     /// Number of cell layers rendered above the tile grid.
-    pub const TOP_BORDER_CELL_LAYERS: u32 = 1;
+    pub const TOP_BORDER_CELL_LAYERS: u32 = 0;
 
     /// Number of cell layers rendered below the tile grid.
     pub const BOTTOM_BORDER_CELL_LAYERS: u32 = 0;
