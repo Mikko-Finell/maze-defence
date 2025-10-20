@@ -382,6 +382,7 @@ impl World {
     fn rebuild_bug_spawners(&mut self) {
         let (columns, rows) = self.occupancy.dimensions();
         self.bug_spawners.assign_outer_rim(columns, rows);
+        self.bug_spawners.remove_bottom_row(columns, rows);
     }
 }
 
@@ -590,6 +591,20 @@ impl BugSpawnerRegistry {
         for row in 0..rows {
             let _ = self.cells.insert(CellCoord::new(0, row));
             let _ = self.cells.insert(CellCoord::new(last_column, row));
+        }
+    }
+
+    fn remove_bottom_row(&mut self, columns: u32, rows: u32) {
+        if columns == 0 || rows == 0 {
+            return;
+        }
+
+        let bottom_row = rows.saturating_sub(1);
+
+        for column in 0..columns {
+            let _ = self
+                .cells
+                .remove(&CellCoord::new(column, bottom_row));
         }
     }
 
@@ -842,6 +857,13 @@ mod tests {
         for row in 0..rows {
             let _ = cells.insert(CellCoord::new(0, row));
             let _ = cells.insert(CellCoord::new(last_column, row));
+        }
+
+        if columns > 0 && rows > 0 {
+            let bottom_row = rows.saturating_sub(1);
+            for column in 0..columns {
+                let _ = cells.remove(&CellCoord::new(column, bottom_row));
+            }
         }
 
         cells
