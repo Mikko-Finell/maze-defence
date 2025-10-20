@@ -222,6 +222,37 @@ impl TileGridPresentation {
             + self.cell_length()
                 * (Self::TOP_BORDER_CELL_LAYERS + Self::BOTTOM_BORDER_CELL_LAYERS) as f32
     }
+
+    /// Clamps a world-space position to the playable grid bounds.
+    #[must_use]
+    pub fn clamp_world_position(&self, position: Vec2) -> Vec2 {
+        if self.columns == 0 || self.rows == 0 {
+            return Vec2::ZERO;
+        }
+
+        let width = self.width();
+        let height = self.height();
+
+        Vec2::new(position.x.clamp(0.0, width), position.y.clamp(0.0, height))
+    }
+
+    /// Snaps a world-space position to the tile grid, returning `None` when out of bounds.
+    #[must_use]
+    pub fn snap_world_to_tile(&self, position: Vec2) -> Option<TileSpacePosition> {
+        if self.columns == 0 || self.rows == 0 || self.tile_length <= f32::EPSILON {
+            return None;
+        }
+
+        let clamped = self.clamp_world_position(position);
+        let column = (clamped.x / self.tile_length).floor() as u32;
+        let row = (clamped.y / self.tile_length).floor() as u32;
+
+        if column < self.columns && row < self.rows {
+            Some(TileSpacePosition::from_indices(column, row))
+        } else {
+            None
+        }
+    }
 }
 
 /// Describes an outer wall that should be rendered near the grid.
@@ -433,5 +464,102 @@ mod tests {
             error,
             RenderingError::InvalidCellsPerTile { cells_per_tile: 0 }
         ));
+    }
+
+    #[test]
+    fn clamp_world_position_limits_coordinates_to_grid_bounds() {
+        let presentation = TileGridPresentation::new(5, 4, 32.0, 4, Color::from_rgb_u8(0, 0, 0))
+            .expect("valid grid");
+        let clamped = presentation.clamp_world_position(Vec2::new(-10.0, 170.0));
+
+        assert_eq!(clamped, Vec2::new(0.0, presentation.height()));
+    }
+
+    #[test]
+    fn snap_world_to_tile_returns_tile_indices_within_bounds() {
+        let presentation = TileGridPresentation::new(6, 3, 24.0, 4, Color::from_rgb_u8(0, 0, 0))
+            .expect("valid grid");
+        let snapped = presentation
+            .snap_world_to_tile(Vec2::new(47.9, 12.1))
+            .expect("position inside grid should snap");
+
+        assert_eq!(snapped.column().get(), 1);
+        assert_eq!(snapped.row().get(), 0);
+    }
+
+    #[test]
+    fn snap_world_to_tile_rejects_positions_outside_grid() {
+        let presentation = TileGridPresentation::new(3, 2, 16.0, 4, Color::from_rgb_u8(0, 0, 0))
+            .expect("valid grid");
+
+        assert!(presentation
+            .snap_world_to_tile(Vec2::new(100.0, 10.0))
+            .is_none());
+        assert!(presentation
+            .snap_world_to_tile(Vec2::new(10.0, 100.0))
+            .is_none());
+    }
+
+    #[test]
+    fn scene_new_does_not_inject_builder_defaults() {
+        let tile_grid = TileGridPresentation::new(
+            6,
+            4,
+            32.0,
+            TileGridPresentation::DEFAULT_CELLS_PER_TILE,
+            Color::from_rgb_u8(64, 64, 64),
+        )
+        .expect("default cells_per_tile is valid");
+        let wall = WallPresentation::new(
+            8.0,
+            Color::from_rgb_u8(128, 128, 128),
+            TargetPresentation::new(vec![]),
+        );
+        let bugs = vec![BugPresentation::new(2, 3, Color::from_rgb_u8(255, 0, 0))];
+
+        let scene = Scene::new(
+            tile_grid.clone(),
+            wall.clone(),
+            bugs.clone(),
+            PlayMode::Attack,
+            None,
+        );
+
+        assert_eq!(scene.tile_grid, tile_grid);
+        assert_eq!(scene.wall, wall);
+        assert_eq!(scene.bugs, bugs);
+        assert_eq!(scene.play_mode, PlayMode::Attack);
+        assert!(scene.placement_preview.is_none());
+    }
+
+    #[test]
+    fn scene_new_preserves_builder_preview() {
+        let tile_grid = TileGridPresentation::new(
+            5,
+            5,
+            24.0,
+            TileGridPresentation::DEFAULT_CELLS_PER_TILE,
+            Color::from_rgb_u8(32, 32, 32),
+        )
+        .expect("default cells_per_tile is valid");
+        let wall = WallPresentation::new(
+            6.0,
+            Color::from_rgb_u8(90, 90, 90),
+            TargetPresentation::new(vec![]),
+        );
+        let placement_preview = PlacementPreview::new(TileSpacePosition::from_indices(1, 2), 2);
+
+        let scene = Scene::new(
+            tile_grid.clone(),
+            wall.clone(),
+            vec![],
+            PlayMode::Builder,
+            Some(placement_preview),
+        );
+
+        assert_eq!(scene.play_mode, PlayMode::Builder);
+        assert_eq!(scene.placement_preview, Some(placement_preview));
+        assert_eq!(scene.tile_grid, tile_grid);
+        assert_eq!(scene.wall, wall);
     }
 }

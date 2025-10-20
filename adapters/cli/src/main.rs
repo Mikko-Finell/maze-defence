@@ -16,7 +16,8 @@ use clap::Parser;
 use maze_defence_core::{Command, Event, PlayMode, TileCoord};
 use maze_defence_rendering::{
     BugPresentation, Color, FrameInput, PlacementPreview, Presentation, RenderingBackend, Scene,
-    TargetCellPresentation, TargetPresentation, TileGridPresentation, WallPresentation,
+    TargetCellPresentation, TargetPresentation, TileGridPresentation, TileSpacePosition,
+    WallPresentation,
 };
 use maze_defence_rendering_macroquad::MacroquadBackend;
 use maze_defence_system_bootstrap::Bootstrap;
@@ -316,5 +317,118 @@ impl Simulation {
         for command in self.queued_commands.drain(..) {
             world::apply(&mut self.world, command, &mut self.pending_events);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use glam::Vec2;
+
+    fn new_simulation() -> Simulation {
+        Simulation::new(
+            4,
+            3,
+            32.0,
+            TileGridPresentation::DEFAULT_CELLS_PER_TILE,
+            Duration::from_millis(200),
+        )
+    }
+
+    fn make_scene() -> Scene {
+        let tile_grid = TileGridPresentation::new(
+            4,
+            3,
+            32.0,
+            TileGridPresentation::DEFAULT_CELLS_PER_TILE,
+            Color::from_rgb_u8(30, 30, 30),
+        )
+        .expect("valid grid dimensions");
+        let wall = WallPresentation::new(
+            12.0,
+            Color::from_rgb_u8(60, 45, 30),
+            TargetPresentation::new(Vec::new()),
+        );
+
+        Scene::new(tile_grid, wall, Vec::new(), PlayMode::Attack, None)
+    }
+
+    #[test]
+    fn handle_input_toggles_mode_and_caches_cursor() {
+        let mut simulation = new_simulation();
+        let first_tile = TileSpacePosition::from_indices(1, 2);
+        let first_world = Vec2::new(12.5, 24.0);
+
+        simulation.handle_input(FrameInput {
+            mode_toggle: true,
+            cursor_world_space: Some(first_world),
+            cursor_tile_space: Some(first_tile),
+        });
+
+        assert_eq!(
+            simulation.queued_commands,
+            vec![Command::SetPlayMode {
+                mode: PlayMode::Builder,
+            }]
+        );
+        assert!(!simulation.pending_input.mode_toggle);
+        assert_eq!(
+            simulation.pending_input.cursor_world_space,
+            Some(first_world)
+        );
+        assert_eq!(simulation.pending_input.cursor_tile_space, Some(first_tile));
+
+        let second_tile = TileSpacePosition::from_indices(2, 1);
+        let second_world = Vec2::new(48.0, 16.0);
+        simulation.handle_input(FrameInput {
+            mode_toggle: false,
+            cursor_world_space: Some(second_world),
+            cursor_tile_space: Some(second_tile),
+        });
+
+        assert_eq!(
+            simulation.queued_commands,
+            vec![Command::SetPlayMode {
+                mode: PlayMode::Builder,
+            }]
+        );
+        assert_eq!(
+            simulation.pending_input.cursor_world_space,
+            Some(second_world)
+        );
+        assert_eq!(
+            simulation.pending_input.cursor_tile_space,
+            Some(second_tile)
+        );
+    }
+
+    #[test]
+    fn populate_scene_projects_cached_preview_in_builder_mode() {
+        let mut simulation = new_simulation();
+        let initial_tile = TileSpacePosition::from_indices(0, 1);
+        simulation.handle_input(FrameInput {
+            mode_toggle: true,
+            cursor_world_space: Some(Vec2::new(16.0, 48.0)),
+            cursor_tile_space: Some(initial_tile),
+        });
+
+        simulation.advance(Duration::ZERO);
+        assert!(simulation.queued_commands.is_empty());
+
+        let preview_tile = TileSpacePosition::from_indices(3, 2);
+        simulation.handle_input(FrameInput {
+            mode_toggle: false,
+            cursor_world_space: Some(Vec2::new(96.0, 64.0)),
+            cursor_tile_space: Some(preview_tile),
+        });
+
+        let mut scene = make_scene();
+        simulation.populate_scene(&mut scene);
+
+        assert_eq!(scene.play_mode, PlayMode::Builder);
+        assert_eq!(
+            scene.placement_preview,
+            Some(PlacementPreview::new(preview_tile, 1))
+        );
     }
 }

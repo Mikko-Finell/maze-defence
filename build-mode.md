@@ -195,7 +195,7 @@ This proposal:
 **Deliverables**
 
 * [x] Add `PlayMode` passthrough and a `PlacementPreview` struct (tile coordinate + size) to `Scene` in `adapters/rendering`.
-* [ ] Ensure `Scene::new`/`Scene` tests cover the new fields without introducing builder-only defaults.
+* [x] Ensure `Scene::new`/`Scene` tests cover the new fields without introducing builder-only defaults.
 * [x] Macroquad (and any future renderer) draws previews strictly from `Scene.placement_preview` — **no additional math or grid queries** performed in the adapter.
 
 **Goal**
@@ -208,12 +208,12 @@ This proposal:
 
 **Deliverables**
 
-* [ ] World unit test: SetPlayMode → bugs/occupancy vanish & reappear correctly.
-* [ ] Mode idempotence test (same mode twice = no extra events).
-* [ ] Movement/system test: no commands in builder mode.
-* [ ] Simulation test covering `handle_input` edge detection and preview caching (headless, no renderer).
-* [ ] Rendering crate unit tests validating snapping/clamping math for `PlacementPreview`.
-* [ ] (Optional) Macroquad smoke test ensuring preview defaults to `None` while in Attack mode.
+* [x] World unit test: SetPlayMode → bugs/occupancy vanish & reappear correctly.
+* [x] Mode idempotence test (same mode twice = no extra events).
+* [x] Movement/system test: no commands in builder mode.
+* [x] Simulation test covering `handle_input` edge detection and preview caching (headless, no renderer).
+* [x] Rendering crate unit tests validating snapping/clamping math for `PlacementPreview`.
+* [x] (Optional) Macroquad smoke test ensuring preview defaults to `None` while in Attack mode.
 
 **Goal**
 

@@ -16,3 +16,6 @@ maze-defence-core = { path = "../../core" }
 [[bin]]
 name = "maze-defence"
 path = "src/main.rs"
+
+[dev-dependencies]
+glam = "0.24"
