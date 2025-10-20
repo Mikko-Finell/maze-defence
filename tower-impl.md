@@ -11,7 +11,8 @@ Do not start working before you're read `tower-spec.md` so you understand the co
 * Add `TowerId`, `TowerKind`, `PlacementError`, `RemovalError`.
 * Add `Command::{PlaceTower, RemoveTower}` and `Event::{TowerPlaced, TowerRemoved, TowerPlacementRejected, TowerRemovalRejected}`.
 * No half-tile/visual types; all cell-space.
-  **Tests/Exit:** Core compiles; serialization round-trip tests for new types.
+
+**Tests/Exit:** Core compiles; serialization round-trip tests for new types.
 
 # 2) World scaffolding (no public behavior yet)
 
@@ -22,7 +23,8 @@ Do not start working before you're read `tower-spec.md` so you understand the co
 * Add `world::towers` module with `BTreeMap<TowerId, TowerState>`, `next_tower_id`.
 * Add `tower_occupancy: BitGrid` and integrate it into `is_cell_blocked` (behind feature gate so it’s dormant until towers exist).
 * Implement `footprint_for(kind)` (e.g., `Basic → 2×2` cells).
-  **Tests/Exit:** World compiles; `is_cell_blocked` unchanged when no towers exist; unit test proves folding logic is inert without entries.
+
+**Tests/Exit:** World compiles; `is_cell_blocked` unchanged when no towers exist; unit test proves folding logic is inert without entries.
 
 # 3) World handlers (authoritative mutation)
 
@@ -32,7 +34,8 @@ Do not start working before you're read `tower-spec.md` so you understand the co
 
 * Implement `apply(PlaceTower)`: mode check, alignment check, bounds, occupancy check, allocate id, set bits, insert, emit `TowerPlaced`; emit `TowerPlacementRejected` on any failure.
 * Implement `apply(RemoveTower)`: mode check, existence check, clear bits, remove, emit `TowerRemoved` (or `RemovalRejected`).
-  **Tests/Exit:** Pure world tests for each success/failure path; ID increments only on success; occupancy flips exactly the footprint; zero adapter/system changes yet.
+
+**Tests/Exit:** Pure world tests for each success/failure path; ID increments only on success; occupancy flips exactly the footprint; zero adapter/system changes yet.
 
 # 4) Read-only queries
 
@@ -42,7 +45,8 @@ Do not start working before you're read `tower-spec.md` so you understand the co
 
 * Add `query::towers(world) -> iter (TowerId, TowerKind, CellRect)`.
 * Add `query::tower_at(world, CellCoord) -> Option<TowerId>`.
-  **Tests/Exit:** Unit tests prove stable iteration order and accurate hit-tests over footprints.
+
+**Tests/Exit:** Unit tests prove stable iteration order and accurate hit-tests over footprints.
 
 # 5) Replay & determinism guard
 
@@ -52,7 +56,8 @@ Do not start working before you're read `tower-spec.md` so you understand the co
 
 * Add a tiny replay script: place/remove/place with mixed valid/invalid commands.
 * Assert world snapshot/journal hashes and event sequence are identical across runs.
-  **Tests/Exit:** New test runs in CI; marks a “determinism baseline” for towers.
+
+**Tests/Exit:** New test runs in CI; marks a “determinism baseline” for towers.
 
 # 6) Builder Tower System (pure systems layer)
 
@@ -63,7 +68,8 @@ Do not start working before you're read `tower-spec.md` so you understand the co
 * New system subscribes to play-mode/cache, consumes preview & `FrameInput`.
 * On confirm → `PlaceTower { kind, origin }`; on remove over hovered tower → `RemoveTower`.
 * No ID allocation, no world calls.
-  **Tests/Exit:** Headless system tests: only emits commands in Builder; never when Attack; emits nothing on invalid preview.
+
+**Tests/Exit:** Headless system tests: only emits commands in Builder; never when Attack; emits nothing on invalid preview.
 
 # 7) Simulation integration (preview math stays here)
 
@@ -73,7 +79,8 @@ Do not start working before you're read `tower-spec.md` so you understand the co
 
 * Extend preview to compute snapped `CellCoord` + candidate `CellRect` + “placeable” bool using queries.
 * Queue system-emitted commands into the world at the proper step boundary.
-  **Tests/Exit:** Headless sim tests: preview flags occupancy conflicts; successful confirm produces `TowerPlaced` after a tick.
+
+**Tests/Exit:** Headless sim tests: preview flags occupancy conflicts; successful confirm produces `TowerPlaced` after a tick.
 
 # 8) Scene & adapters (minimal rendering)
 
@@ -93,7 +100,8 @@ Do not start working before you're read `tower-spec.md` so you understand the co
 
 * Wire right-click/delete to emit `RemoveTower`.
 * Surface `Tower*Rejected` reasons back into preview tint/tooltips.
-  **Tests/Exit:** System tests cover removal; world tests cover all rejection reasons; scene reflects removals immediately.
+
+**Tests/Exit:** System tests cover removal; world tests cover all rejection reasons; scene reflects removals immediately.
 
 # 10) Hardening & docs
 
