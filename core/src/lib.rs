@@ -30,6 +30,8 @@ pub enum Command {
         columns: TileCoord,
         /// Number of tile rows laid out in the grid.
         rows: TileCoord,
+        /// Number of discrete cells that subdivide each tile edge.
+        cells_per_tile: u32,
         /// Length of each square tile measured in world units.
         tile_length: f32,
     },

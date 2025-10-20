@@ -16,7 +16,7 @@ fn deterministic_replay_produces_expected_snapshot() {
     assert_eq!(first, second, "replay diverged between runs");
 
     let fingerprint = first.fingerprint();
-    let expected = 0x5594_ab59_794f_5f2d;
+    let expected = 0xc9d3_068b_fa07_df8b;
     assert_eq!(
         fingerprint, expected,
         "fingerprint mismatch: {fingerprint:#x}"
@@ -92,6 +92,7 @@ fn scripted_commands() -> Vec<Command> {
         Command::ConfigureTileGrid {
             columns: TileCoord::new(5),
             rows: TileCoord::new(4),
+            cells_per_tile: 4,
             tile_length: 1.0,
         },
         Command::Tick {

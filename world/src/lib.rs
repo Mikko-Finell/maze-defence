@@ -19,6 +19,77 @@ const BUG_COUNT: usize = 20;
 const DEFAULT_GRID_COLUMNS: TileCoord = TileCoord::new(10);
 const DEFAULT_GRID_ROWS: TileCoord = TileCoord::new(10);
 const DEFAULT_TILE_LENGTH: f32 = 100.0;
+const DEFAULT_CELLS_PER_TILE: u32 = 1;
+
+const SIDE_BORDER_CELL_LAYERS: u32 = 1;
+const TOP_BORDER_CELL_LAYERS: u32 = 1;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct CellGeometry {
+    columns: u32,
+    rows: u32,
+    exit_row: u32,
+    exit_start_column: u32,
+    exit_width: u32,
+}
+
+impl CellGeometry {
+    fn new(columns: TileCoord, rows: TileCoord, cells_per_tile: u32) -> Self {
+        let cells_per_tile = cells_per_tile.max(1);
+        let has_tiles = columns.get() > 0 && rows.get() > 0;
+
+        let interior_columns = if has_tiles {
+            columns.get().saturating_mul(cells_per_tile)
+        } else {
+            0
+        };
+        let interior_rows = if has_tiles {
+            rows.get().saturating_mul(cells_per_tile)
+        } else {
+            0
+        };
+
+        let columns = if has_tiles {
+            interior_columns.saturating_add(SIDE_BORDER_CELL_LAYERS.saturating_mul(2))
+        } else {
+            0
+        };
+        let rows = if has_tiles {
+            interior_rows.saturating_add(TOP_BORDER_CELL_LAYERS)
+        } else {
+            0
+        };
+
+        let exit_width = if has_tiles {
+            cells_per_tile.min(interior_columns.max(1))
+        } else {
+            0
+        };
+        let exit_start_interior = if has_tiles && exit_width > 0 {
+            interior_columns.saturating_sub(exit_width) / 2
+        } else {
+            0
+        };
+        let exit_start_column = if has_tiles {
+            exit_start_interior.saturating_add(SIDE_BORDER_CELL_LAYERS)
+        } else {
+            0
+        };
+        let exit_row = if has_tiles { rows } else { 0 };
+
+        Self {
+            columns,
+            rows,
+            exit_row,
+            exit_start_column,
+            exit_width,
+        }
+    }
+
+    fn exit_columns(&self) -> impl Iterator<Item = u32> + '_ {
+        (0..self.exit_width).map(|offset| self.exit_start_column + offset)
+    }
+}
 
 const DEFAULT_STEP_QUANTUM: Duration = Duration::from_millis(250);
 const MIN_STEP_QUANTUM: Duration = Duration::from_micros(1);
@@ -29,16 +100,27 @@ pub struct TileGrid {
     columns: TileCoord,
     rows: TileCoord,
     tile_length: f32,
+    cells_per_tile: u32,
 }
 
 impl TileGrid {
     /// Creates a new tile grid description.
     #[must_use]
-    pub(crate) const fn new(columns: TileCoord, rows: TileCoord, tile_length: f32) -> Self {
+    pub(crate) const fn new(
+        columns: TileCoord,
+        rows: TileCoord,
+        tile_length: f32,
+        cells_per_tile: u32,
+    ) -> Self {
         Self {
             columns,
             rows,
             tile_length,
+            cells_per_tile: if cells_per_tile == 0 {
+                1
+            } else {
+                cells_per_tile
+            },
         }
     }
 
@@ -58,6 +140,12 @@ impl TileGrid {
     #[must_use]
     pub const fn tile_length(&self) -> f32 {
         self.tile_length
+    }
+
+    /// Number of discrete cells drawn along each tile edge.
+    #[must_use]
+    pub const fn cells_per_tile(&self) -> u32 {
+        self.cells_per_tile
     }
 
     /// Total width of the grid measured in world units.
@@ -82,9 +170,9 @@ pub struct Wall {
 impl Wall {
     /// Creates a new wall aligned with the provided grid dimensions.
     #[must_use]
-    pub(crate) fn new(columns: TileCoord, rows: TileCoord) -> Self {
+    pub(crate) fn new(geometry: CellGeometry) -> Self {
         Self {
-            target: Target::aligned_with_grid(columns, rows),
+            target: Target::aligned_with_grid(geometry),
         }
     }
 
@@ -102,9 +190,9 @@ pub struct Target {
 }
 
 impl Target {
-    fn aligned_with_grid(columns: TileCoord, rows: TileCoord) -> Self {
+    fn aligned_with_grid(geometry: CellGeometry) -> Self {
         Self {
-            cells: target_cells(columns, rows),
+            cells: target_cells(geometry),
         }
     }
 
@@ -118,27 +206,34 @@ impl Target {
 /// Discrete cell that composes part of the wall target.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct TargetCell {
-    column: TileCoord,
-    row: TileCoord,
+    coordinate: CellCoord,
 }
 
 impl TargetCell {
     /// Creates a new target cell located at the provided column and row.
     #[must_use]
-    pub const fn new(column: TileCoord, row: TileCoord) -> Self {
-        Self { column, row }
+    pub const fn new(column: u32, row: u32) -> Self {
+        Self {
+            coordinate: CellCoord::new(column, row),
+        }
     }
 
-    /// Column that contains the cell relative to the tile grid.
+    /// Column that contains the cell relative to the cell grid.
     #[must_use]
-    pub const fn column(&self) -> TileCoord {
-        self.column
+    pub const fn column(&self) -> u32 {
+        self.coordinate.column()
     }
 
-    /// Row that contains the cell relative to the tile grid.
+    /// Row that contains the cell relative to the cell grid.
     #[must_use]
-    pub const fn row(&self) -> TileCoord {
-        self.row
+    pub const fn row(&self) -> u32 {
+        self.coordinate.row()
+    }
+
+    /// Returns the underlying cell coordinate.
+    #[must_use]
+    pub const fn cell(&self) -> CellCoord {
+        self.coordinate
     }
 }
 
@@ -147,6 +242,7 @@ impl TargetCell {
 pub struct World {
     banner: &'static str,
     tile_grid: TileGrid,
+    cell_geometry: CellGeometry,
     wall: Wall,
     targets: Vec<CellCoord>,
     bugs: Vec<Bug>,
@@ -160,17 +256,28 @@ impl World {
     /// Creates a new Maze Defence world ready for simulation.
     #[must_use]
     pub fn new() -> Self {
-        let tile_grid = TileGrid::new(DEFAULT_GRID_COLUMNS, DEFAULT_GRID_ROWS, DEFAULT_TILE_LENGTH);
-        let wall = Wall::new(tile_grid.columns(), tile_grid.rows());
+        let tile_grid = TileGrid::new(
+            DEFAULT_GRID_COLUMNS,
+            DEFAULT_GRID_ROWS,
+            DEFAULT_TILE_LENGTH,
+            DEFAULT_CELLS_PER_TILE,
+        );
+        let cell_geometry = CellGeometry::new(
+            tile_grid.columns(),
+            tile_grid.rows(),
+            tile_grid.cells_per_tile(),
+        );
+        let wall = Wall::new(cell_geometry);
         let targets = target_cells_from_wall(&wall);
         let mut world = Self {
             banner: WELCOME_BANNER,
-            bugs: Vec::new(),
-            occupancy: OccupancyGrid::new(tile_grid.columns().get(), tile_grid.rows().get()),
-            reservations: ReservationFrame::new(),
+            tile_grid,
+            cell_geometry,
             wall,
             targets,
-            tile_grid,
+            bugs: Vec::new(),
+            occupancy: OccupancyGrid::new(cell_geometry.columns, cell_geometry.rows),
+            reservations: ReservationFrame::new(),
             tick_index: 0,
             step_quantum: DEFAULT_STEP_QUANTUM,
         };
@@ -179,7 +286,7 @@ impl World {
     }
 
     fn reset_bugs(&mut self) {
-        let generated = generate_bugs(self.tile_grid.columns(), self.tile_grid.rows());
+        let generated = generate_bugs(self.cell_geometry);
         self.bugs = generated
             .into_iter()
             .map(|seed| Bug::from_seed(seed.id, seed.cell, seed.color))
@@ -264,12 +371,15 @@ pub fn apply(world: &mut World, command: Command, out_events: &mut Vec<Event>) {
         Command::ConfigureTileGrid {
             columns,
             rows,
+            cells_per_tile,
             tile_length,
         } => {
-            world.tile_grid = TileGrid::new(columns, rows, tile_length);
-            world.wall = Wall::new(columns, rows);
+            world.tile_grid = TileGrid::new(columns, rows, tile_length, cells_per_tile);
+            world.cell_geometry = CellGeometry::new(columns, rows, cells_per_tile);
+            world.wall = Wall::new(world.cell_geometry);
             world.targets = target_cells_from_wall(&world.wall);
-            world.occupancy = OccupancyGrid::new(columns.get(), rows.get());
+            world.occupancy =
+                OccupancyGrid::new(world.cell_geometry.columns, world.cell_geometry.rows);
             world.reset_bugs();
         }
         Command::Tick { dt } => {
@@ -605,24 +715,15 @@ impl OccupancyGrid {
     }
 }
 
-fn target_cells(columns: TileCoord, rows: TileCoord) -> Vec<TargetCell> {
-    let column_count = columns.get();
-    let row_count = rows.get();
-
-    if column_count == 0 || row_count == 0 {
+fn target_cells(geometry: CellGeometry) -> Vec<TargetCell> {
+    if geometry.exit_width == 0 {
         return Vec::new();
     }
 
-    let center_column = if column_count % 2 == 0 {
-        (column_count - 1) / 2
-    } else {
-        column_count / 2
-    };
-
-    vec![TargetCell::new(
-        TileCoord::new(center_column),
-        TileCoord::new(row_count),
-    )]
+    geometry
+        .exit_columns()
+        .map(|column| TargetCell::new(column, geometry.exit_row))
+        .collect()
 }
 
 fn advance_cell(
@@ -665,16 +766,12 @@ fn advance_cell(
 }
 
 fn target_cells_from_wall(wall: &Wall) -> Vec<CellCoord> {
-    wall.target()
-        .cells()
-        .iter()
-        .map(|cell| CellCoord::new(cell.column().get(), cell.row().get()))
-        .collect()
+    wall.target().cells().iter().map(TargetCell::cell).collect()
 }
 
-fn generate_bugs(columns: TileCoord, rows: TileCoord) -> Vec<BugSeed> {
-    let column_count = columns.get();
-    let row_count = rows.get();
+fn generate_bugs(geometry: CellGeometry) -> Vec<BugSeed> {
+    let column_count = geometry.columns;
+    let row_count = geometry.rows;
 
     if column_count == 0 || row_count == 0 {
         return Vec::new();
@@ -740,12 +837,14 @@ mod tests {
         let expected_columns = TileCoord::new(12);
         let expected_rows = TileCoord::new(8);
         let expected_tile_length = 75.0;
+        let expected_cells_per_tile = 6;
 
         apply(
             &mut world,
             Command::ConfigureTileGrid {
                 columns: expected_columns,
                 rows: expected_rows,
+                cells_per_tile: expected_cells_per_tile,
                 tile_length: expected_tile_length,
             },
             &mut events,
@@ -756,6 +855,7 @@ mod tests {
         assert_eq!(tile_grid.columns(), expected_columns);
         assert_eq!(tile_grid.rows(), expected_rows);
         assert_eq!(tile_grid.tile_length(), expected_tile_length);
+        assert_eq!(tile_grid.cells_per_tile(), expected_cells_per_tile);
         assert!(events.is_empty());
     }
 
@@ -765,20 +865,23 @@ mod tests {
         let mut events = Vec::new();
         let columns = TileCoord::new(8);
         let rows = TileCoord::new(6);
+        let cells_per_tile = 4;
 
         apply(
             &mut world,
             Command::ConfigureTileGrid {
                 columns,
                 rows,
+                cells_per_tile,
                 tile_length: 32.0,
             },
             &mut events,
         );
 
+        let (cell_columns, cell_rows) = query::occupancy_view(&world).dimensions();
         for bug in query::bug_view(&world).iter() {
-            assert!(bug.cell.column() < columns.get());
-            assert!(bug.cell.row() < rows.get());
+            assert!(bug.cell.column() < cell_columns);
+            assert!(bug.cell.row() < cell_rows);
         }
         assert!(events.is_empty());
     }
@@ -793,13 +896,18 @@ mod tests {
             Command::ConfigureTileGrid {
                 columns: TileCoord::new(1),
                 rows: TileCoord::new(1),
+                cells_per_tile: 4,
                 tile_length: 25.0,
             },
             &mut events,
         );
 
+        let (cell_columns, cell_rows) = query::occupancy_view(&world).dimensions();
+        let available_cells = u64::from(cell_columns) * u64::from(cell_rows);
+        let available_cells = usize::try_from(available_cells).unwrap_or(usize::MAX);
+        let expected = BUG_COUNT.min(available_cells.saturating_sub(1));
         let bugs = query::bug_view(&world).into_vec();
-        assert!(bugs.is_empty());
+        assert_eq!(bugs.len(), expected);
         assert!(events.is_empty());
     }
 
@@ -815,6 +923,7 @@ mod tests {
             Command::ConfigureTileGrid {
                 columns: TileCoord::new(12),
                 rows: TileCoord::new(9),
+                cells_per_tile: 4,
                 tile_length: 50.0,
             },
             &mut first_events,
@@ -825,6 +934,7 @@ mod tests {
             Command::ConfigureTileGrid {
                 columns: TileCoord::new(12),
                 rows: TileCoord::new(9),
+                cells_per_tile: 4,
                 tile_length: 50.0,
             },
             &mut second_events,
@@ -847,17 +957,21 @@ mod tests {
             Command::ConfigureTileGrid {
                 columns: TileCoord::new(9),
                 rows: TileCoord::new(7),
+                cells_per_tile: 4,
                 tile_length: 64.0,
             },
             &mut events,
         );
 
+        let geometry = CellGeometry::new(TileCoord::new(9), TileCoord::new(7), 4);
+        let expected_columns: Vec<u32> = geometry.exit_columns().collect();
         let target_cells = query::target(&world).cells();
 
-        assert_eq!(target_cells.len(), 1);
-        let cell = target_cells[0];
-        assert_eq!(cell.column().get(), 4);
-        assert_eq!(cell.row().get(), 7);
+        assert_eq!(target_cells.len(), expected_columns.len());
+        for (cell, expected_column) in target_cells.iter().zip(expected_columns) {
+            assert_eq!(cell.column(), expected_column);
+            assert_eq!(cell.row(), geometry.exit_row);
+        }
         assert!(events.is_empty());
     }
 
@@ -871,17 +985,21 @@ mod tests {
             Command::ConfigureTileGrid {
                 columns: TileCoord::new(12),
                 rows: TileCoord::new(6),
+                cells_per_tile: 4,
                 tile_length: 64.0,
             },
             &mut events,
         );
 
+        let geometry = CellGeometry::new(TileCoord::new(12), TileCoord::new(6), 4);
+        let expected_columns: Vec<u32> = geometry.exit_columns().collect();
         let target_cells = query::target(&world).cells();
 
-        assert_eq!(target_cells.len(), 1);
-        let cell = target_cells[0];
-        assert_eq!(cell.column().get(), 5);
-        assert_eq!(cell.row().get(), 6);
+        assert_eq!(target_cells.len(), expected_columns.len());
+        for (cell, expected_column) in target_cells.iter().zip(expected_columns) {
+            assert_eq!(cell.column(), expected_column);
+            assert_eq!(cell.row(), geometry.exit_row);
+        }
         assert!(events.is_empty());
     }
 
@@ -895,6 +1013,7 @@ mod tests {
             Command::ConfigureTileGrid {
                 columns: TileCoord::new(0),
                 rows: TileCoord::new(0),
+                cells_per_tile: 4,
                 tile_length: 32.0,
             },
             &mut events,
@@ -914,6 +1033,7 @@ mod tests {
             Command::ConfigureTileGrid {
                 columns: TileCoord::new(5),
                 rows: TileCoord::new(4),
+                cells_per_tile: 4,
                 tile_length: 1.0,
             },
             &mut events,
@@ -921,8 +1041,10 @@ mod tests {
 
         assert!(events.is_empty());
 
+        let geometry = CellGeometry::new(TileCoord::new(5), TileCoord::new(4), 4);
+        let expected_column = geometry.exit_columns().next().expect("missing exit column");
+        let expected = CellCoord::new(expected_column, geometry.exit_row);
         let goal = query::goal_for(&world, CellCoord::new(0, 0));
-        let expected = CellCoord::new(2, 4);
         assert_eq!(goal, Some(Goal::at(expected)));
     }
 

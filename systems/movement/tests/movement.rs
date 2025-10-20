@@ -13,6 +13,7 @@ fn emits_step_commands_toward_target() {
         Command::ConfigureTileGrid {
             columns: TileCoord::new(5),
             rows: TileCoord::new(4),
+            cells_per_tile: 4,
             tile_length: 1.0,
         },
         &mut events,
@@ -81,6 +82,7 @@ fn step_commands_target_free_cells() {
         Command::ConfigureTileGrid {
             columns: TileCoord::new(5),
             rows: TileCoord::new(4),
+            cells_per_tile: 4,
             tile_length: 1.0,
         },
         &mut events,
@@ -137,6 +139,7 @@ fn replans_after_failed_step() {
         Command::ConfigureTileGrid {
             columns: TileCoord::new(3),
             rows: TileCoord::new(3),
+            cells_per_tile: 4,
             tile_length: 1.0,
         },
         &mut events,
@@ -154,16 +157,16 @@ fn replans_after_failed_step() {
         &mut tick_events,
     );
 
-    let tile_grid = query::tile_grid(&world);
     let target_cells = query::target_cells(&world);
     let target_columns: Vec<u32> = target_cells.iter().map(|cell| cell.column()).collect();
     let bug_view = query::bug_view(&world);
     let occupancy_view_initial = query::occupancy_view(&world);
+    let (columns, rows) = occupancy_view_initial.dimensions();
     let (bug_id, blocked_direction) = select_blocked_bug(
         &bug_view,
         occupancy_view_initial,
-        tile_grid.columns().get(),
-        tile_grid.rows().get(),
+        columns,
+        rows,
         &target_columns,
     )
     .expect("expected at least one bug on a boundary");
