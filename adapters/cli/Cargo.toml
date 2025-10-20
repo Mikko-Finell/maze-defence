@@ -8,6 +8,7 @@ anyhow.workspace = true
 clap = { version = "4.4", features = ["derive"] }
 maze-defence-system-bootstrap = { path = "../../systems/bootstrap" }
 maze-defence-system-movement = { path = "../../systems/movement" }
+maze-defence-system-spawning = { path = "../../systems/spawning" }
 maze-defence-world = { path = "../../world" }
 maze-defence-rendering = { path = "../rendering" }
 maze-defence-rendering-macroquad = { path = "../rendering_macroquad" }

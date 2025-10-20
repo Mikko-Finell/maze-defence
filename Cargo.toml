@@ -4,6 +4,7 @@ members = [
     "world",
     "systems/bootstrap",
     "systems/movement",
+    "systems/spawning",
     "adapters/rendering",
     "adapters/rendering_macroquad",
     "adapters/cli",
