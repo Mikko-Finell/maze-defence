@@ -22,8 +22,10 @@ const DEFAULT_CELLS_PER_TILE: u32 = 1;
 
 const DEFAULT_STEP_QUANTUM: Duration = Duration::from_millis(250);
 const MIN_STEP_QUANTUM: Duration = Duration::from_micros(1);
-const SIDE_BORDER_CELL_LAYERS: u32 = 1;
-const TOP_BORDER_CELL_LAYERS: u32 = 1;
+const LEFT_BORDER_CELL_LAYERS: u32 = 1;
+const RIGHT_BORDER_CELL_LAYERS: u32 = 1;
+const UPPER_BORDER_CELL_LAYERS: u32 = 1;
+const LOWER_BORDER_CELL_LAYERS: u32 = 0;
 
 /// Describes the discrete tile layout of the world.
 #[derive(Debug)]
@@ -723,7 +725,9 @@ fn total_cell_columns(columns: TileCoord, cells_per_tile: u32) -> u32 {
     if interior == 0 {
         0
     } else {
-        interior.saturating_add(SIDE_BORDER_CELL_LAYERS.saturating_mul(2))
+        interior
+            .saturating_add(LEFT_BORDER_CELL_LAYERS)
+            .saturating_add(RIGHT_BORDER_CELL_LAYERS)
     }
 }
 
@@ -732,12 +736,12 @@ fn total_cell_rows(rows: TileCoord, cells_per_tile: u32) -> u32 {
     if interior == 0 {
         0
     } else {
-        interior.saturating_add(TOP_BORDER_CELL_LAYERS)
+        interior.saturating_add(UPPER_BORDER_CELL_LAYERS)
     }
 }
 
 fn exit_row_for_tile_grid(rows: TileCoord, cells_per_tile: u32) -> u32 {
-    total_cell_rows(rows, cells_per_tile)
+    interior_cell_rows(rows, cells_per_tile).saturating_add(LOWER_BORDER_CELL_LAYERS)
 }
 
 fn exit_columns_for_tile_grid(columns: TileCoord, cells_per_tile: u32) -> Vec<u32> {
@@ -751,7 +755,7 @@ fn exit_columns_for_tile_grid(columns: TileCoord, cells_per_tile: u32) -> Vec<u3
     } else {
         tile_columns / 2
     };
-    let left_margin = SIDE_BORDER_CELL_LAYERS;
+    let left_margin = LEFT_BORDER_CELL_LAYERS;
     let start_column = left_margin.saturating_add(center_tile.saturating_mul(cells_per_tile));
 
     (0..cells_per_tile)
@@ -1384,7 +1388,7 @@ mod tests {
         );
         let expected_row = exit_row_for_tile_grid(TileCoord::new(7), cells_per_tile);
         let expected_start =
-            SIDE_BORDER_CELL_LAYERS.saturating_add(4_u32.saturating_mul(cells_per_tile));
+            LEFT_BORDER_CELL_LAYERS.saturating_add(4_u32.saturating_mul(cells_per_tile));
         let expected_columns: Vec<u32> = (0..cells_per_tile)
             .map(|offset| expected_start + offset)
             .collect();
@@ -1419,7 +1423,7 @@ mod tests {
         );
         let expected_row = exit_row_for_tile_grid(TileCoord::new(6), cells_per_tile);
         let expected_start =
-            SIDE_BORDER_CELL_LAYERS.saturating_add(5_u32.saturating_mul(cells_per_tile));
+            LEFT_BORDER_CELL_LAYERS.saturating_add(5_u32.saturating_mul(cells_per_tile));
         let expected_columns: Vec<u32> = (0..cells_per_tile)
             .map(|offset| expected_start + offset)
             .collect();

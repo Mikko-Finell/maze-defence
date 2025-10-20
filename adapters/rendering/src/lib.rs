@@ -185,8 +185,11 @@ impl TileGridPresentation {
     /// Default number of cells drawn along each tile edge.
     pub const DEFAULT_CELLS_PER_TILE: u32 = 4;
 
-    /// Number of cell layers rendered outside the tile grid on each side.
-    pub const SIDE_BORDER_CELL_LAYERS: u32 = 1;
+    /// Number of cell layers rendered to the left of the tile grid.
+    pub const LEFT_BORDER_CELL_LAYERS: u32 = 1;
+
+    /// Number of cell layers rendered to the right of the tile grid.
+    pub const RIGHT_BORDER_CELL_LAYERS: u32 = 1;
 
     /// Number of cell layers rendered above the tile grid.
     pub const TOP_BORDER_CELL_LAYERS: u32 = 1;
@@ -239,7 +242,9 @@ impl TileGridPresentation {
     /// Calculates the total width of the grid including the surrounding cell border.
     #[must_use]
     pub const fn bordered_width(&self) -> f32 {
-        self.width() + 2.0 * self.cell_length() * Self::SIDE_BORDER_CELL_LAYERS as f32
+        self.width()
+            + self.cell_length()
+                * (Self::LEFT_BORDER_CELL_LAYERS + Self::RIGHT_BORDER_CELL_LAYERS) as f32
     }
 
     /// Calculates the total height of the grid including the surrounding cell border.

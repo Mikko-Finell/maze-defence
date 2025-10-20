@@ -159,7 +159,7 @@ impl SceneMetrics {
             tile_step / tile_grid.cells_per_tile as f32
         };
         let grid_offset_x =
-            offset_x + TileGridPresentation::SIDE_BORDER_CELL_LAYERS as f32 * cell_step;
+            offset_x + TileGridPresentation::LEFT_BORDER_CELL_LAYERS as f32 * cell_step;
         let grid_offset_y =
             offset_y + TileGridPresentation::TOP_BORDER_CELL_LAYERS as f32 * cell_step;
 
@@ -264,7 +264,8 @@ fn draw_subgrid(
     subgrid_color: macroquad::color::Color,
 ) {
     let total_subcolumns = tile_grid.columns * tile_grid.cells_per_tile
-        + 2 * TileGridPresentation::SIDE_BORDER_CELL_LAYERS;
+        + TileGridPresentation::LEFT_BORDER_CELL_LAYERS
+        + TileGridPresentation::RIGHT_BORDER_CELL_LAYERS;
     for column in 0..=total_subcolumns {
         let x = metrics.offset_x + column as f32 * metrics.cell_step;
         macroquad::shapes::draw_line(
