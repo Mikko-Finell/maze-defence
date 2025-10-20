@@ -22,6 +22,8 @@ const DEFAULT_CELLS_PER_TILE: u32 = 1;
 
 const DEFAULT_STEP_QUANTUM: Duration = Duration::from_millis(250);
 const MIN_STEP_QUANTUM: Duration = Duration::from_micros(1);
+const SIDE_BORDER_CELL_LAYERS: u32 = 1;
+const TOP_BORDER_CELL_LAYERS: u32 = 1;
 
 /// Describes the discrete tile layout of the world.
 #[derive(Debug)]
@@ -717,11 +719,21 @@ fn interior_cell_rows(rows: TileCoord, cells_per_tile: u32) -> u32 {
 }
 
 fn total_cell_columns(columns: TileCoord, cells_per_tile: u32) -> u32 {
-    interior_cell_columns(columns, cells_per_tile)
+    let interior = interior_cell_columns(columns, cells_per_tile);
+    if interior == 0 {
+        0
+    } else {
+        interior.saturating_add(SIDE_BORDER_CELL_LAYERS.saturating_mul(2))
+    }
 }
 
 fn total_cell_rows(rows: TileCoord, cells_per_tile: u32) -> u32 {
-    interior_cell_rows(rows, cells_per_tile)
+    let interior = interior_cell_rows(rows, cells_per_tile);
+    if interior == 0 {
+        0
+    } else {
+        interior.saturating_add(TOP_BORDER_CELL_LAYERS)
+    }
 }
 
 fn exit_row_for_tile_grid(rows: TileCoord, cells_per_tile: u32) -> u32 {
@@ -739,7 +751,8 @@ fn exit_columns_for_tile_grid(columns: TileCoord, cells_per_tile: u32) -> Vec<u3
     } else {
         tile_columns / 2
     };
-    let start_column = center_tile.saturating_mul(cells_per_tile);
+    let left_margin = SIDE_BORDER_CELL_LAYERS;
+    let start_column = left_margin.saturating_add(center_tile.saturating_mul(cells_per_tile));
 
     (0..cells_per_tile)
         .map(|offset| start_column.saturating_add(offset))
@@ -1219,7 +1232,9 @@ mod tests {
         );
 
         let (columns, rows) = world.occupancy.dimensions();
-        assert_eq!((columns, rows), (4, 6));
+        let expected_columns = total_cell_columns(TileCoord::new(2), 2);
+        let expected_rows = total_cell_rows(TileCoord::new(3), 2);
+        assert_eq!((columns, rows), (expected_columns, expected_rows));
         let expected = expected_outer_rim(columns, rows);
 
         assert_eq!(world.bug_spawners.cells(), &expected);
@@ -1368,7 +1383,8 @@ mod tests {
             usize::try_from(cells_per_tile).expect("cells_per_tile fits in usize")
         );
         let expected_row = exit_row_for_tile_grid(TileCoord::new(7), cells_per_tile);
-        let expected_start = 4_u32.saturating_mul(cells_per_tile);
+        let expected_start =
+            SIDE_BORDER_CELL_LAYERS.saturating_add(4_u32.saturating_mul(cells_per_tile));
         let expected_columns: Vec<u32> = (0..cells_per_tile)
             .map(|offset| expected_start + offset)
             .collect();
@@ -1402,7 +1418,8 @@ mod tests {
             usize::try_from(cells_per_tile).expect("cells_per_tile fits in usize")
         );
         let expected_row = exit_row_for_tile_grid(TileCoord::new(6), cells_per_tile);
-        let expected_start = 5_u32.saturating_mul(cells_per_tile);
+        let expected_start =
+            SIDE_BORDER_CELL_LAYERS.saturating_add(5_u32.saturating_mul(cells_per_tile));
         let expected_columns: Vec<u32> = (0..cells_per_tile)
             .map(|offset| expected_start + offset)
             .collect();
@@ -1451,7 +1468,14 @@ mod tests {
         assert!(events.is_empty());
 
         let goal = query::goal_for(&world, CellCoord::new(0, 0));
-        let expected = CellCoord::new(2, 4);
+        let expected_columns = exit_columns_for_tile_grid(TileCoord::new(5), 1);
+        let expected_column = *expected_columns
+            .first()
+            .expect("expected at least one target column");
+        let expected = CellCoord::new(
+            expected_column,
+            exit_row_for_tile_grid(TileCoord::new(4), 1),
+        );
         assert_eq!(goal, Some(Goal::at(expected)));
     }
 

@@ -119,7 +119,7 @@ fn deterministic_replay_produces_identical_sequence() {
     assert_eq!(first, second, "replay diverged between runs");
 
     let fingerprint = first.fingerprint();
-    let expected = 0xb1b6_5e5a_69ce_b95d;
+    let expected = 0xc8d4_045b_b4dc_9240;
     assert_eq!(
         fingerprint, expected,
         "fingerprint mismatch: {fingerprint:#x}",
