@@ -51,7 +51,7 @@ fn step_commands_target_free_cells() {
     world::apply(
         &mut world,
         Command::Tick {
-            dt: Duration::from_secs(1),
+            dt: Duration::from_millis(250),
         },
         &mut tick_events,
     );
@@ -59,7 +59,7 @@ fn step_commands_target_free_cells() {
     let bug_view = query::bug_view(&world);
     let occupancy_view = query::occupancy_view(&world);
     let mut commands = Vec::new();
-    let target_cells = query::available_target_cells(&world);
+    let target_cells = query::target_cells(&world);
     movement.handle(
         &tick_events,
         &bug_view,
@@ -107,7 +107,7 @@ fn replans_when_world_requests_new_path() {
     world::apply(
         &mut world,
         Command::Tick {
-            dt: Duration::from_secs(1),
+            dt: Duration::from_millis(250),
         },
         &mut tick_events,
     );
@@ -150,7 +150,7 @@ fn pump_system(world: &mut World, movement: &mut Movement, mut events: Vec<Event
         let bug_view = query::bug_view(world);
         let occupancy_view = query::occupancy_view(world);
         let mut commands = Vec::new();
-        let target_cells = query::available_target_cells(world);
+        let target_cells = query::target_cells(world);
         movement.handle(
             &events,
             &bug_view,

@@ -20,7 +20,8 @@ const DEFAULT_GRID_COLUMNS: TileCoord = TileCoord::new(10);
 const DEFAULT_GRID_ROWS: TileCoord = TileCoord::new(10);
 const DEFAULT_TILE_LENGTH: f32 = 100.0;
 
-const STEP_QUANTUM: Duration = Duration::from_secs(1);
+const DEFAULT_STEP_QUANTUM: Duration = Duration::from_millis(250);
+const MIN_STEP_QUANTUM: Duration = Duration::from_micros(1);
 
 /// Describes the discrete tile layout of the world.
 #[derive(Debug)]
@@ -152,6 +153,7 @@ pub struct World {
     occupancy: OccupancyGrid,
     reservations: ReservationFrame,
     tick_index: u64,
+    step_quantum: Duration,
 }
 
 impl World {
@@ -170,6 +172,7 @@ impl World {
             targets,
             tile_grid,
             tick_index: 0,
+            step_quantum: DEFAULT_STEP_QUANTUM,
         };
         world.reset_bugs();
         world
@@ -213,7 +216,7 @@ impl World {
             let bug = &mut after[0];
             let from = bug.cell;
 
-            if bug.accumulator < STEP_QUANTUM {
+            if bug.accumulator < self.step_quantum {
                 continue;
             }
 
@@ -253,7 +256,7 @@ impl World {
             self.occupancy.vacate(from);
             self.occupancy.occupy(bug.id, next_cell);
             bug.advance(next_cell);
-            bug.accumulator = bug.accumulator.saturating_sub(STEP_QUANTUM);
+            bug.accumulator = bug.accumulator.saturating_sub(self.step_quantum);
             out_events.push(Event::BugAdvanced {
                 bug_id: bug.id,
                 from,
@@ -266,7 +269,7 @@ impl World {
                 continue;
             }
 
-            if bug.next_step().is_none() && bug.accumulator >= STEP_QUANTUM {
+            if bug.next_step().is_none() && bug.accumulator >= self.step_quantum {
                 if bug.mark_path_needed() {
                     out_events.push(Event::BugPathNeeded { bug_id: bug.id });
                 }
@@ -305,9 +308,23 @@ pub fn apply(world: &mut World, command: Command, out_events: &mut Vec<Event>) {
             world.tick_index = world.tick_index.saturating_add(1);
             out_events.push(Event::TimeAdvanced { dt });
 
+            let step_quantum = world.step_quantum;
             for bug in world.iter_bugs_mut() {
                 bug.accumulator = bug.accumulator.saturating_add(dt);
-                if bug.accumulator >= STEP_QUANTUM && bug.next_step().is_none() {
+                if bug.accumulator >= step_quantum && bug.next_step().is_none() {
+                    if bug.mark_path_needed() {
+                        out_events.push(Event::BugPathNeeded { bug_id: bug.id });
+                    }
+                }
+            }
+        }
+        Command::ConfigureBugStep { step_duration } => {
+            let clamped = step_duration.max(MIN_STEP_QUANTUM);
+            world.step_quantum = clamped;
+
+            let step_quantum = world.step_quantum;
+            for bug in world.iter_bugs_mut() {
+                if bug.accumulator >= step_quantum && bug.next_step().is_none() {
                     if bug.mark_path_needed() {
                         out_events.push(Event::BugPathNeeded { bug_id: bug.id });
                     }
@@ -380,7 +397,7 @@ pub mod query {
                 cell: bug.cell,
                 color: bug.color,
                 next_hop: bug.next_step(),
-                ready_for_step: bug.ready_for_step(),
+                ready_for_step: bug.ready_for_step(world.step_quantum),
                 needs_path: bug.path_needed,
                 accumulated: bug.accumulator,
             })
@@ -397,15 +414,10 @@ pub mod query {
         }
     }
 
-    /// Enumerates the target cells that are currently unoccupied.
+    /// Enumerates the wall target cells bugs should attempt to reach.
     #[must_use]
-    pub fn available_target_cells(world: &World) -> Vec<CellCoord> {
-        world
-            .targets
-            .iter()
-            .copied()
-            .filter(|cell| world.occupancy.can_enter(*cell))
-            .collect()
+    pub fn target_cells(world: &World) -> Vec<CellCoord> {
+        world.targets.clone()
     }
 
     /// Read-only snapshot describing all bugs within the maze.
@@ -572,8 +584,8 @@ impl Bug {
         self.path_needed = false;
     }
 
-    fn ready_for_step(&self) -> bool {
-        self.accumulator >= STEP_QUANTUM
+    fn ready_for_step(&self, step_quantum: Duration) -> bool {
+        self.accumulator >= step_quantum
     }
 
     fn clear_path(&mut self) {
@@ -982,5 +994,36 @@ mod tests {
 
         assert!(query::target(&world).cells().is_empty());
         assert!(events.is_empty());
+    }
+
+    #[test]
+    fn configure_bug_step_adjusts_quantum() {
+        let mut world = World::new();
+        let mut events = Vec::new();
+
+        apply(
+            &mut world,
+            Command::ConfigureBugStep {
+                step_duration: Duration::from_millis(125),
+            },
+            &mut events,
+        );
+
+        assert!(events.is_empty());
+
+        apply(
+            &mut world,
+            Command::Tick {
+                dt: Duration::from_millis(125),
+            },
+            &mut events,
+        );
+
+        assert!(events
+            .iter()
+            .any(|event| matches!(event, Event::TimeAdvanced { .. })));
+
+        let bug_view = query::bug_view(&world);
+        assert!(bug_view.iter().any(|bug| bug.ready_for_step));
     }
 }

@@ -16,7 +16,7 @@ fn deterministic_replay_produces_expected_snapshot() {
     assert_eq!(first, second, "replay diverged between runs");
 
     let fingerprint = first.fingerprint();
-    let expected = 0x02ec_3363_a015_c681;
+    let expected = 0x5a32_f394_2458_86f1;
     assert_eq!(
         fingerprint, expected,
         "fingerprint mismatch: {fingerprint:#x}"
@@ -60,7 +60,7 @@ fn process_movement(
         let bug_view = query::bug_view(world);
         let occupancy_view = query::occupancy_view(world);
         let mut commands = Vec::new();
-        let target_cells = query::available_target_cells(world);
+        let target_cells = query::target_cells(world);
         movement.handle(
             &events,
             &bug_view,

@@ -10,7 +10,7 @@ Use Cargo to start the CLI adapter from the workspace root:
 cargo run --bin maze-defence
 ```
 
-By default the grid measures **10×10 tiles** and the surrounding wall thickness is **40 pixels**.
+By default the grid measures **10×10 tiles**, the surrounding wall thickness is **40 pixels**, and bugs attempt a step every **250 milliseconds** (roughly four moves per second).
 
 ## Configuring the grid size
 
@@ -35,3 +35,13 @@ cargo run --bin maze-defence -- --wall-thickness 64
 ```
 
 Combine this flag with either of the grid size options to customise the scene at launch.
+
+## Adjusting bug speed
+
+Bugs sprint toward the wall opening every 250 milliseconds by default. Use the `--bug-step-ms` flag to control the interval between their moves:
+
+```bash
+cargo run --bin maze-defence -- --bug-step-ms 400
+```
+
+Larger values slow the swarm down while smaller numbers make them more aggressive. The flag accepts any value between 1 and 60,000 milliseconds.
