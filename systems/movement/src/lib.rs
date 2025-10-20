@@ -23,7 +23,6 @@ pub struct Movement {
     frontier: BinaryHeap<Reverse<NodeState>>,
     came_from: Vec<Option<CellCoord>>,
     g_score: Vec<u32>,
-    path_buffer: Vec<CellCoord>,
     needs_path: Vec<BugId>,
     targets: Vec<CellCoord>,
     target_columns: Vec<u32>,
@@ -92,10 +91,12 @@ impl Movement {
                 continue;
             };
 
-            if let Some(path) = self.plan_path(snapshot, occupancy_view, columns, rows) {
-                if !path.is_empty() {
-                    out.push(Command::SetBugPath { bug_id, path });
-                }
+            if let Some(next_hop) = self.plan_next_hop(snapshot, occupancy_view, columns, rows)
+            {
+                out.push(Command::SetBugPath {
+                    bug_id,
+                    path: vec![next_hop],
+                });
             }
         }
         self.needs_path = requests;
@@ -130,13 +131,13 @@ impl Movement {
         }
     }
 
-    fn plan_path(
+    fn plan_next_hop(
         &mut self,
         bug: &BugSnapshot,
         _occupancy_view: OccupancyView<'_>,
         columns: u32,
         rows: u32,
-    ) -> Option<Vec<CellCoord>> {
+    ) -> Option<CellCoord> {
         if self.targets.is_empty() {
             return None;
         }
@@ -158,9 +159,12 @@ impl Movement {
 
         while let Some(Reverse(current)) = self.frontier.pop() {
             if self.targets.iter().any(|target| *target == current.cell) {
-                self.reconstruct_path(bug.cell, current.cell, columns, rows_with_exit);
-                let path: Vec<CellCoord> = self.path_buffer.drain(..).collect();
-                return Some(path);
+                return self.reconstruct_first_hop(
+                    bug.cell,
+                    current.cell,
+                    columns,
+                    rows_with_exit,
+                );
             }
 
             let neighbors = enumerate_neighbors(current.cell, columns, rows, &self.target_columns);
@@ -187,26 +191,27 @@ impl Movement {
         None
     }
 
-    fn reconstruct_path(&mut self, start: CellCoord, goal: CellCoord, columns: u32, rows: u32) {
-        self.path_buffer.clear();
-
+    fn reconstruct_first_hop(
+        &self,
+        start: CellCoord,
+        goal: CellCoord,
+        columns: u32,
+        rows: u32,
+    ) -> Option<CellCoord> {
         let mut current = goal;
-        while current != start {
-            self.path_buffer.push(current);
-            let Some(index) = index(columns, rows, current) else {
-                self.path_buffer.clear();
-                return;
+
+        loop {
+            let index = index(columns, rows, current)?;
+            let Some(previous) = self.came_from[index] else {
+                return None;
             };
 
-            let Some(previous) = self.came_from[index] else {
-                self.path_buffer.clear();
-                return;
-            };
+            if previous == start {
+                return Some(current);
+            }
 
             current = previous;
         }
-
-        self.path_buffer.reverse();
     }
 
     fn prepare_workspace(&mut self, columns: u32, rows: u32, targets: &[CellCoord]) -> usize {
@@ -245,7 +250,6 @@ impl Movement {
         for entry in self.came_from.iter_mut().take(self.active_nodes) {
             *entry = None;
         }
-        self.path_buffer.clear();
     }
 }
 
