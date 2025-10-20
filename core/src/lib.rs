@@ -32,6 +32,8 @@ pub enum Command {
         rows: TileCoord,
         /// Length of each square tile measured in world units.
         tile_length: f32,
+        /// Number of navigation cells subdividing each tile edge.
+        cells_per_tile: u32,
     },
     /// Updates the duration a bug must accumulate before attempting another step.
     ConfigureBugStep {
