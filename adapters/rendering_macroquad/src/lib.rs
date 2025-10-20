@@ -91,8 +91,7 @@ impl RenderingBackend for MacroquadBackend {
                 for BugPresentation { column, row, color } in &scene.bugs {
                     let bug_center_x =
                         metrics.offset_x + (*column as f32 + 0.5) * metrics.cell_step;
-                    let bug_center_y =
-                        metrics.offset_y + (*row as f32 + 0.5) * metrics.cell_step;
+                    let bug_center_y = metrics.offset_y + (*row as f32 + 0.5) * metrics.cell_step;
                     let border_thickness = (bug_radius * 0.2).max(1.0);
                     macroquad::shapes::draw_circle(
                         bug_center_x,
@@ -332,8 +331,8 @@ fn draw_wall(
     let wall_color = to_macroquad_color(wall.color);
     let wall_height = wall.thickness * metrics.scale;
     let wall_y = metrics.offset_y + metrics.bordered_grid_height_scaled;
-    let wall_left = metrics.grid_offset_x;
-    let wall_right = metrics.grid_offset_x + metrics.grid_width_scaled;
+    let wall_left = metrics.offset_x;
+    let wall_right = metrics.offset_x + metrics.bordered_grid_width_scaled;
 
     let target = &wall.target;
     let target_cells = &target.cells;
@@ -342,7 +341,7 @@ fn draw_wall(
         macroquad::shapes::draw_rectangle(
             wall_left,
             wall_y,
-            metrics.grid_width_scaled,
+            metrics.bordered_grid_width_scaled,
             wall_height,
             wall_color,
         );
@@ -354,8 +353,8 @@ fn draw_wall(
         if let (Some(&first_column), Some(&last_column)) =
             (target_columns.first(), target_columns.last())
         {
-            let target_left = metrics.grid_offset_x + first_column as f32 * metrics.cell_step;
-            let target_right = metrics.grid_offset_x + (last_column + 1) as f32 * metrics.cell_step;
+            let target_left = metrics.offset_x + first_column as f32 * metrics.cell_step;
+            let target_right = metrics.offset_x + (last_column + 1) as f32 * metrics.cell_step;
 
             if target_left > wall_left {
                 macroquad::shapes::draw_rectangle(
@@ -399,7 +398,7 @@ fn draw_wall(
             );
 
             for &column in target_columns.iter().skip(1) {
-                let boundary_x = metrics.grid_offset_x + column as f32 * metrics.cell_step;
+                let boundary_x = metrics.offset_x + column as f32 * metrics.cell_step;
                 macroquad::shapes::draw_line(
                     boundary_x,
                     walkway_top,
