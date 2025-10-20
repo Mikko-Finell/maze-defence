@@ -265,6 +265,12 @@ impl From<&Event> for EventRecord {
                 cell: *cell,
                 color: (color.red(), color.green(), color.blue()),
             },
+            Event::TowerPlaced { .. }
+            | Event::TowerRemoved { .. }
+            | Event::TowerPlacementRejected { .. }
+            | Event::TowerRemovalRejected { .. } => {
+                unreachable!("tower events are not expected in movement replay tests")
+            }
         }
     }
 }

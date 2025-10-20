@@ -11,6 +11,12 @@
 
 use std::{collections::BTreeSet, time::Duration};
 
+#[cfg(any(test, feature = "tower_scaffolding"))]
+mod towers;
+
+#[cfg(any(test, feature = "tower_scaffolding"))]
+use towers::TowerRegistry;
+
 use maze_defence_core::{
     BugColor, BugId, CellCoord, Command, Direction, Event, PlayMode, TileCoord, WELCOME_BANNER,
 };
@@ -163,6 +169,10 @@ pub struct World {
     bug_spawners: BugSpawnerRegistry,
     next_bug_id: u32,
     occupancy: OccupancyGrid,
+    #[cfg(any(test, feature = "tower_scaffolding"))]
+    towers: TowerRegistry,
+    #[cfg(any(test, feature = "tower_scaffolding"))]
+    tower_occupancy: BitGrid,
     reservations: ReservationFrame,
     tick_index: u64,
     step_quantum: Duration,
@@ -180,12 +190,18 @@ impl World {
         let total_columns = total_cell_columns(tile_grid.columns(), cells_per_tile);
         let total_rows = total_cell_rows(tile_grid.rows(), cells_per_tile);
         let occupancy = OccupancyGrid::new(total_columns, total_rows);
+        #[cfg(any(test, feature = "tower_scaffolding"))]
+        let tower_occupancy = BitGrid::new(total_columns, total_rows);
         let mut world = Self {
             banner: WELCOME_BANNER,
             bugs: Vec::new(),
             bug_spawners: BugSpawnerRegistry::new(),
             next_bug_id: 0,
             occupancy,
+            #[cfg(any(test, feature = "tower_scaffolding"))]
+            towers: TowerRegistry::new(),
+            #[cfg(any(test, feature = "tower_scaffolding"))]
+            tower_occupancy,
             reservations: ReservationFrame::new(),
             wall,
             targets,
@@ -321,10 +337,14 @@ pub fn apply(world: &mut World, command: Command, out_events: &mut Vec<Event>) {
             world.cells_per_tile = normalized_cells;
             world.wall = Wall::new(columns, rows, normalized_cells);
             world.targets = target_cells_from_wall(&world.wall);
-            world.occupancy = OccupancyGrid::new(
-                total_cell_columns(columns, normalized_cells),
-                total_cell_rows(rows, normalized_cells),
-            );
+            let total_columns = total_cell_columns(columns, normalized_cells);
+            let total_rows = total_cell_rows(rows, normalized_cells);
+            world.occupancy = OccupancyGrid::new(total_columns, total_rows);
+            #[cfg(any(test, feature = "tower_scaffolding"))]
+            {
+                world.tower_occupancy = BitGrid::new(total_columns, total_rows);
+                world.towers = TowerRegistry::new();
+            }
             world.rebuild_bug_spawners();
             world.clear_bugs();
         }
@@ -375,6 +395,8 @@ pub fn apply(world: &mut World, command: Command, out_events: &mut Vec<Event>) {
 
             world.spawn_from_spawner(spawner, color, out_events);
         }
+        Command::PlaceTower { .. } => {}
+        Command::RemoveTower { .. } => {}
     }
 }
 
@@ -453,6 +475,21 @@ pub mod query {
         OccupancyView {
             grid: &world.occupancy,
         }
+    }
+
+    /// Reports whether the provided cell is blocked by the world state.
+    #[must_use]
+    pub fn is_cell_blocked(world: &World, cell: CellCoord) -> bool {
+        if world.occupancy.index(cell).is_none() || !world.occupancy.can_enter(cell) {
+            return true;
+        }
+
+        #[cfg(any(test, feature = "tower_scaffolding"))]
+        if world.tower_occupancy.contains(cell) {
+            return true;
+        }
+
+        false
     }
 
     /// Enumerates the wall target cells bugs should attempt to reach.
@@ -602,9 +639,7 @@ impl BugSpawnerRegistry {
         let bottom_row = rows.saturating_sub(1);
 
         for column in 0..columns {
-            let _ = self
-                .cells
-                .remove(&CellCoord::new(column, bottom_row));
+            let _ = self.cells.remove(&CellCoord::new(column, bottom_row));
         }
     }
 
@@ -722,6 +757,55 @@ impl OccupancyGrid {
 
     pub(crate) fn dimensions(&self) -> (u32, u32) {
         (self.columns, self.rows)
+    }
+}
+
+#[cfg(any(test, feature = "tower_scaffolding"))]
+#[derive(Clone, Debug)]
+struct BitGrid {
+    columns: u32,
+    rows: u32,
+    words: Vec<u64>,
+}
+
+#[cfg(any(test, feature = "tower_scaffolding"))]
+impl BitGrid {
+    fn new(columns: u32, rows: u32) -> Self {
+        let cell_count = u64::from(columns) * u64::from(rows);
+        let word_count = if cell_count == 0 {
+            0
+        } else {
+            ((cell_count - 1) / 64) + 1
+        };
+        let capacity = usize::try_from(word_count).unwrap_or(0);
+        Self {
+            columns,
+            rows,
+            words: vec![0; capacity],
+        }
+    }
+
+    fn contains(&self, cell: CellCoord) -> bool {
+        let Some((index, bit_offset)) = self.bit_position(cell) else {
+            return false;
+        };
+        self.words
+            .get(index)
+            .map_or(false, |word| (*word & (1_u64 << bit_offset)) != 0)
+    }
+
+    fn bit_position(&self, cell: CellCoord) -> Option<(usize, u32)> {
+        if cell.column() >= self.columns || cell.row() >= self.rows {
+            return None;
+        }
+
+        let width = usize::try_from(self.columns).ok()?;
+        let row = usize::try_from(cell.row()).ok()?;
+        let column = usize::try_from(cell.column()).ok()?;
+        let offset = row.checked_mul(width)?.checked_add(column)?;
+        let word_index = offset / 64;
+        let bit_offset = u32::try_from(offset % 64).ok()?;
+        Some((word_index, bit_offset))
     }
 }
 
@@ -881,6 +965,21 @@ mod tests {
         let world = World::new();
 
         assert!(query::bug_view(&world).into_vec().is_empty());
+    }
+
+    #[test]
+    fn tower_occupancy_does_not_block_when_empty() {
+        let world = World::new();
+        let occupancy = query::occupancy_view(&world);
+        let (columns, rows) = occupancy.dimensions();
+
+        for column in 0..columns {
+            for row in 0..rows {
+                let cell = CellCoord::new(column, row);
+                let expected = !occupancy.is_free(cell);
+                assert_eq!(query::is_cell_blocked(&world, cell), expected);
+            }
+        }
     }
 
     #[test]
