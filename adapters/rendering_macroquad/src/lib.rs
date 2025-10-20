@@ -144,8 +144,8 @@ impl RenderingBackend for MacroquadBackend {
                 let wall_color = to_macroquad_color(wall.color);
                 let wall_height = wall.thickness * scale;
                 let wall_y = offset_y + bordered_grid_height_scaled;
-                let wall_left = offset_x;
-                let wall_right = offset_x + bordered_grid_width_scaled;
+                let wall_left = grid_offset_x;
+                let wall_right = grid_offset_x + grid_width_scaled;
 
                 let target = &wall.target;
                 let target_cells = &target.cells;
@@ -154,7 +154,7 @@ impl RenderingBackend for MacroquadBackend {
                     macroquad::shapes::draw_rectangle(
                         wall_left,
                         wall_y,
-                        bordered_grid_width_scaled,
+                        grid_width_scaled,
                         wall_height,
                         wall_color,
                     );
@@ -167,8 +167,8 @@ impl RenderingBackend for MacroquadBackend {
                     if let (Some(&first_column), Some(&last_column)) =
                         (target_columns.first(), target_columns.last())
                     {
-                        let target_left = grid_offset_x + first_column as f32 * tile_step;
-                        let target_right = grid_offset_x + (last_column + 1) as f32 * tile_step;
+                        let target_left = grid_offset_x + first_column as f32 * cell_step;
+                        let target_right = grid_offset_x + (last_column + 1) as f32 * cell_step;
 
                         if target_left > wall_left {
                             macroquad::shapes::draw_rectangle(
@@ -193,38 +193,34 @@ impl RenderingBackend for MacroquadBackend {
                         let walkway_top = wall_y;
                         let walkway_bottom = wall_y + wall_height;
 
-                        for column in target_columns {
-                            let start_x = grid_offset_x + column as f32 * tile_step;
-                            macroquad::shapes::draw_line(
-                                start_x,
-                                walkway_top,
-                                start_x,
-                                walkway_bottom,
-                                1.0,
-                                grid_color,
-                            );
+                        macroquad::shapes::draw_line(
+                            target_left,
+                            walkway_top,
+                            target_left,
+                            walkway_bottom,
+                            1.0,
+                            grid_color,
+                        );
 
-                            let end_x = grid_offset_x + (column + 1) as f32 * tile_step;
-                            macroquad::shapes::draw_line(
-                                end_x,
-                                walkway_top,
-                                end_x,
-                                walkway_bottom,
-                                1.0,
-                                grid_color,
-                            );
+                        macroquad::shapes::draw_line(
+                            target_right,
+                            walkway_top,
+                            target_right,
+                            walkway_bottom,
+                            1.0,
+                            grid_color,
+                        );
 
-                            for subdivision in 1..tile_grid.cells_per_tile {
-                                let subdivision_x = start_x + subdivision as f32 * cell_step;
-                                macroquad::shapes::draw_line(
-                                    subdivision_x,
-                                    walkway_top,
-                                    subdivision_x,
-                                    walkway_bottom,
-                                    0.5,
-                                    subgrid_color,
-                                );
-                            }
+                        for &column in target_columns.iter().skip(1) {
+                            let boundary_x = grid_offset_x + column as f32 * cell_step;
+                            macroquad::shapes::draw_line(
+                                boundary_x,
+                                walkway_top,
+                                boundary_x,
+                                walkway_bottom,
+                                0.5,
+                                subgrid_color,
+                            );
                         }
 
                         macroquad::shapes::draw_line(
