@@ -23,6 +23,7 @@ const DEFAULT_CELLS_PER_TILE: u32 = 1;
 const DEFAULT_STEP_QUANTUM: Duration = Duration::from_millis(250);
 const MIN_STEP_QUANTUM: Duration = Duration::from_micros(1);
 const SIDE_BORDER_CELL_LAYERS: u32 = 1;
+const TOP_BORDER_CELL_LAYERS: u32 = 1;
 
 /// Describes the discrete tile layout of the world.
 #[derive(Debug)]
@@ -727,7 +728,12 @@ fn total_cell_columns(columns: TileCoord, cells_per_tile: u32) -> u32 {
 }
 
 fn total_cell_rows(rows: TileCoord, cells_per_tile: u32) -> u32 {
-    interior_cell_rows(rows, cells_per_tile)
+    let interior = interior_cell_rows(rows, cells_per_tile);
+    if interior == 0 {
+        0
+    } else {
+        interior.saturating_add(TOP_BORDER_CELL_LAYERS)
+    }
 }
 
 fn exit_row_for_tile_grid(rows: TileCoord, cells_per_tile: u32) -> u32 {
@@ -1281,20 +1287,17 @@ mod tests {
             &mut events,
         );
 
-        let start_column = if cells_per_tile == 0 {
-            0
-        } else {
-            SIDE_BORDER_CELL_LAYERS
-        };
-        let end_column = start_column + interior_cell_columns(columns, cells_per_tile);
-        let start_row = 0;
-        let end_row = interior_cell_rows(rows, cells_per_tile);
+        let interior_start_column = 0;
+        let interior_end_column =
+            interior_start_column + columns.get().saturating_mul(cells_per_tile);
+        let interior_start_row = 0;
+        let interior_end_row = interior_start_row + rows.get().saturating_mul(cells_per_tile);
 
         for bug in query::bug_view(&world).iter() {
-            assert!(bug.cell.column() >= start_column);
-            assert!(bug.cell.column() < end_column);
-            assert!(bug.cell.row() >= start_row);
-            assert!(bug.cell.row() < end_row);
+            assert!(bug.cell.column() >= interior_start_column);
+            assert!(bug.cell.column() < interior_end_column);
+            assert!(bug.cell.row() >= interior_start_row);
+            assert!(bug.cell.row() < interior_end_row);
         }
         assert!(events.is_empty());
     }
