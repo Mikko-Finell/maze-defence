@@ -296,6 +296,7 @@ dependencies = [
  "maze-defence-rendering-macroquad",
  "maze-defence-system-bootstrap",
  "maze-defence-system-movement",
+ "maze-defence-system-spawning",
  "maze-defence-world",
 ]
 
@@ -332,6 +333,14 @@ dependencies = [
 
 [[package]]
 name = "maze-defence-system-movement"
+version = "0.1.0"
+dependencies = [
+ "maze-defence-core",
+ "maze-defence-world",
+]
+
+[[package]]
+name = "maze-defence-system-spawning"
 version = "0.1.0"
 dependencies = [
  "maze-defence-core",
