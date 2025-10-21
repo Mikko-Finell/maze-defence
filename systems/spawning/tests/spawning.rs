@@ -4,7 +4,7 @@ use std::{
     time::Duration,
 };
 
-use maze_defence_core::{BugColor, CellCoord, Command, Event, PlayMode, TileCoord};
+use maze_defence_core::{BugColor, CellCoord, Command, Event, Health, PlayMode, TileCoord};
 use maze_defence_system_spawning::{Config, Spawning};
 use maze_defence_world::{self as world, query, World};
 
@@ -174,12 +174,25 @@ fn process_spawning(
         events.clear();
 
         for command in commands {
-            if let Command::SpawnBug { spawner, color } = command {
-                log.push(SpawnRecord { spawner, color });
+            if let Command::SpawnBug {
+                spawner,
+                color,
+                health,
+            } = command
+            {
+                log.push(SpawnRecord {
+                    spawner,
+                    color,
+                    health,
+                });
                 let mut generated_events = Vec::new();
                 world::apply(
                     world,
-                    Command::SpawnBug { spawner, color },
+                    Command::SpawnBug {
+                        spawner,
+                        color,
+                        health,
+                    },
                     &mut generated_events,
                 );
                 events.extend(generated_events);
@@ -235,6 +248,7 @@ impl ReplayOutcome {
 struct SpawnRecord {
     spawner: CellCoord,
     color: BugColor,
+    health: Health,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
