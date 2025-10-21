@@ -243,8 +243,8 @@ struct BugState {
     color: BugColor,
 }
 
-impl From<maze_defence_world::query::BugSnapshot> for BugState {
-    fn from(snapshot: maze_defence_world::query::BugSnapshot) -> Self {
+impl From<maze_defence_core::BugSnapshot> for BugState {
+    fn from(snapshot: maze_defence_core::BugSnapshot) -> Self {
         Self {
             cell: snapshot.cell,
             color: snapshot.color,

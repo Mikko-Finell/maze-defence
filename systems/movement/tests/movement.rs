@@ -1,7 +1,8 @@
 use std::time::Duration;
 
 use maze_defence_core::{
-    BugColor, BugId, CellCoord, Command, Direction, Event, PlayMode, TileCoord, TowerKind,
+    BugColor, BugId, BugView, CellCoord, Command, Direction, Event, OccupancyView, PlayMode,
+    TileCoord, TowerKind,
 };
 use maze_defence_system_movement::Movement;
 use maze_defence_world::{self as world, query, World};
@@ -542,8 +543,8 @@ fn advance_cell(cell: CellCoord, direction: Direction) -> CellCoord {
 }
 
 fn select_blocked_bug(
-    bug_view: &query::BugView,
-    occupancy_view: query::OccupancyView<'_>,
+    bug_view: &BugView,
+    occupancy_view: OccupancyView<'_>,
     columns: u32,
     rows: u32,
     target_columns: &[u32],
