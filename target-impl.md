@@ -2,7 +2,7 @@ Start by reading `target-spec.md` so the behaviour contracts are locked in befor
 
 Here’s the leanest sequence to bring tower targeting online without breaking determinism or layering rules. Each step is a mergeable checkpoint with explicit exit criteria.
 
-# 1) Range contracts (core + world queries)
+# 1) [DONE] Range contracts (core + world queries)
 
 **Goal:** Give systems deterministic range information without duplicating adapter math.
 
@@ -14,7 +14,7 @@ Here’s the leanest sequence to bring tower targeting online without breaking d
 
 **Exit checks:** Core and world crates compile; new helpers are doc-commented and exercised by tests only.
 
-# 2) Targeting system crate
+# 2) [TODO] Targeting system crate
 
 **Goal:** Implement the pure targeting logic exactly once.
 
@@ -26,7 +26,7 @@ Here’s the leanest sequence to bring tower targeting online without breaking d
 
 **Exit checks:** System unit tests cover in/out-of-range bugs, deterministic ties, builder-mode early-outs, and empty collections. Clippy passes with `--deny warnings` for the new crate.
 
-# 3) Simulation wiring (CLI adapter)
+# 3) [TODO] Simulation wiring (CLI adapter)
 
 **Goal:** Feed the system authoritative data each tick and retain results for rendering.
 
@@ -38,7 +38,7 @@ Here’s the leanest sequence to bring tower targeting online without breaking d
 
 **Exit checks:** Headless simulation tests prove targets appear/disappear as play mode switches, and that equidistant bugs resolve to the same `BugId` every tick.
 
-# 4) Scene & rendering adapters
+# 4) [TODO] Scene & rendering adapters
 
 **Goal:** Visualise targeting without embedding logic in adapters.
 
@@ -50,7 +50,7 @@ Here’s the leanest sequence to bring tower targeting online without breaking d
 
 **Exit checks:** Rendering unit/golden tests cover the new vector population, and manual run shows lines anchored at entity centres. No adapter pulls in system logic.
 
-# 5) Determinism harness & polish
+# 5) [TODO] Determinism harness & polish
 
 **Goal:** Lock in behaviour and guard against regressions.
 
