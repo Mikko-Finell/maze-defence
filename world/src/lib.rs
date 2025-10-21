@@ -620,7 +620,7 @@ pub mod query {
     use std::time::Duration;
 
     use super::{OccupancyGrid, Target, TileGrid, Wall, World};
-    use maze_defence_core::{select_goal, BugColor, BugId, CellCoord, Goal, PlayMode};
+    use maze_defence_core::{BugColor, BugId, CellCoord, Goal, PlayMode};
 
     #[cfg(any(test, feature = "tower_scaffolding"))]
     use maze_defence_core::{CellRect, TowerId, TowerKind};
@@ -653,6 +653,23 @@ pub mod query {
     #[must_use]
     pub fn target(world: &World) -> &Target {
         world.wall.target()
+    }
+
+    /// Selects the goal cell nearest to the provided origin.
+    #[must_use]
+    pub fn select_goal(origin: CellCoord, candidates: &[CellCoord]) -> Option<Goal> {
+        candidates
+            .iter()
+            .copied()
+            .min_by(|left, right| {
+                let left_distance = origin.manhattan_distance(*left);
+                let right_distance = origin.manhattan_distance(*right);
+                left_distance
+                    .cmp(&right_distance)
+                    .then_with(|| left.column().cmp(&right.column()))
+                    .then_with(|| left.row().cmp(&right.row()))
+            })
+            .map(Goal::at)
     }
 
     /// Computes the canonical goal for an entity starting from the provided cell.
@@ -2406,6 +2423,19 @@ mod tests {
             exit_row_for_tile_grid(TileCoord::new(4), 1),
         );
         assert_eq!(goal, Some(Goal::at(expected)));
+    }
+
+    #[test]
+    fn select_goal_prefers_closest_cell() {
+        let origin = CellCoord::new(3, 2);
+        let candidates = [
+            CellCoord::new(0, 5),
+            CellCoord::new(3, 5),
+            CellCoord::new(4, 4),
+        ];
+
+        let goal = query::select_goal(origin, &candidates);
+        assert_eq!(goal, Some(Goal::at(CellCoord::new(3, 5))));
     }
 
     #[test]

@@ -373,23 +373,6 @@ impl Goal {
     }
 }
 
-/// Selects the goal cell nearest to the provided origin.
-#[must_use]
-pub fn select_goal(origin: CellCoord, candidates: &[CellCoord]) -> Option<Goal> {
-    candidates
-        .iter()
-        .copied()
-        .min_by(|left, right| {
-            let left_distance = origin.manhattan_distance(*left);
-            let right_distance = origin.manhattan_distance(*right);
-            left_distance
-                .cmp(&right_distance)
-                .then_with(|| left.column().cmp(&right.column()))
-                .then_with(|| left.row().cmp(&right.row()))
-        })
-        .map(Goal::at)
-}
-
 /// Index within the tile grid measured in whole tiles rather than cells.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct TileCoord(u32);
@@ -411,8 +394,7 @@ impl TileCoord {
 #[cfg(test)]
 mod tests {
     use super::{
-        select_goal, CellCoord, CellRect, CellRectSize, Goal, PlacementError, RemovalError,
-        TowerId, TowerKind,
+        CellCoord, CellRect, CellRectSize, PlacementError, RemovalError, TowerId, TowerKind,
     };
     use serde::{de::DeserializeOwned, Serialize};
 
@@ -422,19 +404,6 @@ mod tests {
         let destination = CellCoord::new(4, 3);
         assert_eq!(origin.manhattan_distance(destination), 5);
         assert_eq!(destination.manhattan_distance(origin), 5);
-    }
-
-    #[test]
-    fn select_goal_prefers_closest_cell() {
-        let origin = CellCoord::new(3, 2);
-        let candidates = [
-            CellCoord::new(0, 5),
-            CellCoord::new(3, 5),
-            CellCoord::new(4, 4),
-        ];
-
-        let goal = select_goal(origin, &candidates);
-        assert_eq!(goal, Some(Goal::at(CellCoord::new(3, 5))));
     }
 
     fn assert_round_trip<T>(value: &T)
