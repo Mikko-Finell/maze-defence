@@ -13,6 +13,7 @@ use std::{str::FromStr, time::Duration};
 
 use anyhow::Result;
 use clap::Parser;
+use glam::Vec2;
 use maze_defence_core::{
     CellCoord, CellRect, CellRectSize, Command, Event, PlacementError, PlayMode, RemovalError,
     TileCoord, TowerId, TowerKind,
@@ -291,9 +292,11 @@ impl Simulation {
             mode_toggle: false,
             cursor_world_space: input.cursor_world_space,
             cursor_tile_space: input.cursor_tile_space,
+            preview_footprint_in_tiles: input.preview_footprint_in_tiles,
             confirm_action: input.confirm_action,
             remove_action: input.remove_action,
         };
+        self.pending_input.preview_footprint_in_tiles = self.selected_tower_footprint_in_tiles();
     }
 
     fn advance(&mut self, dt: Duration) {
@@ -535,6 +538,19 @@ impl Simulation {
         TowerKind::Basic
     }
 
+    fn selected_tower_footprint_in_tiles(&self) -> Vec2 {
+        if self.cells_per_tile == 0 {
+            return Vec2::splat(1.0);
+        }
+
+        let footprint = Self::tower_footprint(self.selected_tower_kind());
+        let tiles = self.cells_per_tile as f32;
+        Vec2::new(
+            footprint.width() as f32 / tiles,
+            footprint.height() as f32 / tiles,
+        )
+    }
+
     fn tower_footprint(kind: TowerKind) -> CellRectSize {
         match kind {
             TowerKind::Basic => CellRectSize::new(2, 2),
@@ -670,6 +686,7 @@ mod tests {
             cursor_tile_space: Some(first_tile),
             confirm_action: false,
             remove_action: false,
+            ..FrameInput::default()
         });
 
         assert_eq!(
@@ -693,6 +710,7 @@ mod tests {
             cursor_tile_space: Some(second_tile),
             confirm_action: false,
             remove_action: false,
+            ..FrameInput::default()
         });
 
         assert_eq!(
@@ -712,6 +730,22 @@ mod tests {
     }
 
     #[test]
+    fn handle_input_surfaces_selected_footprint_in_tiles() {
+        let mut simulation = new_simulation();
+
+        simulation.handle_input(FrameInput {
+            cursor_world_space: Some(Vec2::new(8.0, 8.0)),
+            cursor_tile_space: Some(TileSpacePosition::from_indices(0, 0)),
+            ..FrameInput::default()
+        });
+
+        assert_eq!(
+            simulation.pending_input.preview_footprint_in_tiles,
+            Vec2::splat(0.5)
+        );
+    }
+
+    #[test]
     fn populate_scene_projects_cached_preview_in_builder_mode() {
         let mut simulation = new_simulation();
         let initial_tile = TileSpacePosition::from_indices(0, 1);
@@ -721,6 +755,7 @@ mod tests {
             cursor_tile_space: Some(initial_tile),
             confirm_action: false,
             remove_action: false,
+            ..FrameInput::default()
         });
 
         simulation.advance(Duration::ZERO);
@@ -733,6 +768,7 @@ mod tests {
             cursor_tile_space: Some(preview_tile),
             confirm_action: false,
             remove_action: false,
+            ..FrameInput::default()
         });
 
         let mut scene = make_scene();

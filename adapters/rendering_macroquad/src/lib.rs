@@ -210,6 +210,9 @@ fn gather_frame_input_from_observations(
     let mut input = FrameInput::default();
     input.mode_toggle = mode_toggle;
 
+    let preview_footprint = active_preview_footprint_tiles(scene);
+    input.preview_footprint_in_tiles = preview_footprint;
+
     if metrics.scale <= f32::EPSILON {
         return input;
     }
@@ -235,13 +238,33 @@ fn gather_frame_input_from_observations(
         && cursor_y < metrics.grid_offset_y + metrics.grid_height_scaled;
 
     if inside {
-        input.cursor_tile_space = tile_grid.snap_world_to_tile(world_position);
+        input.cursor_tile_space = tile_grid.snap_world_to_tile(world_position, preview_footprint);
         input.confirm_action = confirm_click;
     }
 
     input.remove_action = remove_click || delete_pressed;
 
     input
+}
+
+fn active_preview_footprint_tiles(scene: &Scene) -> Vec2 {
+    let default = Vec2::splat(1.0);
+    let cells_per_tile = scene.tile_grid.cells_per_tile;
+    if cells_per_tile == 0 {
+        return default;
+    }
+
+    let Some(preview) = active_builder_preview(scene) else {
+        return default;
+    };
+
+    let size = preview.region.size();
+    if size.width() == 0 || size.height() == 0 {
+        return default;
+    }
+
+    let tiles = cells_per_tile as f32;
+    Vec2::new(size.width() as f32 / tiles, size.height() as f32 / tiles)
 }
 
 fn active_builder_preview(scene: &Scene) -> Option<TowerPreview> {
@@ -309,6 +332,16 @@ mod tests {
     }
 
     #[test]
+    fn active_preview_footprint_tiles_reflects_preview_size() {
+        let preview_region =
+            CellRect::from_origin_and_size(CellCoord::new(0, 0), CellRectSize::new(2, 4));
+        let preview = TowerPreview::new(TowerKind::Basic, preview_region, true, None);
+        let scene = base_scene(PlayMode::Builder, Some(preview));
+
+        assert_eq!(active_preview_footprint_tiles(&scene), Vec2::new(0.5, 1.0));
+    }
+
+    #[test]
     fn confirm_action_only_set_when_cursor_inside_grid() {
         let scene = base_scene(PlayMode::Builder, None);
         let metrics = SceneMetrics::from_scene(&scene, 960.0, 960.0);
@@ -349,6 +382,57 @@ mod tests {
             !outside_input.confirm_action,
             "clicking outside the grid must not emit confirm actions",
         );
+    }
+
+    #[test]
+    fn gather_frame_input_snaps_using_preview_footprint() {
+        let preview_region =
+            CellRect::from_origin_and_size(CellCoord::new(0, 0), CellRectSize::new(2, 4));
+        let preview = TowerPreview::new(TowerKind::Basic, preview_region, true, None);
+        let scene = base_scene(PlayMode::Builder, Some(preview));
+        let metrics = SceneMetrics::from_scene(&scene, 640.0, 640.0);
+
+        let world = Vec2::new(
+            scene.tile_grid.width() - 1.0,
+            scene.tile_grid.height() - 1.0,
+        );
+        let cursor = Vec2::new(
+            metrics.grid_offset_x + world.x * metrics.scale,
+            metrics.grid_offset_y + world.y * metrics.scale,
+        );
+
+        let input = gather_frame_input_from_observations(
+            &scene, &metrics, cursor, false, false, false, false,
+        );
+
+        assert_eq!(input.preview_footprint_in_tiles, Vec2::new(0.5, 1.0));
+        let snapped = input
+            .cursor_tile_space
+            .expect("cursor inside grid should produce tile position");
+        let origin_column_tiles = snapped.column_half_steps() as f32 * 0.5;
+        let origin_row_tiles = snapped.row_half_steps() as f32 * 0.5;
+
+        assert!(origin_column_tiles + 0.5 <= scene.tile_grid.columns as f32);
+        assert!(origin_row_tiles + 1.0 <= scene.tile_grid.rows as f32);
+    }
+
+    #[test]
+    fn preview_world_rect_matches_preview_footprint() {
+        let preview_region =
+            CellRect::from_origin_and_size(CellCoord::new(1, 2), CellRectSize::new(2, 4));
+        let preview = TowerPreview::new(TowerKind::Basic, preview_region, true, None);
+        let scene = base_scene(PlayMode::Builder, Some(preview));
+        let metrics = SceneMetrics::from_scene(&scene, 800.0, 800.0);
+
+        let (x, y, width, height) =
+            preview_world_rect(&preview, &metrics).expect("preview should yield rectangle");
+        let cell_step = metrics.cell_step;
+        let origin = preview.region.origin();
+
+        assert_eq!(width, preview.region.size().width() as f32 * cell_step);
+        assert_eq!(height, preview.region.size().height() as f32 * cell_step);
+        assert_eq!(x, metrics.offset_x + origin.column() as f32 * cell_step);
+        assert_eq!(y, metrics.offset_y + origin.row() as f32 * cell_step);
     }
 }
 
@@ -565,15 +649,6 @@ fn draw_towers(towers: &[SceneTower], metrics: &SceneMetrics) {
 }
 
 fn draw_tower_preview(preview: TowerPreview, metrics: &SceneMetrics) {
-    if metrics.cell_step <= f32::EPSILON {
-        return;
-    }
-
-    let size = preview.region.size();
-    if size.width() == 0 || size.height() == 0 {
-        return;
-    }
-
     let (fill_color, outline_color) = if preview.placeable {
         let base = Color::from_rgb_u8(78, 52, 128);
         let outline = base.lighten(0.4);
@@ -590,11 +665,9 @@ fn draw_tower_preview(preview: TowerPreview, metrics: &SceneMetrics) {
         )
     };
 
-    let origin = preview.region.origin();
-    let x = metrics.offset_x + origin.column() as f32 * metrics.cell_step;
-    let y = metrics.offset_y + origin.row() as f32 * metrics.cell_step;
-    let width = size.width() as f32 * metrics.cell_step;
-    let height = size.height() as f32 * metrics.cell_step;
+    let Some((x, y, width, height)) = preview_world_rect(&preview, metrics) else {
+        return;
+    };
 
     macroquad::shapes::draw_rectangle(x, y, width, height, to_macroquad_color(fill_color));
     macroquad::shapes::draw_rectangle_lines(
@@ -605,6 +678,28 @@ fn draw_tower_preview(preview: TowerPreview, metrics: &SceneMetrics) {
         (metrics.cell_step * 0.1).max(1.0),
         to_macroquad_color(outline_color),
     );
+}
+
+fn preview_world_rect(
+    preview: &TowerPreview,
+    metrics: &SceneMetrics,
+) -> Option<(f32, f32, f32, f32)> {
+    if metrics.cell_step <= f32::EPSILON {
+        return None;
+    }
+
+    let size = preview.region.size();
+    if size.width() == 0 || size.height() == 0 {
+        return None;
+    }
+
+    let origin = preview.region.origin();
+    let x = metrics.offset_x + origin.column() as f32 * metrics.cell_step;
+    let y = metrics.offset_y + origin.row() as f32 * metrics.cell_step;
+    let width = size.width() as f32 * metrics.cell_step;
+    let height = size.height() as f32 * metrics.cell_step;
+
+    Some((x, y, width, height))
 }
 
 fn to_macroquad_color(color: maze_defence_rendering::Color) -> macroquad::color::Color {
