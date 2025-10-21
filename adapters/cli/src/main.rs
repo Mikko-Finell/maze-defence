@@ -545,7 +545,7 @@ impl Simulation {
 
     fn tower_footprint(kind: TowerKind) -> CellRectSize {
         match kind {
-            TowerKind::Basic => CellRectSize::new(2, 2),
+            TowerKind::Basic => CellRectSize::new(4, 4),
         }
     }
 
@@ -841,7 +841,7 @@ mod tests {
         assert_eq!(preview.origin, expected_origin);
         assert_eq!(
             preview.region,
-            CellRect::from_origin_and_size(preview.origin, CellRectSize::new(2, 2))
+            CellRect::from_origin_and_size(preview.origin, CellRectSize::new(4, 4))
         );
 
         simulation.handle_input(FrameInput {

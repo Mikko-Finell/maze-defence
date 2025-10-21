@@ -22,7 +22,7 @@ Do not start working before you're read `tower-spec.md` so you understand the co
 
 * Add `world::towers` module with `BTreeMap<TowerId, TowerState>`, `next_tower_id`.
 * Add `tower_occupancy: BitGrid` and integrate it into `is_cell_blocked` (behind feature gate so it’s dormant until towers exist).
-* Implement `footprint_for(kind)` (e.g., `Basic → 2×2` cells).
+* Implement `footprint_for(kind)` (e.g., `Basic → 4×4` cells).
 
 **Tests/Exit:** World compiles; `is_cell_blocked` unchanged when no towers exist; unit test proves folding logic is inert without entries.
 

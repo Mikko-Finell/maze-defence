@@ -762,7 +762,7 @@ mod tests {
         );
         let preview_region = CellRect::from_origin_and_size(
             maze_defence_core::CellCoord::new(4, 6),
-            maze_defence_core::CellRectSize::new(2, 2),
+            maze_defence_core::CellRectSize::new(4, 4),
         );
         let placement_preview = TowerPreview::new(
             TowerKind::Basic,

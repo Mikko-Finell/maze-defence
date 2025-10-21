@@ -63,7 +63,7 @@ Introduce towers as first-class, world-owned blockers that are placed/removed on
 
 **Footprint resolution**
 
-* `fn footprint_for(kind: TowerKind) -> CellRect::Size` (e.g., `2×2` cells for `Basic`).
+* `fn footprint_for(kind: TowerKind) -> CellRect::Size` (e.g., `4×4` cells for `Basic`).
   Orientation left for later (axis-aligned now).
 
 **Apply: PlaceTower**

@@ -7,7 +7,7 @@ fn basic_preview_at(cell: CellCoord, placeable: bool) -> PlacementPreview {
     PlacementPreview::new(
         TowerKind::Basic,
         cell,
-        CellRect::from_origin_and_size(cell, CellRectSize::new(2, 2)),
+        CellRect::from_origin_and_size(cell, CellRectSize::new(4, 4)),
         placeable,
         None,
     )

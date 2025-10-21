@@ -1473,7 +1473,7 @@ mod tests {
         );
         events.clear();
 
-        let second_origin = CellCoord::new(5, 5);
+        let second_origin = CellCoord::new(6, 6);
         apply(
             &mut world,
             Command::PlaceTower {
@@ -1783,7 +1783,7 @@ mod tests {
 
         let outside_between = CellCoord::new(
             second_origin.column().saturating_sub(1),
-            second_origin.row(),
+            first_origin.row().saturating_add(footprint.height()),
         );
         assert_eq!(query::tower_at(&world, outside_between), None);
 
