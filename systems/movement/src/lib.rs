@@ -11,8 +11,8 @@
 
 use std::{cmp::Ordering, collections::BinaryHeap};
 
-use maze_defence_core::{select_goal, BugId, CellCoord, Command, Direction, Event, Goal, PlayMode};
-use maze_defence_world::query::{BugSnapshot, BugView, OccupancyView};
+use maze_defence_core::{BugId, CellCoord, Command, Direction, Event, Goal, PlayMode};
+use maze_defence_world::query::{select_goal, BugSnapshot, BugView, OccupancyView};
 
 /// Pure system that reacts to world events and emits movement commands.
 #[derive(Debug)]
