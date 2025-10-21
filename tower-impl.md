@@ -30,7 +30,7 @@ Do not start working before you're read `tower-spec.md` so you understand the co
 
 **Goal:** Make the world able to accept/reject tower mutations deterministically.
 
-**Status:** TODO
+**Status:** Done
 
 * Implement `apply(PlaceTower)`: mode check, alignment check, bounds, occupancy check, allocate id, set bits, insert, emit `TowerPlaced`; emit `TowerPlacementRejected` on any failure.
 * Implement `apply(RemoveTower)`: mode check, existence check, clear bits, remove, emit `TowerRemoved` (or `RemovalRejected`).
