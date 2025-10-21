@@ -11,7 +11,9 @@
 
 use anyhow::Result as AnyResult;
 use glam::Vec2;
-use maze_defence_core::{CellRect, PlayMode, TowerId, TowerKind};
+use maze_defence_core::{
+    CellCoord, CellRect, PlacementError, PlayMode, RemovalError, TowerId, TowerKind,
+};
 use std::{error::Error, fmt, time::Duration};
 
 /// RGBA color used when presenting frames.
@@ -180,18 +182,53 @@ pub struct TowerPreview {
     pub region: CellRect,
     /// Indicates whether the preview location is valid for placement.
     pub placeable: bool,
+    /// Reason reported by the world for rejecting the placement attempt, if any.
+    pub rejection: Option<PlacementError>,
 }
 
 impl TowerPreview {
     /// Creates a new tower preview descriptor.
     #[must_use]
-    pub const fn new(kind: TowerKind, region: CellRect, placeable: bool) -> Self {
+    pub const fn new(
+        kind: TowerKind,
+        region: CellRect,
+        placeable: bool,
+        rejection: Option<PlacementError>,
+    ) -> Self {
+        let placeable = if rejection.is_some() {
+            false
+        } else {
+            placeable
+        };
+
         Self {
             kind,
             region,
             placeable,
+            rejection,
         }
     }
+}
+
+/// Feedback surfaced to adapters about the most recent tower interaction.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum TowerInteractionFeedback {
+    /// Reports that a placement request was rejected by the world.
+    PlacementRejected {
+        /// Kind of tower requested for placement.
+        kind: TowerKind,
+        /// Origin cell provided in the placement request.
+        origin: CellCoord,
+        /// Reason the placement failed.
+        reason: PlacementError,
+    },
+    /// Reports that a tower removal request was rejected by the world.
+    RemovalRejected {
+        /// Identifier of the tower targeted for removal.
+        tower: TowerId,
+        /// Reason the removal failed.
+        reason: RemovalError,
+    },
 }
 
 /// Describes a square tile grid that can be rendered by adapters.
@@ -437,6 +474,8 @@ pub struct Scene {
     pub play_mode: PlayMode,
     /// Optional builder placement preview emitted by the simulation.
     pub tower_preview: Option<TowerPreview>,
+    /// Feedback about the last tower placement/removal attempt.
+    pub tower_feedback: Option<TowerInteractionFeedback>,
 }
 
 impl Scene {
@@ -449,6 +488,7 @@ impl Scene {
         towers: Vec<SceneTower>,
         play_mode: PlayMode,
         tower_preview: Option<TowerPreview>,
+        tower_feedback: Option<TowerInteractionFeedback>,
     ) -> Self {
         Self {
             tile_grid,
@@ -457,6 +497,7 @@ impl Scene {
             towers,
             play_mode,
             tower_preview,
+            tower_feedback,
         }
     }
 
@@ -626,6 +667,7 @@ mod tests {
             Vec::new(),
             PlayMode::Attack,
             None,
+            None,
         );
 
         assert_eq!(scene.tile_grid, tile_grid);
@@ -634,6 +676,7 @@ mod tests {
         assert_eq!(scene.play_mode, PlayMode::Attack);
         assert!(scene.tower_preview.is_none());
         assert!(scene.towers.is_empty());
+        assert!(scene.tower_feedback.is_none());
     }
 
     #[test]
@@ -655,7 +698,12 @@ mod tests {
             maze_defence_core::CellCoord::new(4, 6),
             maze_defence_core::CellRectSize::new(2, 2),
         );
-        let placement_preview = TowerPreview::new(TowerKind::Basic, preview_region, true);
+        let placement_preview = TowerPreview::new(
+            TowerKind::Basic,
+            preview_region,
+            false,
+            Some(PlacementError::Occupied),
+        );
 
         let scene = Scene::new(
             tile_grid.clone(),
@@ -668,6 +716,11 @@ mod tests {
             )],
             PlayMode::Builder,
             Some(placement_preview),
+            Some(TowerInteractionFeedback::PlacementRejected {
+                kind: TowerKind::Basic,
+                origin: maze_defence_core::CellCoord::new(4, 6),
+                reason: PlacementError::Occupied,
+            }),
         );
 
         assert_eq!(scene.play_mode, PlayMode::Builder);
@@ -675,5 +728,13 @@ mod tests {
         assert_eq!(scene.towers.len(), 1);
         assert_eq!(scene.tile_grid, tile_grid);
         assert_eq!(scene.wall, wall);
+        assert_eq!(
+            scene.tower_feedback,
+            Some(TowerInteractionFeedback::PlacementRejected {
+                kind: TowerKind::Basic,
+                origin: maze_defence_core::CellCoord::new(4, 6),
+                reason: PlacementError::Occupied,
+            })
+        );
     }
 }

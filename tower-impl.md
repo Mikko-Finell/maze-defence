@@ -97,7 +97,7 @@ Do not start working before you're read `tower-spec.md` so you understand the co
 
 **Goal:** Tighten edit loop and audit trail.
 
-**Status:** TODO
+**Status:** Done
 
 * Wire right-click/delete to emit `RemoveTower`.
 * Surface `Tower*Rejected` reasons back into preview tint/tooltips.

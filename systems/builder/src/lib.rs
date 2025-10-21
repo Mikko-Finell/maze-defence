@@ -9,7 +9,9 @@
 
 //! Pure builder-mode system responsible for emitting tower placement and removal commands.
 
-use maze_defence_core::{CellCoord, CellRect, Command, Event, PlayMode, TowerId, TowerKind};
+use maze_defence_core::{
+    CellCoord, CellRect, Command, Event, PlacementError, PlayMode, TowerId, TowerKind,
+};
 
 /// Declarative placement preview describing a potential tower construction.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -22,6 +24,8 @@ pub struct PlacementPreview {
     pub region: CellRect,
     /// Indicates whether the preview represents a valid placement location.
     pub placeable: bool,
+    /// Last rejection reason reported by the world for this preview, if any.
+    pub rejection: Option<PlacementError>,
 }
 
 impl PlacementPreview {
@@ -32,12 +36,20 @@ impl PlacementPreview {
         origin: CellCoord,
         region: CellRect,
         placeable: bool,
+        rejection: Option<PlacementError>,
     ) -> Self {
+        let placeable = if rejection.is_some() {
+            false
+        } else {
+            placeable
+        };
+
         Self {
             kind,
             origin,
             region,
             placeable,
+            rejection,
         }
     }
 }
