@@ -85,6 +85,33 @@ pub struct FrameInput {
     pub remove_action: bool,
 }
 
+/// Per-frame diagnostics emitted by simulations to help adapters report performance breakdowns.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct FrameSimulationBreakdown {
+    /// Total time spent advancing the simulation this frame.
+    pub simulation: Duration,
+    /// Portion of the simulation advance dedicated to pathfinding.
+    pub pathfinding: Duration,
+    /// Time spent translating simulation state into renderable scene data.
+    pub scene_population: Duration,
+}
+
+impl FrameSimulationBreakdown {
+    /// Creates a new diagnostics struct populated with the provided durations.
+    #[must_use]
+    pub const fn new(
+        simulation: Duration,
+        pathfinding: Duration,
+        scene_population: Duration,
+    ) -> Self {
+        Self {
+            simulation,
+            pathfinding,
+            scene_population,
+        }
+    }
+}
+
 /// Tile-space coordinate pair snapped to deterministic sub-tile increments.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct TileSpacePosition {
@@ -618,7 +645,7 @@ pub trait RenderingBackend {
     /// deterministically.
     fn run<F>(self, presentation: Presentation, update_scene: F) -> AnyResult<()>
     where
-        F: FnMut(Duration, FrameInput, &mut Scene) + 'static;
+        F: FnMut(Duration, FrameInput, &mut Scene) -> FrameSimulationBreakdown + 'static;
 }
 
 /// Errors that can occur when constructing rendering descriptors.
