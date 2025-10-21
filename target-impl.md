@@ -26,7 +26,7 @@ Here’s the leanest sequence to bring tower targeting online without breaking d
 
 **Exit checks:** System unit tests cover in/out-of-range bugs, deterministic ties, builder-mode early-outs, and empty collections. Clippy passes with `--deny warnings` for the new crate.
 
-# 3) [TODO] Simulation wiring (CLI adapter)
+# 3) [DONE] Simulation wiring (CLI adapter)
 
 **Goal:** Feed the system authoritative data each tick and retain results for rendering.
 
