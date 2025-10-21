@@ -9,7 +9,10 @@
 
 //! Command-line adapter that boots the Maze Defence experience.
 
-use std::{str::FromStr, time::Duration};
+use std::{
+    str::FromStr,
+    time::{Duration, Instant},
+};
 
 use anyhow::Result;
 use clap::Parser;
@@ -19,9 +22,9 @@ use maze_defence_core::{
     TileCoord, TowerId, TowerKind,
 };
 use maze_defence_rendering::{
-    BugPresentation, Color, FrameInput, Presentation, RenderingBackend, Scene, SceneTower,
-    TargetCellPresentation, TargetPresentation, TileGridPresentation, TileSpacePosition,
-    TowerInteractionFeedback, TowerPreview, TowerTargetLine, WallPresentation,
+    BugPresentation, Color, FrameInput, FrameSimulationBreakdown, Presentation, RenderingBackend,
+    Scene, SceneTower, TargetCellPresentation, TargetPresentation, TileGridPresentation,
+    TileSpacePosition, TowerInteractionFeedback, TowerPreview, TowerTargetLine, WallPresentation,
 };
 use maze_defence_rendering_macroquad::MacroquadBackend;
 use maze_defence_system_bootstrap::Bootstrap;
@@ -219,7 +222,15 @@ fn main() -> Result<()> {
     MacroquadBackend.run(presentation, move |dt, input, scene| {
         simulation.handle_input(input);
         simulation.advance(dt);
+        let populate_start = Instant::now();
         simulation.populate_scene(scene);
+        let scene_population = populate_start.elapsed();
+        let advance_profile = simulation.last_advance_profile();
+        FrameSimulationBreakdown::new(
+            advance_profile.total,
+            advance_profile.pathfinding,
+            scene_population,
+        )
     })
 }
 
@@ -240,8 +251,32 @@ struct Simulation {
     last_placement_rejection: Option<PlacementRejection>,
     last_removal_rejection: Option<RemovalRejection>,
     cells_per_tile: u32,
+    last_advance_profile: AdvanceProfile,
     #[cfg(test)]
     last_frame_events: Vec<Event>,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct AdvanceProfile {
+    total: Duration,
+    pathfinding: Duration,
+}
+
+impl AdvanceProfile {
+    fn new(total: Duration, pathfinding: Duration) -> Self {
+        Self { total, pathfinding }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct ProcessEventsProfile {
+    pathfinding: Duration,
+}
+
+impl ProcessEventsProfile {
+    fn add_pathfinding(&mut self, duration: Duration) {
+        self.pathfinding = self.pathfinding.saturating_add(duration);
+    }
 }
 
 impl Simulation {
@@ -289,10 +324,11 @@ impl Simulation {
             last_placement_rejection: None,
             last_removal_rejection: None,
             cells_per_tile,
+            last_advance_profile: AdvanceProfile::default(),
             #[cfg(test)]
             last_frame_events: Vec::new(),
         };
-        simulation.process_pending_events(None, TowerBuilderInput::default());
+        let _ = simulation.process_pending_events(None, TowerBuilderInput::default());
         simulation.builder_preview = simulation.compute_builder_preview();
         simulation
     }
@@ -322,6 +358,7 @@ impl Simulation {
     }
 
     fn advance(&mut self, dt: Duration) {
+        let frame_start = Instant::now();
         let builder_preview = self.compute_builder_preview();
         let builder_input = self.prepare_builder_input();
 
@@ -336,8 +373,14 @@ impl Simulation {
             );
         }
 
-        self.process_pending_events(builder_preview, builder_input);
+        let events_profile = self.process_pending_events(builder_preview, builder_input);
         self.builder_preview = self.compute_builder_preview();
+        self.last_advance_profile =
+            AdvanceProfile::new(frame_start.elapsed(), events_profile.pathfinding);
+    }
+
+    fn last_advance_profile(&self) -> AdvanceProfile {
+        self.last_advance_profile
     }
 
     fn populate_scene(&self, scene: &mut Scene) {
@@ -388,9 +431,10 @@ impl Simulation {
         &mut self,
         mut builder_preview: Option<BuilderPlacementPreview>,
         mut builder_input: TowerBuilderInput,
-    ) {
+    ) -> ProcessEventsProfile {
         let mut events = std::mem::take(&mut self.pending_events);
         let mut next_events = Vec::new();
+        let mut profile = ProcessEventsProfile::default();
 
         #[cfg(test)]
         {
@@ -430,6 +474,7 @@ impl Simulation {
                 let occupancy_view = query::occupancy_view(&self.world);
                 let target_cells = query::target_cells(&self.world);
                 self.scratch_commands.clear();
+                let pathfinding_start = Instant::now();
                 self.movement.handle(
                     &events,
                     &bug_view,
@@ -438,6 +483,7 @@ impl Simulation {
                     |cell| query::is_cell_blocked(&self.world, cell),
                     &mut self.scratch_commands,
                 );
+                profile.add_pathfinding(pathfinding_start.elapsed());
             }
             for command in self.scratch_commands.drain(..) {
                 world::apply(&mut self.world, command, &mut next_events);
@@ -472,6 +518,8 @@ impl Simulation {
         {
             self.last_frame_events.extend(next_events.iter().cloned());
         }
+
+        profile
     }
 
     fn record_tower_feedback(&mut self, events: &[Event]) {

@@ -24,39 +24,64 @@ use macroquad::{
 };
 use maze_defence_core::PlayMode;
 use maze_defence_rendering::{
-    BugPresentation, Color, FrameInput, Presentation, RenderingBackend, Scene, SceneTower,
-    TileGridPresentation, TowerPreview, TowerTargetLine,
+    BugPresentation, Color, FrameInput, FrameSimulationBreakdown, Presentation, RenderingBackend,
+    Scene, SceneTower, TileGridPresentation, TowerPreview, TowerTargetLine,
 };
-use std::{collections::VecDeque, time::Duration};
+use std::{
+    collections::VecDeque,
+    time::{Duration, Instant},
+};
 
 /// Rendering backend implemented on top of macroquad.
 #[derive(Debug, Default)]
 pub struct MacroquadBackend;
 
 /// Tracks the average frames-per-second produced by the render loop.
+#[derive(Clone, Copy, Debug, Default)]
+struct FrameBreakdown {
+    frame: Duration,
+    simulation: Duration,
+    pathfinding: Duration,
+    scene_population: Duration,
+    render: Duration,
+}
+
 #[derive(Debug, Default)]
 struct FpsCounter {
     elapsed: Duration,
     frames: u32,
     frame_times: VecDeque<Duration>,
     window_duration: Duration,
+    simulation_accum: Duration,
+    pathfinding_accum: Duration,
+    scene_population_accum: Duration,
+    render_accum: Duration,
 }
 
 #[derive(Clone, Copy, Debug)]
 struct FpsMetrics {
     per_second: f32,
     trailing_ten_seconds: f32,
+    avg_simulation: Duration,
+    avg_pathfinding: Duration,
+    avg_scene_population: Duration,
+    avg_render: Duration,
 }
 
 impl FpsCounter {
     /// Records a rendered frame and returns the per-second and trailing ten-second averages once
     /// one second has elapsed.
-    fn record_frame(&mut self, frame_time: Duration) -> Option<FpsMetrics> {
-        self.elapsed += frame_time;
+    fn record_frame(&mut self, breakdown: FrameBreakdown) -> Option<FpsMetrics> {
+        self.elapsed += breakdown.frame;
         self.frames = self.frames.saturating_add(1);
 
-        self.frame_times.push_back(frame_time);
-        self.window_duration += frame_time;
+        self.simulation_accum += breakdown.simulation;
+        self.pathfinding_accum += breakdown.pathfinding;
+        self.scene_population_accum += breakdown.scene_population;
+        self.render_accum += breakdown.render;
+
+        self.frame_times.push_back(breakdown.frame);
+        self.window_duration += breakdown.frame;
 
         let trailing_window = Duration::from_secs(10);
         while self.window_duration > trailing_window {
@@ -75,6 +100,10 @@ impl FpsCounter {
         if seconds <= f32::EPSILON {
             self.elapsed = Duration::ZERO;
             self.frames = 0;
+            self.simulation_accum = Duration::ZERO;
+            self.pathfinding_accum = Duration::ZERO;
+            self.scene_population_accum = Duration::ZERO;
+            self.render_accum = Duration::ZERO;
             return None;
         }
 
@@ -85,11 +114,40 @@ impl FpsCounter {
         } else {
             self.frame_times.len() as f32 / window_seconds
         };
+        let frames = self.frames;
+        let avg_simulation = if frames == 0 {
+            Duration::ZERO
+        } else {
+            self.simulation_accum / frames
+        };
+        let avg_pathfinding = if frames == 0 {
+            Duration::ZERO
+        } else {
+            self.pathfinding_accum / frames
+        };
+        let avg_scene_population = if frames == 0 {
+            Duration::ZERO
+        } else {
+            self.scene_population_accum / frames
+        };
+        let avg_render = if frames == 0 {
+            Duration::ZERO
+        } else {
+            self.render_accum / frames
+        };
         self.elapsed = Duration::ZERO;
         self.frames = 0;
+        self.simulation_accum = Duration::ZERO;
+        self.pathfinding_accum = Duration::ZERO;
+        self.scene_population_accum = Duration::ZERO;
+        self.render_accum = Duration::ZERO;
         Some(FpsMetrics {
             per_second,
             trailing_ten_seconds,
+            avg_simulation,
+            avg_pathfinding,
+            avg_scene_population,
+            avg_render,
         })
     }
 }
@@ -97,7 +155,7 @@ impl FpsCounter {
 impl RenderingBackend for MacroquadBackend {
     fn run<F>(self, presentation: Presentation, mut update_scene: F) -> Result<()>
     where
-        F: FnMut(Duration, FrameInput, &mut Scene) + 'static,
+        F: FnMut(Duration, FrameInput, &mut Scene) -> FrameSimulationBreakdown + 'static,
     {
         let Presentation {
             window_title,
@@ -130,20 +188,10 @@ impl RenderingBackend for MacroquadBackend {
 
                 let dt_seconds = macroquad::time::get_frame_time();
                 let frame_dt = Duration::from_secs_f32(dt_seconds.max(0.0));
-                if let Some(FpsMetrics {
-                    per_second,
-                    trailing_ten_seconds,
-                }) = fps_counter.record_frame(frame_dt)
-                {
-                    println!(
-                        "FPS: {:.2} (10s avg: {:.2})",
-                        per_second, trailing_ten_seconds
-                    );
-                }
                 let metrics_before = SceneMetrics::from_scene(&scene, screen_width, screen_height);
                 let frame_input = gather_frame_input(&scene, &metrics_before);
 
-                update_scene(frame_dt, frame_input, &mut scene);
+                let simulation_breakdown = update_scene(frame_dt, frame_input, &mut scene);
 
                 let tile_grid = scene.tile_grid;
                 let wall = &scene.wall;
@@ -152,6 +200,7 @@ impl RenderingBackend for MacroquadBackend {
                 let grid_color = to_macroquad_color(tile_grid.line_color);
                 let subgrid_color = to_macroquad_color(tile_grid.line_color.lighten(0.6));
 
+                let render_start = Instant::now();
                 draw_subgrid(&metrics, &tile_grid, subgrid_color);
                 draw_tile_grid(&metrics, &tile_grid, grid_color);
 
@@ -183,6 +232,36 @@ impl RenderingBackend for MacroquadBackend {
                         bug_radius,
                         border_thickness,
                         BLACK,
+                    );
+                }
+
+                let render_duration = render_start.elapsed();
+
+                let frame_breakdown = FrameBreakdown {
+                    frame: frame_dt,
+                    simulation: simulation_breakdown.simulation,
+                    pathfinding: simulation_breakdown.pathfinding,
+                    scene_population: simulation_breakdown.scene_population,
+                    render: render_duration,
+                };
+
+                if let Some(FpsMetrics {
+                    per_second,
+                    trailing_ten_seconds,
+                    avg_simulation,
+                    avg_pathfinding,
+                    avg_scene_population,
+                    avg_render,
+                }) = fps_counter.record_frame(frame_breakdown)
+                {
+                    println!(
+                        "FPS: {:.2} (10s avg: {:.2}) | sim: {:>6.2}ms (path: {:>6.2}ms) scene: {:>6.2}ms render: {:>6.2}ms",
+                        per_second,
+                        trailing_ten_seconds,
+                        avg_simulation.as_secs_f64() * 1_000.0,
+                        avg_pathfinding.as_secs_f64() * 1_000.0,
+                        avg_scene_population.as_secs_f64() * 1_000.0,
+                        avg_render.as_secs_f64() * 1_000.0,
                     );
                 }
 
@@ -817,25 +896,33 @@ mod tests {
     #[test]
     fn fps_counter_reports_average_frames_per_second() {
         let mut counter = FpsCounter::default();
-        assert!(counter.record_frame(Duration::from_millis(250)).is_none());
-        assert!(counter.record_frame(Duration::from_millis(250)).is_none());
-        assert!(counter.record_frame(Duration::from_millis(250)).is_none());
+        let frame = |millis| FrameBreakdown {
+            frame: Duration::from_millis(millis),
+            ..FrameBreakdown::default()
+        };
+        assert!(counter.record_frame(frame(250)).is_none());
+        assert!(counter.record_frame(frame(250)).is_none());
+        assert!(counter.record_frame(frame(250)).is_none());
 
         let metrics = counter
-            .record_frame(Duration::from_millis(250))
+            .record_frame(frame(250))
             .expect("should report FPS after one second of samples");
         assert!((metrics.per_second - 4.0).abs() <= 1e-3);
         assert!((metrics.trailing_ten_seconds - 4.0).abs() <= 1e-3);
-        assert!(counter.record_frame(Duration::from_millis(250)).is_none());
+        assert!(counter.record_frame(frame(250)).is_none());
     }
 
     #[test]
     fn fps_counter_tracks_trailing_ten_second_average() {
         let mut counter = FpsCounter::default();
+        let frame = |millis| FrameBreakdown {
+            frame: Duration::from_millis(millis),
+            ..FrameBreakdown::default()
+        };
 
         for _ in 0..10 {
             for sample in 0..5 {
-                let metrics = counter.record_frame(Duration::from_millis(200));
+                let metrics = counter.record_frame(frame(200));
                 if sample == 4 {
                     let metrics = metrics.expect("should report every second");
                     assert!((metrics.per_second - 5.0).abs() <= 1e-3);
@@ -847,7 +934,7 @@ mod tests {
         }
 
         for sample in 0..10 {
-            let metrics = counter.record_frame(Duration::from_millis(100));
+            let metrics = counter.record_frame(frame(100));
             if sample == 9 {
                 let metrics = metrics.expect("should report every second");
                 assert!((metrics.per_second - 10.0).abs() <= 1e-3);
