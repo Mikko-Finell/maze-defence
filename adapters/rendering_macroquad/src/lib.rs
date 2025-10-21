@@ -34,7 +34,32 @@ use std::{
 
 /// Rendering backend implemented on top of macroquad.
 #[derive(Debug, Default)]
-pub struct MacroquadBackend;
+pub struct MacroquadBackend {
+    swap_interval: Option<i32>,
+}
+
+impl MacroquadBackend {
+    /// Returns a backend that requests the platform's default swap interval.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Configures the backend to request a specific swap interval from the platform.
+    #[must_use]
+    pub fn with_swap_interval(mut self, swap_interval: Option<i32>) -> Self {
+        self.swap_interval = swap_interval;
+        self
+    }
+
+    /// Configures the backend to either synchronise presentation with the display refresh rate
+    /// or render as fast as possible.
+    #[must_use]
+    pub fn with_vsync(self, enabled: bool) -> Self {
+        let swap_interval = if enabled { Some(1) } else { Some(0) };
+        self.with_swap_interval(swap_interval)
+    }
+}
 
 /// Tracks the average frames-per-second produced by the render loop.
 #[derive(Clone, Copy, Debug, Default)]
@@ -165,12 +190,15 @@ impl RenderingBackend for MacroquadBackend {
 
         let mut scene = scene;
 
-        let config = macroquad::window::Conf {
+        let mut config = macroquad::window::Conf {
             window_title,
             window_width: 960,
             window_height: 960,
             ..macroquad::window::Conf::default()
         };
+        if let Some(swap_interval) = self.swap_interval {
+            config.platform.swap_interval = Some(swap_interval);
+        }
 
         macroquad::Window::from_config(config, async move {
             let background = to_macroquad_color(clear_color);

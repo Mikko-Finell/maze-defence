@@ -27,6 +27,7 @@ The CLI exposes the following arguments:
 | `--cells-per-tile COUNT` | Chooses how many sub-cells are rendered inside each tile edge. Must be at least `1`. | `4` |
 | `--bug-step-ms MILLISECONDS` | Sets how long each bug waits before taking another step. Accepts values from `1` to `60_000`. | `250` |
 | `--bug-spawn-interval-ms MILLISECONDS` | Controls the interval between automatic spawns while in attack mode. Accepts values from `1` to `60_000`. | `1_000` |
+| `--vsync on\|off` | Requests enabling (`on`) or disabling (`off`) vertical sync. | Platform default |
 
 ## Configuring the grid size
 
@@ -81,3 +82,11 @@ cargo run --bin maze-defence -- --bug-spawn-interval-ms 2000
 ```
 
 The accepted range matches `--bug-step-ms` — anything between 1 and 60,000 milliseconds is valid.
+
+## Toggling vertical sync
+
+The renderer requests the platform's default swap interval when no flag is provided. Use `--vsync off` to disable vertical sync and measure raw rendering throughput, or `--vsync on` to explicitly request synchronisation with the display refresh rate:
+
+```bash
+cargo run --bin maze-defence -- --vsync off
+```
