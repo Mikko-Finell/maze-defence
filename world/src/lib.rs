@@ -603,6 +603,9 @@ pub mod query {
     use super::{OccupancyGrid, Target, TileGrid, Wall, World};
     use maze_defence_core::{select_goal, BugColor, BugId, CellCoord, Goal, PlayMode};
 
+    #[cfg(any(test, feature = "tower_scaffolding"))]
+    use maze_defence_core::{CellRect, TowerId, TowerKind};
+
     /// Reports the active play mode for the world.
     #[must_use]
     pub fn play_mode(world: &World) -> PlayMode {
@@ -665,6 +668,22 @@ pub mod query {
         }
     }
 
+    /// Captures a read-only snapshot of all towers stored in the world.
+    #[cfg(any(test, feature = "tower_scaffolding"))]
+    #[must_use]
+    pub fn towers(world: &World) -> TowerView {
+        let snapshots = world
+            .towers
+            .iter()
+            .map(|tower| TowerSnapshot {
+                id: tower.id,
+                kind: tower.kind,
+                region: tower.region,
+            })
+            .collect();
+        TowerView { snapshots }
+    }
+
     /// Reports whether the provided cell is blocked by the world state.
     #[must_use]
     pub fn is_cell_blocked(world: &World, cell: CellCoord) -> bool {
@@ -678,6 +697,21 @@ pub mod query {
         }
 
         false
+    }
+
+    /// Identifies the tower occupying the provided cell, if any.
+    #[cfg(any(test, feature = "tower_scaffolding"))]
+    #[must_use]
+    pub fn tower_at(world: &World, cell: CellCoord) -> Option<TowerId> {
+        if !world.tower_occupancy.contains(cell) {
+            return None;
+        }
+
+        world
+            .towers
+            .iter()
+            .find(|tower| tower_region_contains_cell(tower.region, cell))
+            .map(|tower| tower.id)
     }
 
     /// Enumerates the wall target cells bugs should attempt to reach.
@@ -725,6 +759,38 @@ pub mod query {
         pub accumulated: Duration,
     }
 
+    /// Read-only snapshot describing all towers placed within the maze.
+    #[cfg(any(test, feature = "tower_scaffolding"))]
+    #[derive(Clone, Debug)]
+    pub struct TowerView {
+        snapshots: Vec<TowerSnapshot>,
+    }
+
+    #[cfg(any(test, feature = "tower_scaffolding"))]
+    impl TowerView {
+        /// Iterator over the captured tower snapshots in deterministic order.
+        pub fn iter(&self) -> impl Iterator<Item = &TowerSnapshot> {
+            self.snapshots.iter()
+        }
+
+        /// Consumes the view, yielding the underlying snapshots.
+        pub fn into_vec(self) -> Vec<TowerSnapshot> {
+            self.snapshots
+        }
+    }
+
+    /// Immutable representation of a single tower's state used for queries.
+    #[cfg(any(test, feature = "tower_scaffolding"))]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub struct TowerSnapshot {
+        /// Identifier allocated to the tower by the world.
+        pub id: TowerId,
+        /// Kind of tower that was constructed.
+        pub kind: TowerKind,
+        /// Region of cells occupied by the tower.
+        pub region: CellRect,
+    }
+
     /// Read-only view into the dense occupancy grid.
     #[derive(Clone, Copy, Debug)]
     pub struct OccupancyView<'a> {
@@ -756,6 +822,23 @@ pub mod query {
         pub fn dimensions(&self) -> (u32, u32) {
             self.grid.dimensions()
         }
+    }
+
+    #[cfg(any(test, feature = "tower_scaffolding"))]
+    fn tower_region_contains_cell(region: CellRect, cell: CellCoord) -> bool {
+        let origin = region.origin();
+        let size = region.size();
+        let column = u64::from(cell.column());
+        let row = u64::from(cell.row());
+        let origin_column = u64::from(origin.column());
+        let origin_row = u64::from(origin.row());
+        let width = u64::from(size.width());
+        let height = u64::from(size.height());
+
+        column >= origin_column
+            && column < origin_column.saturating_add(width)
+            && row >= origin_row
+            && row < origin_row.saturating_add(height)
     }
 }
 
@@ -1557,6 +1640,122 @@ mod tests {
                 assert!(!world.tower_occupancy.contains(cell));
             }
         }
+    }
+
+    #[test]
+    fn tower_query_reports_snapshots_in_identifier_order() {
+        let mut world = World::new();
+        let mut events = Vec::new();
+
+        apply(
+            &mut world,
+            Command::SetPlayMode {
+                mode: PlayMode::Builder,
+            },
+            &mut events,
+        );
+        events.clear();
+
+        let first_origin = CellCoord::new(6, 4);
+        apply(
+            &mut world,
+            Command::PlaceTower {
+                kind: TowerKind::Basic,
+                origin: first_origin,
+            },
+            &mut events,
+        );
+        events.clear();
+
+        let second_origin = CellCoord::new(2, 2);
+        apply(
+            &mut world,
+            Command::PlaceTower {
+                kind: TowerKind::Basic,
+                origin: second_origin,
+            },
+            &mut events,
+        );
+
+        let footprint = super::footprint_for(TowerKind::Basic);
+        let first_region = CellRect::from_origin_and_size(first_origin, footprint);
+        let second_region = CellRect::from_origin_and_size(second_origin, footprint);
+
+        let snapshots = query::towers(&world).into_vec();
+
+        assert_eq!(snapshots.len(), 2);
+        assert_eq!(snapshots[0].id, TowerId::new(0));
+        assert_eq!(snapshots[0].kind, TowerKind::Basic);
+        assert_eq!(snapshots[0].region, first_region);
+        assert_eq!(snapshots[1].id, TowerId::new(1));
+        assert_eq!(snapshots[1].kind, TowerKind::Basic);
+        assert_eq!(snapshots[1].region, second_region);
+    }
+
+    #[test]
+    fn tower_at_reports_identifier_for_cells_inside_footprints() {
+        let mut world = World::new();
+        let mut events = Vec::new();
+
+        apply(
+            &mut world,
+            Command::SetPlayMode {
+                mode: PlayMode::Builder,
+            },
+            &mut events,
+        );
+        events.clear();
+
+        let first_origin = CellCoord::new(4, 2);
+        apply(
+            &mut world,
+            Command::PlaceTower {
+                kind: TowerKind::Basic,
+                origin: first_origin,
+            },
+            &mut events,
+        );
+        events.clear();
+
+        let second_origin = CellCoord::new(8, 2);
+        apply(
+            &mut world,
+            Command::PlaceTower {
+                kind: TowerKind::Basic,
+                origin: second_origin,
+            },
+            &mut events,
+        );
+
+        let footprint = super::footprint_for(TowerKind::Basic);
+
+        for column_offset in 0..footprint.width() {
+            for row_offset in 0..footprint.height() {
+                let first_cell = CellCoord::new(
+                    first_origin.column() + column_offset,
+                    first_origin.row() + row_offset,
+                );
+                assert_eq!(query::tower_at(&world, first_cell), Some(TowerId::new(0)));
+
+                let second_cell = CellCoord::new(
+                    second_origin.column() + column_offset,
+                    second_origin.row() + row_offset,
+                );
+                assert_eq!(query::tower_at(&world, second_cell), Some(TowerId::new(1)));
+            }
+        }
+
+        let outside_above =
+            CellCoord::new(first_origin.column(), first_origin.row().saturating_sub(1));
+        assert_eq!(query::tower_at(&world, outside_above), None);
+
+        let outside_between = CellCoord::new(
+            second_origin.column().saturating_sub(1),
+            second_origin.row(),
+        );
+        assert_eq!(query::tower_at(&world, outside_between), None);
+
+        assert_eq!(query::tower_at(&world, CellCoord::new(0, 0)), None);
     }
 
     #[test]
