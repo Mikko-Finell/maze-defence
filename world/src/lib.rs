@@ -443,7 +443,13 @@ impl World {
         }
 
         if let Some(stride) = self.tower_alignment_stride() {
-            if origin.column() % stride != 0 || origin.row() % stride != 0 {
+            let column_offset = SIDE_BORDER_CELL_LAYERS % stride;
+            let row_offset = TOP_BORDER_CELL_LAYERS % stride;
+            let column_aligned = origin.column() >= column_offset
+                && (origin.column() - column_offset) % stride == 0;
+            let row_aligned = origin.row() >= row_offset
+                && (origin.row() - row_offset) % stride == 0;
+            if !column_aligned || !row_aligned {
                 out_events.push(Event::TowerPlacementRejected {
                     kind,
                     origin,
@@ -1337,7 +1343,7 @@ mod tests {
         );
         events.clear();
 
-        let origin = CellCoord::new(1, 1);
+        let origin = CellCoord::new(2, 1);
         apply(
             &mut world,
             Command::PlaceTower {
@@ -2436,7 +2442,7 @@ mod tests {
         assert_eq!(first, second, "tower replay diverged between runs");
 
         let fingerprint = first.fingerprint();
-        let expected = 0xca77_82e0_0509_7a98;
+        let expected = 0x195a_71ab_29bc_3554;
         assert_eq!(
             fingerprint, expected,
             "tower replay fingerprint mismatch: {fingerprint:#x}"
