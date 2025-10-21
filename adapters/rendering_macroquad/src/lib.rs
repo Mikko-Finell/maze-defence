@@ -181,8 +181,34 @@ impl SceneMetrics {
 }
 
 fn gather_frame_input(scene: &Scene, metrics: &SceneMetrics) -> FrameInput {
+    let (cursor_x, cursor_y) = mouse_position();
+    let mode_toggle = is_key_pressed(KeyCode::Space);
+    let confirm_click = is_mouse_button_pressed(MouseButton::Left);
+    let remove_click = is_mouse_button_pressed(MouseButton::Right);
+    let delete_pressed = is_key_pressed(KeyCode::Delete);
+
+    gather_frame_input_from_observations(
+        scene,
+        metrics,
+        Vec2::new(cursor_x, cursor_y),
+        mode_toggle,
+        confirm_click,
+        remove_click,
+        delete_pressed,
+    )
+}
+
+fn gather_frame_input_from_observations(
+    scene: &Scene,
+    metrics: &SceneMetrics,
+    cursor_position: Vec2,
+    mode_toggle: bool,
+    confirm_click: bool,
+    remove_click: bool,
+    delete_pressed: bool,
+) -> FrameInput {
     let mut input = FrameInput::default();
-    input.mode_toggle = is_key_pressed(KeyCode::Space);
+    input.mode_toggle = mode_toggle;
 
     if metrics.scale <= f32::EPSILON {
         return input;
@@ -193,7 +219,8 @@ fn gather_frame_input(scene: &Scene, metrics: &SceneMetrics) -> FrameInput {
         return input;
     }
 
-    let (cursor_x, cursor_y) = mouse_position();
+    let cursor_x = cursor_position.x;
+    let cursor_y = cursor_position.y;
 
     let world_position = tile_grid.clamp_world_position(Vec2::new(
         (cursor_x - metrics.grid_offset_x) / metrics.scale,
@@ -209,10 +236,10 @@ fn gather_frame_input(scene: &Scene, metrics: &SceneMetrics) -> FrameInput {
 
     if inside {
         input.cursor_tile_space = tile_grid.snap_world_to_tile(world_position);
+        input.confirm_action = confirm_click;
     }
 
-    input.remove_action =
-        is_mouse_button_pressed(MouseButton::Right) || is_key_pressed(KeyCode::Delete);
+    input.remove_action = remove_click || delete_pressed;
 
     input
 }
@@ -228,6 +255,7 @@ fn active_builder_preview(scene: &Scene) -> Option<TowerPreview> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use glam::Vec2;
     use maze_defence_core::{CellCoord, CellRect, CellRectSize, TowerKind};
 
     fn base_scene(play_mode: PlayMode, placement_preview: Option<TowerPreview>) -> Scene {
@@ -278,6 +306,49 @@ mod tests {
         let normalized = normalize_target_columns(&input);
 
         assert_eq!(normalized, vec![0, 1, 5]);
+    }
+
+    #[test]
+    fn confirm_action_only_set_when_cursor_inside_grid() {
+        let scene = base_scene(PlayMode::Builder, None);
+        let metrics = SceneMetrics::from_scene(&scene, 960.0, 960.0);
+
+        let inside_cursor = Vec2::new(
+            metrics.grid_offset_x + metrics.cell_step * 0.5,
+            metrics.grid_offset_y + metrics.cell_step * 0.5,
+        );
+        let inside_input = gather_frame_input_from_observations(
+            &scene,
+            &metrics,
+            inside_cursor,
+            false,
+            true,
+            false,
+            false,
+        );
+        assert!(
+            inside_input.confirm_action,
+            "left click inside the grid should be treated as a confirm action",
+        );
+
+        let outside_cursor = Vec2::new(metrics.grid_offset_x - 10.0, metrics.grid_offset_y - 10.0);
+        let outside_input = gather_frame_input_from_observations(
+            &scene,
+            &metrics,
+            outside_cursor,
+            false,
+            true,
+            false,
+            false,
+        );
+        assert!(
+            outside_input.cursor_tile_space.is_none(),
+            "cursor outside the grid must not snap to tile space",
+        );
+        assert!(
+            !outside_input.confirm_action,
+            "clicking outside the grid must not emit confirm actions",
+        );
     }
 }
 
