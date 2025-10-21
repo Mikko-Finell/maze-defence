@@ -260,6 +260,7 @@ mod tests {
     use super::*;
     use glam::Vec2;
     use maze_defence_core::{CellCoord, CellRect, CellRectSize, TowerKind};
+    use maze_defence_rendering::TileSpacePosition;
 
     fn base_scene(play_mode: PlayMode, placement_preview: Option<TowerPreview>) -> Scene {
         let grid = TileGridPresentation::new(
@@ -382,6 +383,59 @@ mod tests {
     }
 
     #[test]
+    fn cursor_tile_space_tracks_cursor_location() {
+        let mut scene = base_scene(PlayMode::Builder, None);
+        scene.active_tower_footprint_tiles = Some(Vec2::splat(0.5));
+        let metrics = SceneMetrics::from_scene(&scene, 960.0, 960.0);
+
+        let cursor = Vec2::new(
+            metrics.grid_offset_x + metrics.cell_step * 0.25,
+            metrics.grid_offset_y + metrics.cell_step * 0.25,
+        );
+        let input = gather_frame_input_from_observations(
+            &scene,
+            &metrics,
+            cursor,
+            false,
+            false,
+            false,
+            false,
+        );
+
+        assert_eq!(
+            input.cursor_tile_space,
+            Some(TileSpacePosition::from_half_steps(0, 0)),
+            "cursor near the top-left corner should snap to the first tile",
+        );
+        let tile = input.cursor_tile_space.expect("tile expected");
+        assert_eq!(tile.column_half_steps(), 0);
+        assert_eq!(tile.row_half_steps(), 0);
+
+        let cursor_next_tile = Vec2::new(
+            metrics.grid_offset_x + metrics.tile_step + metrics.cell_step * 0.25,
+            metrics.grid_offset_y + metrics.tile_step + metrics.cell_step * 0.25,
+        );
+        let next_input = gather_frame_input_from_observations(
+            &scene,
+            &metrics,
+            cursor_next_tile,
+            false,
+            false,
+            false,
+            false,
+        );
+
+        assert_eq!(
+            next_input.cursor_tile_space,
+            Some(TileSpacePosition::from_half_steps(2, 2)),
+            "cursor near the second tile should snap accordingly",
+        );
+        let next_tile = next_input.cursor_tile_space.expect("tile expected");
+        assert_eq!(next_tile.column_half_steps(), 2);
+        assert_eq!(next_tile.row_half_steps(), 2);
+    }
+
+    #[test]
     fn preview_rectangle_matches_footprint_in_world_space() {
         let mut scene = base_scene(PlayMode::Builder, None);
         let origin = CellCoord::new(4, 2);
@@ -402,6 +456,59 @@ mod tests {
 
         assert!((width - expected_width).abs() < 1e-5);
         assert!((height - expected_height).abs() < 1e-5);
+    }
+
+    #[test]
+    fn preview_anchor_matches_cursor_cell() {
+        let mut scene = base_scene(PlayMode::Builder, None);
+        scene.active_tower_footprint_tiles = Some(Vec2::splat(0.5));
+        let metrics = SceneMetrics::from_scene(&scene, 960.0, 960.0);
+
+        let cursor = Vec2::new(
+            metrics.grid_offset_x + metrics.cell_step * 0.5,
+            metrics.grid_offset_y + metrics.cell_step * 0.5,
+        );
+        let input = gather_frame_input_from_observations(
+            &scene,
+            &metrics,
+            cursor,
+            false,
+            false,
+            false,
+            false,
+        );
+
+        let tile = input
+            .cursor_tile_space
+            .expect("cursor inside grid should provide tile space");
+        let half_stride = (scene.tile_grid.cells_per_tile / 2).max(1);
+        let origin_column = TileGridPresentation::SIDE_BORDER_CELL_LAYERS
+            + tile.column_half_steps().saturating_mul(half_stride);
+        let origin_row = TileGridPresentation::TOP_BORDER_CELL_LAYERS
+            + tile.row_half_steps().saturating_mul(half_stride);
+        let preview_x = metrics.offset_x + origin_column as f32 * metrics.cell_step;
+        let preview_y = metrics.offset_y + origin_row as f32 * metrics.cell_step;
+        let footprint_tiles = scene
+            .active_tower_footprint_tiles
+            .expect("footprint provided");
+        let footprint_cells_x = footprint_tiles.x * scene.tile_grid.cells_per_tile as f32;
+        let footprint_cells_y = footprint_tiles.y * scene.tile_grid.cells_per_tile as f32;
+        let preview_center_x = preview_x + (footprint_cells_x * metrics.cell_step) * 0.5;
+        let preview_center_y = preview_y + (footprint_cells_y * metrics.cell_step) * 0.5;
+
+        assert!((cursor.x - preview_x).abs() <= metrics.cell_step);
+        assert!((cursor.y - preview_y).abs() <= metrics.cell_step);
+
+        let pointer_column = ((cursor.x - metrics.grid_offset_x) / metrics.cell_step).floor() as u32;
+        let pointer_row = ((cursor.y - metrics.grid_offset_y) / metrics.cell_step).floor() as u32;
+        let preview_column = origin_column.saturating_sub(TileGridPresentation::SIDE_BORDER_CELL_LAYERS);
+        let preview_row = origin_row.saturating_sub(TileGridPresentation::TOP_BORDER_CELL_LAYERS);
+
+        assert_eq!(pointer_column, preview_column);
+        assert_eq!(pointer_row, preview_row);
+
+        assert!((cursor.x - preview_center_x).abs() <= metrics.cell_step * 0.51);
+        assert!((cursor.y - preview_center_y).abs() <= metrics.cell_step * 0.51);
     }
 }
 

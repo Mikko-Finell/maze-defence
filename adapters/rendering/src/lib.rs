@@ -376,19 +376,17 @@ fn snap_axis_to_half_steps(
     }
 
     let preview_size = footprint_in_tiles.max(0.0);
-    let half_preview = preview_size * 0.5;
-    let min_center = half_preview;
-    let max_center = tiles as f32 - half_preview;
+    let preview_half_steps = (preview_size * 2.0).round().max(0.0);
+    let total_half_steps = tiles as f32 * 2.0;
 
-    if max_center < min_center {
+    if preview_half_steps >= total_half_steps {
         return Some(0);
     }
 
-    let snapped_center = (value_in_tiles * 2.0).round() * 0.5;
-    let clamped_center = snapped_center.clamp(min_center, max_center);
-    let origin = clamped_center - half_preview;
+    let max_origin_half_steps = total_half_steps - preview_half_steps;
+    let snapped_origin = (value_in_tiles * 2.0).floor().clamp(0.0, max_origin_half_steps);
 
-    Some((origin * 2.0).round() as u32)
+    Some(snapped_origin as u32)
 }
 
 /// Describes an outer wall that should be rendered near the grid.
@@ -628,7 +626,7 @@ mod tests {
         let presentation = TileGridPresentation::new(6, 3, 24.0, 4, Color::from_rgb_u8(0, 0, 0))
             .expect("valid grid");
         let snapped = presentation
-            .snap_world_to_tile(Vec2::new(24.0, 24.0), Vec2::splat(1.0))
+            .snap_world_to_tile(Vec2::new(12.0, 12.0), Vec2::splat(1.0))
             .expect("position inside grid should snap");
 
         assert_eq!(snapped.column_half_steps(), 1);

@@ -874,6 +874,73 @@ mod tests {
     }
 
     #[test]
+    fn builder_preview_aligns_with_top_left_tile() {
+        let mut simulation = new_simulation();
+        enter_builder_mode(&mut simulation);
+
+        let tile = TileSpacePosition::from_half_steps(0, 0);
+        simulation.handle_input(FrameInput {
+            cursor_tile_space: Some(tile),
+            ..FrameInput::default()
+        });
+        simulation.advance(Duration::ZERO);
+
+        let preview = simulation
+            .builder_preview()
+            .expect("preview should exist in builder mode");
+        let expected_origin = CellCoord::new(
+            TileGridPresentation::SIDE_BORDER_CELL_LAYERS,
+            TileGridPresentation::TOP_BORDER_CELL_LAYERS,
+        );
+        assert_eq!(preview.origin, expected_origin);
+        assert_eq!(preview.region.origin(), expected_origin);
+        assert_eq!(preview.kind, TowerKind::Basic);
+    }
+
+    #[test]
+    fn builder_preview_matches_cursor_cell() {
+        let mut simulation = new_simulation();
+        enter_builder_mode(&mut simulation);
+
+        let tile_grid = TileGridPresentation::new(
+            4,
+            3,
+            32.0,
+            TileGridPresentation::DEFAULT_CELLS_PER_TILE,
+            Color::from_rgb_u8(31, 54, 22),
+        )
+        .expect("valid grid");
+
+        let footprint_tiles = simulation.selected_tower_footprint_tiles();
+        let world_position = Vec2::new(
+            tile_grid.cell_length() * 0.5,
+            tile_grid.cell_length() * 0.5,
+        );
+        let tile_space = tile_grid
+            .snap_world_to_tile(world_position, footprint_tiles)
+            .expect("cursor inside grid should snap");
+
+        simulation.handle_input(FrameInput {
+            cursor_world_space: Some(world_position),
+            cursor_tile_space: Some(tile_space),
+            ..FrameInput::default()
+        });
+        simulation.advance(Duration::ZERO);
+
+        let preview = simulation
+            .builder_preview()
+            .expect("preview should exist in builder mode");
+        assert_eq!(
+            preview.origin.column(),
+            TileGridPresentation::SIDE_BORDER_CELL_LAYERS,
+        );
+        assert_eq!(
+            preview.origin.row(),
+            TileGridPresentation::TOP_BORDER_CELL_LAYERS,
+        );
+    }
+
+    #[test]
     fn placement_rejection_updates_preview_and_feedback() {
         let mut simulation = new_simulation();
         enter_builder_mode(&mut simulation);
