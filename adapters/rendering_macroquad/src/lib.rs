@@ -33,6 +33,37 @@ use std::time::Duration;
 #[derive(Debug, Default)]
 pub struct MacroquadBackend;
 
+/// Tracks the average frames-per-second produced by the render loop.
+#[derive(Debug, Default)]
+struct FpsCounter {
+    elapsed: Duration,
+    frames: u32,
+}
+
+impl FpsCounter {
+    /// Records a rendered frame and returns the average FPS once one second has elapsed.
+    fn record_frame(&mut self, frame_time: Duration) -> Option<f32> {
+        self.elapsed += frame_time;
+        self.frames = self.frames.saturating_add(1);
+
+        if self.elapsed < Duration::from_secs(1) {
+            return None;
+        }
+
+        let seconds = self.elapsed.as_secs_f32();
+        if seconds <= f32::EPSILON {
+            self.elapsed = Duration::ZERO;
+            self.frames = 0;
+            return None;
+        }
+
+        let fps = self.frames as f32 / seconds;
+        self.elapsed = Duration::ZERO;
+        self.frames = 0;
+        Some(fps)
+    }
+}
+
 impl RenderingBackend for MacroquadBackend {
     fn run<F>(self, presentation: Presentation, mut update_scene: F) -> Result<()>
     where
@@ -53,6 +84,7 @@ impl RenderingBackend for MacroquadBackend {
 
         macroquad::Window::from_config(config, async move {
             let background = to_macroquad_color(clear_color);
+            let mut fps_counter = FpsCounter::default();
 
             loop {
                 if is_key_pressed(KeyCode::Escape) || is_key_pressed(KeyCode::Q) {
@@ -66,6 +98,9 @@ impl RenderingBackend for MacroquadBackend {
 
                 let dt_seconds = macroquad::time::get_frame_time();
                 let frame_dt = Duration::from_secs_f32(dt_seconds.max(0.0));
+                if let Some(fps) = fps_counter.record_frame(frame_dt) {
+                    println!("FPS: {:.2}", fps);
+                }
                 let metrics_before = SceneMetrics::from_scene(&scene, screen_width, screen_height);
                 let frame_input = gather_frame_input(&scene, &metrics_before);
 
@@ -262,6 +297,7 @@ mod tests {
     use super::*;
     use glam::Vec2;
     use maze_defence_core::{BugId, CellCoord, CellRect, CellRectSize, TowerId, TowerKind};
+    use std::time::Duration;
 
     fn base_scene(play_mode: PlayMode, placement_preview: Option<TowerPreview>) -> Scene {
         let grid = TileGridPresentation::new(
@@ -435,6 +471,20 @@ mod tests {
 
         assert!((width - expected_width).abs() < 1e-5);
         assert!((height - expected_height).abs() < 1e-5);
+    }
+
+    #[test]
+    fn fps_counter_reports_average_frames_per_second() {
+        let mut counter = FpsCounter::default();
+        assert!(counter.record_frame(Duration::from_millis(250)).is_none());
+        assert!(counter.record_frame(Duration::from_millis(250)).is_none());
+        assert!(counter.record_frame(Duration::from_millis(250)).is_none());
+
+        let fps = counter
+            .record_frame(Duration::from_millis(250))
+            .expect("should report FPS after one second of samples");
+        assert!((fps - 4.0).abs() <= 1e-3);
+        assert!(counter.record_frame(Duration::from_millis(250)).is_none());
     }
 }
 
