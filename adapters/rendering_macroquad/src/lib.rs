@@ -24,8 +24,8 @@ use macroquad::{
 };
 use maze_defence_core::PlayMode;
 use maze_defence_rendering::{
-    BugPresentation, Color, FrameInput, PlacementPreview, Presentation, RenderingBackend, Scene,
-    TileGridPresentation,
+    BugPresentation, Color, FrameInput, Presentation, RenderingBackend, Scene, SceneTower,
+    TileGridPresentation, TowerPreview,
 };
 use std::time::Duration;
 
@@ -81,8 +81,10 @@ impl RenderingBackend for MacroquadBackend {
                 draw_subgrid(&metrics, &tile_grid, subgrid_color);
                 draw_tile_grid(&metrics, &tile_grid, grid_color);
 
+                draw_towers(&scene.towers, &metrics);
+
                 if let Some(preview) = active_builder_preview(&scene) {
-                    draw_placement_preview(preview, &metrics);
+                    draw_tower_preview(preview, &metrics);
                 }
 
                 draw_wall(&metrics, wall, grid_color, subgrid_color);
@@ -212,9 +214,9 @@ fn gather_frame_input(scene: &Scene, metrics: &SceneMetrics) -> FrameInput {
     input
 }
 
-fn active_builder_preview(scene: &Scene) -> Option<PlacementPreview> {
+fn active_builder_preview(scene: &Scene) -> Option<TowerPreview> {
     if scene.play_mode == PlayMode::Builder {
-        scene.placement_preview
+        scene.tower_preview
     } else {
         None
     }
@@ -223,9 +225,9 @@ fn active_builder_preview(scene: &Scene) -> Option<PlacementPreview> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use maze_defence_rendering::TileSpacePosition;
+    use maze_defence_core::{CellCoord, CellRect, CellRectSize, TowerKind};
 
-    fn base_scene(play_mode: PlayMode, placement_preview: Option<PlacementPreview>) -> Scene {
+    fn base_scene(play_mode: PlayMode, placement_preview: Option<TowerPreview>) -> Scene {
         let grid = TileGridPresentation::new(
             4,
             4,
@@ -240,18 +242,27 @@ mod tests {
             maze_defence_rendering::TargetPresentation::new(Vec::new()),
         );
 
-        Scene::new(grid, wall, Vec::new(), play_mode, placement_preview)
+        Scene::new(
+            grid,
+            wall,
+            Vec::new(),
+            Vec::new(),
+            play_mode,
+            placement_preview,
+        )
     }
 
     #[test]
     fn active_builder_preview_suppresses_attack_mode_preview() {
-        let preview = PlacementPreview::new(TileSpacePosition::from_indices(1, 1), 1);
+        let preview_region =
+            CellRect::from_origin_and_size(CellCoord::new(2, 2), CellRectSize::new(2, 2));
+        let preview = TowerPreview::new(TowerKind::Basic, preview_region, true);
         let mut scene = base_scene(PlayMode::Attack, Some(preview));
 
         assert!(active_builder_preview(&scene).is_none());
 
         scene.play_mode = PlayMode::Builder;
-        scene.placement_preview = Some(preview);
+        scene.tower_preview = Some(preview);
 
         assert_eq!(active_builder_preview(&scene), Some(preview));
     }
@@ -440,20 +451,85 @@ fn normalize_target_columns(columns: &[u32]) -> Vec<u32> {
         .collect()
 }
 
-fn draw_placement_preview(preview: PlacementPreview, metrics: &SceneMetrics) {
-    if preview.size_in_tiles == 0 {
+fn draw_towers(towers: &[SceneTower], metrics: &SceneMetrics) {
+    if metrics.cell_step <= f32::EPSILON {
         return;
     }
 
-    let fill_color = to_macroquad_color(Color::new(0.32, 0.66, 0.98, 0.35));
-    let outline_color = to_macroquad_color(Color::new(0.18, 0.44, 0.75, 0.6));
+    let base_color = Color::from_rgb_u8(78, 52, 128);
+    let outline_color = base_color.lighten(0.35);
+    let fill = to_macroquad_color(Color::new(
+        base_color.red,
+        base_color.green,
+        base_color.blue,
+        1.0,
+    ));
+    let outline = to_macroquad_color(Color::new(
+        outline_color.red,
+        outline_color.green,
+        outline_color.blue,
+        1.0,
+    ));
+    let outline_thickness = (metrics.cell_step * 0.12).max(1.0);
 
-    let preview_x = metrics.grid_offset_x + preview.origin.column_in_tiles() * metrics.tile_step;
-    let preview_y = metrics.grid_offset_y + preview.origin.row_in_tiles() * metrics.tile_step;
-    let size = preview.size_in_tiles as f32 * metrics.tile_step;
+    for SceneTower { region, .. } in towers {
+        let size = region.size();
+        if size.width() == 0 || size.height() == 0 {
+            continue;
+        }
 
-    macroquad::shapes::draw_rectangle(preview_x, preview_y, size, size, fill_color);
-    macroquad::shapes::draw_rectangle_lines(preview_x, preview_y, size, size, 1.0, outline_color);
+        let origin = region.origin();
+        let x = metrics.offset_x + origin.column() as f32 * metrics.cell_step;
+        let y = metrics.offset_y + origin.row() as f32 * metrics.cell_step;
+        let width = size.width() as f32 * metrics.cell_step;
+        let height = size.height() as f32 * metrics.cell_step;
+
+        macroquad::shapes::draw_rectangle(x, y, width, height, fill);
+        macroquad::shapes::draw_rectangle_lines(x, y, width, height, outline_thickness, outline);
+    }
+}
+
+fn draw_tower_preview(preview: TowerPreview, metrics: &SceneMetrics) {
+    if metrics.cell_step <= f32::EPSILON {
+        return;
+    }
+
+    let size = preview.region.size();
+    if size.width() == 0 || size.height() == 0 {
+        return;
+    }
+
+    let (fill_color, outline_color) = if preview.placeable {
+        let base = Color::from_rgb_u8(78, 52, 128);
+        let outline = base.lighten(0.4);
+        (
+            Color::new(base.red, base.green, base.blue, 0.35),
+            Color::new(outline.red, outline.green, outline.blue, 0.7),
+        )
+    } else {
+        let base = Color::from_rgb_u8(176, 52, 68);
+        let outline = base.lighten(0.3);
+        (
+            Color::new(base.red, base.green, base.blue, 0.45),
+            Color::new(outline.red, outline.green, outline.blue, 0.8),
+        )
+    };
+
+    let origin = preview.region.origin();
+    let x = metrics.offset_x + origin.column() as f32 * metrics.cell_step;
+    let y = metrics.offset_y + origin.row() as f32 * metrics.cell_step;
+    let width = size.width() as f32 * metrics.cell_step;
+    let height = size.height() as f32 * metrics.cell_step;
+
+    macroquad::shapes::draw_rectangle(x, y, width, height, to_macroquad_color(fill_color));
+    macroquad::shapes::draw_rectangle_lines(
+        x,
+        y,
+        width,
+        height,
+        (metrics.cell_step * 0.1).max(1.0),
+        to_macroquad_color(outline_color),
+    );
 }
 
 fn to_macroquad_color(color: maze_defence_rendering::Color) -> macroquad::color::Color {

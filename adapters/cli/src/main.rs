@@ -17,9 +17,9 @@ use maze_defence_core::{
     CellCoord, CellRect, CellRectSize, Command, Event, PlayMode, TileCoord, TowerKind,
 };
 use maze_defence_rendering::{
-    BugPresentation, Color, FrameInput, PlacementPreview, Presentation, RenderingBackend, Scene,
+    BugPresentation, Color, FrameInput, Presentation, RenderingBackend, Scene, SceneTower,
     TargetCellPresentation, TargetPresentation, TileGridPresentation, TileSpacePosition,
-    WallPresentation,
+    TowerPreview, WallPresentation,
 };
 use maze_defence_rendering_macroquad::MacroquadBackend;
 use maze_defence_system_bootstrap::Bootstrap;
@@ -172,6 +172,7 @@ fn main() -> Result<()> {
         grid_scene,
         wall_scene,
         Vec::new(),
+        Vec::new(),
         query::play_mode(simulation.world()),
         None,
     );
@@ -306,11 +307,18 @@ impl Simulation {
             )
         }));
 
+        let tower_view = query::towers(&self.world);
+        scene.towers.clear();
+        scene.towers.extend(
+            tower_view
+                .iter()
+                .map(|tower| SceneTower::new(tower.id, tower.kind, tower.region)),
+        );
+
         scene.play_mode = query::play_mode(&self.world);
-        scene.placement_preview = if scene.play_mode == PlayMode::Builder {
-            self.pending_input
-                .cursor_tile_space
-                .map(|tile| PlacementPreview::new(tile, 1))
+        scene.tower_preview = if scene.play_mode == PlayMode::Builder {
+            self.builder_preview
+                .map(|preview| TowerPreview::new(preview.kind, preview.region, preview.placeable))
         } else {
             None
         };
@@ -531,7 +539,14 @@ mod tests {
             TargetPresentation::new(Vec::new()),
         );
 
-        Scene::new(tile_grid, wall, Vec::new(), PlayMode::Attack, None)
+        Scene::new(
+            tile_grid,
+            wall,
+            Vec::new(),
+            Vec::new(),
+            PlayMode::Attack,
+            None,
+        )
     }
 
     fn enter_builder_mode(simulation: &mut Simulation) {
@@ -623,10 +638,18 @@ mod tests {
         simulation.populate_scene(&mut scene);
 
         assert_eq!(scene.play_mode, PlayMode::Builder);
+        let expected_preview = simulation
+            .builder_preview()
+            .expect("builder preview available in builder mode");
         assert_eq!(
-            scene.placement_preview,
-            Some(PlacementPreview::new(preview_tile, 1))
+            scene.tower_preview,
+            Some(TowerPreview::new(
+                expected_preview.kind,
+                expected_preview.region,
+                expected_preview.placeable,
+            ))
         );
+        assert!(scene.towers.is_empty());
     }
 
     #[test]

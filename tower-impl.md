@@ -86,7 +86,7 @@ Do not start working before you're read `tower-spec.md` so you understand the co
 
 **Goal:** Make towers visible with zero logic in adapters.
 
-**Status:** TODO
+**Status:** Done
 
 * Extend `Scene { towers: Vec<SceneTower { id, kind, region }] }` and optional `preview`.
 * Adapters draw towers (rect/sprite) and translucent preview; no occupancy math, no inference.
