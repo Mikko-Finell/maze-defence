@@ -29,14 +29,17 @@ pub struct Movement {
 
 impl Movement {
     /// Consumes world events and immutable views to emit movement commands.
-    pub fn handle(
+    pub fn handle<F>(
         &mut self,
         events: &[Event],
         bug_view: &BugView,
         occupancy_view: OccupancyView<'_>,
         targets: &[CellCoord],
+        is_cell_blocked: F,
         out: &mut Vec<Command>,
-    ) {
+    ) where
+        F: Fn(CellCoord) -> bool,
+    {
         for event in events {
             if let Event::PlayModeChanged { mode } = event {
                 self.play_mode = *mode;
@@ -60,17 +63,27 @@ impl Movement {
             return;
         }
 
-        self.emit_step_commands(bug_view, occupancy_view, columns, rows, out);
+        self.emit_step_commands(
+            bug_view,
+            occupancy_view,
+            columns,
+            rows,
+            &is_cell_blocked,
+            out,
+        );
     }
 
-    fn emit_step_commands(
+    fn emit_step_commands<F>(
         &mut self,
         bug_view: &BugView,
         occupancy_view: OccupancyView<'_>,
         columns: u32,
         rows: u32,
+        is_cell_blocked: &F,
         out: &mut Vec<Command>,
-    ) {
+    ) where
+        F: Fn(CellCoord) -> bool,
+    {
         for bug in bug_view.iter() {
             if !bug.ready_for_step {
                 continue;
@@ -84,9 +97,14 @@ impl Movement {
                 continue;
             }
 
-            let Some(next_cell) = self.plan_next_hop(bug, goal, columns, rows) else {
+            let Some(next_cell) = self.plan_next_hop(bug, goal, columns, rows, is_cell_blocked)
+            else {
                 continue;
             };
+
+            if next_cell != goal.cell() && is_cell_blocked(next_cell) {
+                continue;
+            }
 
             if !cell_available_for(next_cell, bug.id, occupancy_view) {
                 continue;
@@ -101,13 +119,17 @@ impl Movement {
         }
     }
 
-    fn plan_next_hop(
+    fn plan_next_hop<F>(
         &mut self,
         bug: &BugSnapshot,
         goal: Goal,
         columns: u32,
         rows: u32,
-    ) -> Option<CellCoord> {
+        is_cell_blocked: &F,
+    ) -> Option<CellCoord>
+    where
+        F: Fn(CellCoord) -> bool,
+    {
         let rows_with_exit = rows.saturating_add(1);
         let start_index = index(columns, rows_with_exit, bug.cell)?;
 
@@ -124,7 +146,8 @@ impl Movement {
                 return self.reconstruct_first_hop(bug.cell, goal.cell(), columns, rows_with_exit);
             }
 
-            let neighbors = enumerate_neighbors(current.cell, columns, rows, goal.cell());
+            let neighbors =
+                enumerate_neighbors(current.cell, columns, rows, goal.cell(), is_cell_blocked);
             for neighbor in neighbors {
                 let Some(neighbor_index) = index(columns, rows_with_exit, neighbor) else {
                     continue;
@@ -257,22 +280,37 @@ impl PartialOrd for NodeState {
     }
 }
 
-fn enumerate_neighbors(cell: CellCoord, columns: u32, rows: u32, goal: CellCoord) -> NeighborIter {
+fn enumerate_neighbors<F>(
+    cell: CellCoord,
+    columns: u32,
+    rows: u32,
+    goal: CellCoord,
+    is_cell_blocked: &F,
+) -> NeighborIter
+where
+    F: Fn(CellCoord) -> bool,
+{
     let mut neighbors = NeighborIter::default();
+    let mut consider = |candidate: CellCoord| {
+        if candidate == goal || !is_cell_blocked(candidate) {
+            neighbors.push(candidate);
+        }
+    };
+
     if cell.row() < rows {
         if cell.row() > 0 {
-            neighbors.push(CellCoord::new(cell.column(), cell.row() - 1));
+            consider(CellCoord::new(cell.column(), cell.row() - 1));
         }
         if cell.column() > 0 {
-            neighbors.push(CellCoord::new(cell.column() - 1, cell.row()));
+            consider(CellCoord::new(cell.column() - 1, cell.row()));
         }
         if cell.column() + 1 < columns {
-            neighbors.push(CellCoord::new(cell.column() + 1, cell.row()));
+            consider(CellCoord::new(cell.column() + 1, cell.row()));
         }
         if cell.row() + 1 < rows {
-            neighbors.push(CellCoord::new(cell.column(), cell.row() + 1));
+            consider(CellCoord::new(cell.column(), cell.row() + 1));
         } else if cell.row() + 1 == rows && goal.row() >= rows && cell.column() == goal.column() {
-            neighbors.push(CellCoord::new(cell.column(), rows));
+            consider(CellCoord::new(cell.column(), rows));
         }
     }
 

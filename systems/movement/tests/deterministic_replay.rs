@@ -66,6 +66,7 @@ fn process_movement(
             &bug_view,
             occupancy_view,
             &target_cells,
+            |cell| query::is_cell_blocked(&*world, cell),
             &mut commands,
         );
 
@@ -157,6 +158,7 @@ fn movement_pauses_in_builder_mode() {
         &bug_view,
         occupancy_view,
         &target_cells,
+        |cell| query::is_cell_blocked(&world, cell),
         &mut commands,
     );
     assert!(
@@ -177,6 +179,7 @@ fn movement_pauses_in_builder_mode() {
         &bug_view,
         occupancy_view,
         &target_cells,
+        |cell| query::is_cell_blocked(&world, cell),
         &mut commands,
     );
     assert!(

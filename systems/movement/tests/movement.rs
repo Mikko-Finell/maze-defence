@@ -1,6 +1,8 @@
 use std::time::Duration;
 
-use maze_defence_core::{BugColor, CellCoord, Command, Direction, Event, TileCoord};
+use maze_defence_core::{
+    BugColor, CellCoord, Command, Direction, Event, PlayMode, TileCoord, TowerKind,
+};
 use maze_defence_system_movement::Movement;
 use maze_defence_world::{self as world, query, World};
 
@@ -48,6 +50,7 @@ fn emits_step_commands_toward_target() {
         &bug_view,
         occupancy_view,
         &target_cells,
+        |cell| query::is_cell_blocked(&world, cell),
         &mut commands,
     );
 
@@ -125,6 +128,7 @@ fn step_commands_target_free_cells() {
         &bug_view,
         occupancy_view,
         &target_cells,
+        |cell| query::is_cell_blocked(&world, cell),
         &mut commands,
     );
 
@@ -214,6 +218,7 @@ fn replans_after_failed_step() {
         &bug_view_after_failure,
         occupancy_view,
         &target_cells,
+        |cell| query::is_cell_blocked(&world, cell),
         &mut commands,
     );
 
@@ -231,6 +236,134 @@ fn replans_after_failed_step() {
     );
 }
 
+#[test]
+fn bugs_respect_tower_blockers() {
+    let mut world = World::new();
+    let mut events = Vec::new();
+    world::apply(
+        &mut world,
+        Command::ConfigureTileGrid {
+            columns: TileCoord::new(3),
+            rows: TileCoord::new(3),
+            tile_length: 1.0,
+            cells_per_tile: 2,
+        },
+        &mut events,
+    );
+
+    let mut movement = Movement::default();
+    pump_system(&mut world, &mut movement, events);
+
+    let mut builder_events = Vec::new();
+    world::apply(
+        &mut world,
+        Command::SetPlayMode {
+            mode: PlayMode::Builder,
+        },
+        &mut builder_events,
+    );
+    pump_system(&mut world, &mut movement, builder_events);
+
+    let target_cells = query::target_cells(&world);
+    let target_cell = target_cells
+        .first()
+        .copied()
+        .expect("expected at least one target cell");
+    let spawn = CellCoord::new(target_cell.column(), 0);
+    let blocked_cell = CellCoord::new(target_cell.column(), 1);
+    let tower_origin = CellCoord::new(target_cell.column(), 1);
+
+    let mut tower_events = Vec::new();
+    world::apply(
+        &mut world,
+        Command::PlaceTower {
+            kind: TowerKind::Basic,
+            origin: tower_origin,
+        },
+        &mut tower_events,
+    );
+    assert!(
+        tower_events
+            .iter()
+            .any(|event| matches!(event, Event::TowerPlaced { .. })),
+        "expected tower placement to succeed"
+    );
+
+    let mut attack_events = Vec::new();
+    world::apply(
+        &mut world,
+        Command::SetPlayMode {
+            mode: PlayMode::Attack,
+        },
+        &mut attack_events,
+    );
+    pump_system(&mut world, &mut movement, attack_events);
+
+    let mut spawn_events = Vec::new();
+    world::apply(
+        &mut world,
+        Command::SpawnBug {
+            spawner: spawn,
+            color: BugColor::from_rgb(0x2f, 0x95, 0x32),
+        },
+        &mut spawn_events,
+    );
+    assert!(
+        spawn_events
+            .iter()
+            .any(|event| matches!(event, Event::BugSpawned { .. })),
+        "bug spawn request must succeed"
+    );
+
+    let mut tick_events = Vec::new();
+    world::apply(
+        &mut world,
+        Command::Tick {
+            dt: Duration::from_millis(250),
+        },
+        &mut tick_events,
+    );
+
+    let mut frame_events = spawn_events;
+    frame_events.extend(tick_events);
+
+    assert!(
+        query::is_cell_blocked(&world, blocked_cell),
+        "tower footprint must be treated as blocked"
+    );
+
+    let bug_view = query::bug_view(&world);
+    let occupancy_view = query::occupancy_view(&world);
+    let target_cells = query::target_cells(&world);
+    let mut commands = Vec::new();
+    movement.handle(
+        &frame_events,
+        &bug_view,
+        occupancy_view,
+        &target_cells,
+        |cell| query::is_cell_blocked(&world, cell),
+        &mut commands,
+    );
+
+    for command in &commands {
+        if let Command::StepBug { bug_id, direction } = command {
+            let bug = bug_view
+                .iter()
+                .find(|snapshot| &snapshot.id == bug_id)
+                .expect("bug snapshot present");
+            let destination = advance_cell(bug.cell, *direction);
+            assert_ne!(
+                destination, blocked_cell,
+                "movement should not direct bugs into tower cells"
+            );
+            assert!(
+                !query::is_cell_blocked(&world, destination),
+                "movement must avoid blocked cells"
+            );
+        }
+    }
+}
+
 fn pump_system(world: &mut World, movement: &mut Movement, mut events: Vec<Event>) {
     loop {
         if events.is_empty() {
@@ -245,6 +378,7 @@ fn pump_system(world: &mut World, movement: &mut Movement, mut events: Vec<Event
             &bug_view,
             occupancy_view,
             &target_cells,
+            |cell| query::is_cell_blocked(&*world, cell),
             &mut commands,
         );
         if commands.is_empty() {

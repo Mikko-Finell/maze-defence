@@ -404,6 +404,7 @@ impl Simulation {
                 &bug_view,
                 occupancy_view,
                 &target_cells,
+                |cell| query::is_cell_blocked(&self.world, cell),
                 &mut self.scratch_commands,
             );
             for command in self.scratch_commands.drain(..) {
