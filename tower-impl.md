@@ -90,7 +90,8 @@ Do not start working before you're read `tower-spec.md` so you understand the co
 
 * Extend `Scene { towers: Vec<SceneTower { id, kind, region }] }` and optional `preview`.
 * Adapters draw towers (rect/sprite) and translucent preview; no occupancy math, no inference.
-  **Tests/Exit:** Golden frame/scene tests (or snapshot assertions) proving scene contains expected towers; manual run shows static placement working.
+
+**Tests/Exit:** Golden frame/scene tests (or snapshot assertions) proving scene contains expected towers; (manual run shows static placement working; you don't need to test this).
 
 # 9) Removal UX + rejection feedback
 
