@@ -275,6 +275,9 @@ impl TileGridPresentation {
     /// Default number of cells drawn along each tile edge.
     pub const DEFAULT_CELLS_PER_TILE: u32 = 4;
 
+    /// Number of sub-tile steps used when snapping placement previews.
+    pub const PREVIEW_STEPS_PER_TILE: u32 = 2;
+
     /// Number of cell layers rendered outside the tile grid on each side.
     pub const SIDE_BORDER_CELL_LAYERS: u32 = 1;
 
@@ -373,7 +376,7 @@ impl TileGridPresentation {
         }
 
         let clamped = self.clamp_world_position(position);
-        let steps_per_tile = self.cells_per_tile.max(1);
+        let steps_per_tile = Self::PREVIEW_STEPS_PER_TILE;
         let column_steps = snap_axis_to_steps(
             clamped.x / self.tile_length,
             self.columns,
@@ -661,16 +664,19 @@ mod tests {
     }
 
     #[test]
-    fn snap_world_to_tile_snaps_to_cell_increments() {
+    fn snap_world_to_tile_snaps_to_half_tile_increments() {
         let presentation = TileGridPresentation::new(6, 3, 24.0, 4, Color::from_rgb_u8(0, 0, 0))
             .expect("valid grid");
         let snapped = presentation
             .snap_world_to_tile(Vec2::new(24.0, 24.0), Vec2::splat(1.0))
             .expect("position inside grid should snap");
 
-        assert_eq!(snapped.steps_per_tile(), 4);
-        assert_eq!(snapped.column_steps(), 2);
-        assert_eq!(snapped.row_steps(), 2);
+        assert_eq!(
+            snapped.steps_per_tile(),
+            TileGridPresentation::PREVIEW_STEPS_PER_TILE
+        );
+        assert_eq!(snapped.column_steps(), 1);
+        assert_eq!(snapped.row_steps(), 1);
         assert!(!snapped.is_integer_aligned());
     }
 
@@ -683,9 +689,12 @@ mod tests {
             .snap_world_to_tile(Vec2::new(143.9, 71.2), footprint)
             .expect("position inside grid should snap");
 
-        assert_eq!(snapped.steps_per_tile(), 4);
-        assert_eq!(snapped.column_steps(), 18);
-        assert_eq!(snapped.row_steps(), 10);
+        assert_eq!(
+            snapped.steps_per_tile(),
+            TileGridPresentation::PREVIEW_STEPS_PER_TILE
+        );
+        assert_eq!(snapped.column_steps(), 9);
+        assert_eq!(snapped.row_steps(), 5);
         let origin_column_tiles = snapped.column_in_tiles();
         let origin_row_tiles = snapped.row_in_tiles();
         assert!(origin_column_tiles >= 0.0);
