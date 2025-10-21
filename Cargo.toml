@@ -6,6 +6,7 @@ members = [
     "systems/bootstrap",
     "systems/movement",
     "systems/spawning",
+    "systems/tower_targeting",
     "adapters/rendering",
     "adapters/rendering_macroquad",
     "adapters/cli",

@@ -14,7 +14,7 @@ Here’s the leanest sequence to bring tower targeting online without breaking d
 
 **Exit checks:** Core and world crates compile; new helpers are doc-commented and exercised by tests only.
 
-# 2) [TODO] Targeting system crate
+# 2) [DONE] Targeting system crate
 
 **Goal:** Implement the pure targeting logic exactly once.
 
