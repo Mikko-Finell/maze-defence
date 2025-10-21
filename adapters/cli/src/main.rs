@@ -15,13 +15,13 @@ use anyhow::Result;
 use clap::Parser;
 use glam::Vec2;
 use maze_defence_core::{
-    BugColor, BugId, CellCoord, CellRect, CellRectSize, Command, Event, PlacementError, PlayMode,
+    BugColor, CellCoord, CellRect, CellRectSize, Command, Event, PlacementError, PlayMode,
     RemovalError, TileCoord, TowerId, TowerKind,
 };
 use maze_defence_rendering::{
     BugPresentation, Color, FrameInput, Presentation, RenderingBackend, Scene, SceneTower,
     TargetCellPresentation, TargetPresentation, TileGridPresentation, TileSpacePosition,
-    TowerInteractionFeedback, TowerPreview, WallPresentation,
+    TowerInteractionFeedback, TowerPreview, TowerTargetLine, WallPresentation,
 };
 use maze_defence_rendering_macroquad::MacroquadBackend;
 use maze_defence_system_bootstrap::Bootstrap;
@@ -54,22 +54,20 @@ struct RemovalRejection {
     reason: RemovalError,
 }
 
-/// Converts tower targeting DTOs into line descriptors measured in cell space.
-///
-/// The returned tuples contain the tower identifier, bug identifier, and the
-/// centre positions expressed as `(column, row)` pairs using cell units.
-pub fn tower_target_lines_in_cells(targets: &[TowerTarget]) -> Vec<(TowerId, BugId, Vec2, Vec2)> {
-    targets
-        .iter()
-        .map(|target| {
-            let tower_center = Vec2::new(
-                target.tower_center_cells.column,
-                target.tower_center_cells.row,
-            );
-            let bug_center = Vec2::new(target.bug_center_cells.column, target.bug_center_cells.row);
-            (target.tower, target.bug, tower_center, bug_center)
-        })
-        .collect()
+/// Populates the scene with targeting beams derived from system DTOs.
+pub fn push_tower_targets(scene: &mut Scene, targets: &[TowerTarget]) {
+    scene.tower_targets.clear();
+    scene.tower_targets.reserve(targets.len());
+    for target in targets {
+        let from = Vec2::new(
+            target.tower_center_cells.column,
+            target.tower_center_cells.row,
+        );
+        let to = Vec2::new(target.bug_center_cells.column, target.bug_center_cells.row);
+        scene
+            .tower_targets
+            .push(TowerTargetLine::new(target.tower, target.bug, from, to));
+    }
 }
 
 /// Command-line arguments for launching the Maze Defence experience.
@@ -206,6 +204,7 @@ fn main() -> Result<()> {
     let mut scene = Scene::new(
         grid_scene,
         wall_scene,
+        Vec::new(),
         Vec::new(),
         Vec::new(),
         query::play_mode(simulation.world()),
@@ -361,6 +360,8 @@ impl Simulation {
                 .iter()
                 .map(|tower| SceneTower::new(tower.id, tower.kind, tower.region)),
         );
+
+        push_tower_targets(scene, &self.current_targets);
 
         scene.play_mode = query::play_mode(&self.world);
         scene.tower_preview = if scene.play_mode == PlayMode::Builder {
@@ -706,6 +707,7 @@ mod tests {
         Scene::new(
             tile_grid,
             wall,
+            Vec::new(),
             Vec::new(),
             Vec::new(),
             PlayMode::Attack,
@@ -1080,20 +1082,23 @@ mod tests {
         );
         let initial_target = simulation.current_targets()[0];
 
-        let lines = tower_target_lines_in_cells(simulation.current_targets());
-        assert_eq!(lines.len(), 1);
-        let (tower, bug, from, to) = lines[0];
-        assert_eq!(tower, initial_target.tower);
-        assert_eq!(bug, initial_target.bug);
+        let mut scene = make_scene();
+        simulation.populate_scene(&mut scene);
+        assert_eq!(scene.tower_targets.len(), 1);
+        let new_beam = scene.tower_targets[0];
+        assert_eq!(new_beam.tower, initial_target.tower);
+        let beam = scene.tower_targets[0];
+        assert_eq!(beam.tower, initial_target.tower);
+        assert_eq!(beam.bug, initial_target.bug);
         assert_eq!(
-            from,
+            beam.from,
             Vec2::new(
                 initial_target.tower_center_cells.column,
                 initial_target.tower_center_cells.row,
             )
         );
         assert_eq!(
-            to,
+            beam.to,
             Vec2::new(
                 initial_target.bug_center_cells.column,
                 initial_target.bug_center_cells.row,
@@ -1110,6 +1115,9 @@ mod tests {
             "builder mode should clear cached tower targets"
         );
 
+        simulation.populate_scene(&mut scene);
+        assert!(scene.tower_targets.is_empty());
+
         simulation.queued_commands.push(Command::SetPlayMode {
             mode: PlayMode::Attack,
         });
@@ -1124,6 +1132,9 @@ mod tests {
             "targets should repopulate after returning to attack mode"
         );
         assert_eq!(simulation.current_targets()[0].tower, initial_target.tower);
+
+        simulation.populate_scene(&mut scene);
+        assert_eq!(scene.tower_targets.len(), 1);
     }
 
     #[test]
@@ -1199,6 +1210,11 @@ mod tests {
         );
         assert_eq!(simulation.current_targets()[0].bug, expected_bug);
 
+        let mut scene = make_scene();
+        simulation.populate_scene(&mut scene);
+        assert_eq!(scene.tower_targets.len(), 1);
+        assert_eq!(scene.tower_targets[0].bug, expected_bug);
+
         for _ in 0..3 {
             simulation.advance(Duration::from_millis(32));
             assert!(
@@ -1206,6 +1222,10 @@ mod tests {
                 "tower targeting should remain stable"
             );
             assert_eq!(simulation.current_targets()[0].bug, expected_bug);
+
+            simulation.populate_scene(&mut scene);
+            assert_eq!(scene.tower_targets.len(), 1);
+            assert_eq!(scene.tower_targets[0].bug, expected_bug);
         }
     }
 

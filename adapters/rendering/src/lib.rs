@@ -12,7 +12,7 @@
 use anyhow::Result as AnyResult;
 use glam::Vec2;
 use maze_defence_core::{
-    CellCoord, CellRect, PlacementError, PlayMode, RemovalError, TowerId, TowerKind,
+    BugId, CellCoord, CellRect, PlacementError, PlayMode, RemovalError, TowerId, TowerKind,
 };
 use std::{error::Error, fmt, time::Duration};
 
@@ -511,6 +511,32 @@ impl BugPresentation {
     }
 }
 
+/// Cell-space line segment describing an active tower targeting beam.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TowerTargetLine {
+    /// Identifier of the tower emitting the beam.
+    pub tower: TowerId,
+    /// Identifier of the bug being tracked by the tower.
+    pub bug: BugId,
+    /// Start of the beam expressed in cell coordinates.
+    pub from: Vec2,
+    /// End of the beam expressed in cell coordinates.
+    pub to: Vec2,
+}
+
+impl TowerTargetLine {
+    /// Creates a new tower targeting beam descriptor.
+    #[must_use]
+    pub fn new(tower: TowerId, bug: BugId, from: Vec2, to: Vec2) -> Self {
+        Self {
+            tower,
+            bug,
+            from,
+            to,
+        }
+    }
+}
+
 /// Scene description combining the tile grid, outer wall and inhabitants.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Scene {
@@ -522,6 +548,8 @@ pub struct Scene {
     pub bugs: Vec<BugPresentation>,
     /// Towers currently visible within the maze.
     pub towers: Vec<SceneTower>,
+    /// Targeting beams emitted by towers while in attack mode.
+    pub tower_targets: Vec<TowerTargetLine>,
     /// Active play mode for the simulation.
     pub play_mode: PlayMode,
     /// Optional builder placement preview emitted by the simulation.
@@ -540,6 +568,7 @@ impl Scene {
         wall: WallPresentation,
         bugs: Vec<BugPresentation>,
         towers: Vec<SceneTower>,
+        tower_targets: Vec<TowerTargetLine>,
         play_mode: PlayMode,
         tower_preview: Option<TowerPreview>,
         active_tower_footprint_tiles: Option<Vec2>,
@@ -550,6 +579,7 @@ impl Scene {
             wall,
             bugs,
             towers,
+            tower_targets,
             play_mode,
             tower_preview,
             active_tower_footprint_tiles,
@@ -729,6 +759,7 @@ mod tests {
             wall.clone(),
             bugs.clone(),
             Vec::new(),
+            Vec::new(),
             PlayMode::Attack,
             None,
             None,
@@ -742,6 +773,7 @@ mod tests {
         assert!(scene.tower_preview.is_none());
         assert!(scene.active_tower_footprint_tiles.is_none());
         assert!(scene.towers.is_empty());
+        assert!(scene.tower_targets.is_empty());
         assert!(scene.tower_feedback.is_none());
     }
 
@@ -771,6 +803,13 @@ mod tests {
             Some(PlacementError::Occupied),
         );
 
+        let target_line = TowerTargetLine::new(
+            TowerId::new(1),
+            maze_defence_core::BugId::new(3),
+            Vec2::new(4.0, 6.0),
+            Vec2::new(6.5, 8.5),
+        );
+
         let scene = Scene::new(
             tile_grid.clone(),
             wall.clone(),
@@ -780,6 +819,7 @@ mod tests {
                 TowerKind::Basic,
                 preview_region,
             )],
+            vec![target_line],
             PlayMode::Builder,
             Some(placement_preview),
             Some(Vec2::splat(1.0)),
@@ -804,5 +844,6 @@ mod tests {
                 reason: PlacementError::Occupied,
             })
         );
+        assert_eq!(scene.tower_targets, vec![target_line]);
     }
 }

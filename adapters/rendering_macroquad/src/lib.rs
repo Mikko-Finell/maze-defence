@@ -25,7 +25,7 @@ use macroquad::{
 use maze_defence_core::PlayMode;
 use maze_defence_rendering::{
     BugPresentation, Color, FrameInput, Presentation, RenderingBackend, Scene, SceneTower,
-    TileGridPresentation, TowerPreview,
+    TileGridPresentation, TowerPreview, TowerTargetLine,
 };
 use std::time::Duration;
 
@@ -88,6 +88,8 @@ impl RenderingBackend for MacroquadBackend {
                 }
 
                 draw_wall(&metrics, wall, grid_color, subgrid_color);
+
+                draw_tower_targets(&scene.tower_targets, &metrics);
 
                 let bug_radius = metrics.cell_step * 0.5;
                 for BugPresentation { column, row, color } in &scene.bugs {
@@ -259,7 +261,7 @@ fn active_builder_preview(scene: &Scene) -> Option<TowerPreview> {
 mod tests {
     use super::*;
     use glam::Vec2;
-    use maze_defence_core::{CellCoord, CellRect, CellRectSize, TowerKind};
+    use maze_defence_core::{BugId, CellCoord, CellRect, CellRectSize, TowerId, TowerKind};
 
     fn base_scene(play_mode: PlayMode, placement_preview: Option<TowerPreview>) -> Scene {
         let grid = TileGridPresentation::new(
@@ -279,6 +281,7 @@ mod tests {
         Scene::new(
             grid,
             wall,
+            Vec::new(),
             Vec::new(),
             Vec::new(),
             play_mode,
@@ -379,6 +382,36 @@ mod tests {
 
         assert!(origin_column_tiles + footprint.x <= scene.tile_grid.columns as f32 + 1e-5);
         assert!(origin_row_tiles + footprint.y <= scene.tile_grid.rows as f32 + 1e-5);
+    }
+
+    #[test]
+    fn tower_target_segments_empty_when_no_targets() {
+        let mut scene = base_scene(PlayMode::Attack, None);
+        let metrics = SceneMetrics::from_scene(&scene, 960.0, 960.0);
+
+        assert!(tower_target_segments(&scene.tower_targets, &metrics).is_empty());
+
+        scene.tower_targets.push(TowerTargetLine::new(
+            TowerId::new(1),
+            BugId::new(2),
+            Vec2::new(3.0, 4.0),
+            Vec2::new(5.5, 6.5),
+        ));
+        let metrics = SceneMetrics::from_scene(&scene, 960.0, 960.0);
+        let segments = tower_target_segments(&scene.tower_targets, &metrics);
+
+        assert_eq!(segments.len(), 1);
+        let (start, end) = segments[0];
+        let expected_start = Vec2::new(
+            metrics.offset_x + 3.0 * metrics.cell_step,
+            metrics.offset_y + 4.0 * metrics.cell_step,
+        );
+        let expected_end = Vec2::new(
+            metrics.offset_x + 5.5 * metrics.cell_step,
+            metrics.offset_y + 6.5 * metrics.cell_step,
+        );
+        assert_eq!(start, expected_start);
+        assert_eq!(end, expected_end);
     }
 
     #[test]
@@ -576,6 +609,36 @@ fn normalize_target_columns(columns: &[u32]) -> Vec<u32> {
     columns
         .iter()
         .map(|&column| column.saturating_sub(margin))
+        .collect()
+}
+
+fn draw_tower_targets(tower_targets: &[TowerTargetLine], metrics: &SceneMetrics) {
+    for (start, end) in tower_target_segments(tower_targets, metrics) {
+        macroquad::shapes::draw_line(start.x, start.y, end.x, end.y, 1.0, BLACK);
+    }
+}
+
+fn tower_target_segments(
+    tower_targets: &[TowerTargetLine],
+    metrics: &SceneMetrics,
+) -> Vec<(Vec2, Vec2)> {
+    if tower_targets.is_empty() || metrics.cell_step <= f32::EPSILON {
+        return Vec::new();
+    }
+
+    tower_targets
+        .iter()
+        .map(|line| {
+            let start = Vec2::new(
+                metrics.offset_x + line.from.x * metrics.cell_step,
+                metrics.offset_y + line.from.y * metrics.cell_step,
+            );
+            let end = Vec2::new(
+                metrics.offset_x + line.to.x * metrics.cell_step,
+                metrics.offset_y + line.to.y * metrics.cell_step,
+            );
+            (start, end)
+        })
         .collect()
 }
 
