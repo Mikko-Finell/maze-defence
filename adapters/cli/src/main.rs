@@ -15,7 +15,7 @@ use std::{
 };
 
 use anyhow::Result;
-use clap::Parser;
+use clap::{Parser, ValueEnum};
 use glam::Vec2;
 use maze_defence_core::{
     CellCoord, CellRect, CellRectSize, Command, Event, PlacementError, PlayMode, RemovalError,
@@ -114,6 +114,18 @@ struct CliArgs {
         value_parser = clap::value_parser!(u64).range(1..=60_000)
     )]
     bug_spawn_interval_ms: u64,
+    /// Requests that the renderer either synchronise presentation with the display refresh rate or run uncapped.
+    #[arg(long, value_enum, value_name = "on|off")]
+    vsync: Option<VsyncMode>,
+}
+
+/// CLI argument controlling whether vertical sync is requested from the rendering backend.
+#[derive(Clone, Copy, Debug, ValueEnum)]
+enum VsyncMode {
+    /// Request presentation synchronisation with the display refresh rate.
+    On,
+    /// Request uncapped presentation without waiting for the display refresh rate.
+    Off,
 }
 
 /// Grid dimensions parsed from a WIDTHxHEIGHT command-line argument.
@@ -219,7 +231,13 @@ fn main() -> Result<()> {
 
     let presentation = Presentation::new(banner, Color::from_rgb_u8(85, 142, 52), scene);
 
-    MacroquadBackend.run(presentation, move |dt, input, scene| {
+    let backend = match args.vsync {
+        Some(VsyncMode::On) => MacroquadBackend::default().with_vsync(true),
+        Some(VsyncMode::Off) => MacroquadBackend::default().with_vsync(false),
+        None => MacroquadBackend::default(),
+    };
+
+    backend.run(presentation, move |dt, input, scene| {
         simulation.handle_input(input);
         simulation.advance(dt);
         let populate_start = Instant::now();
