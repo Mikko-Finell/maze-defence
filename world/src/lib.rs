@@ -172,7 +172,7 @@ impl World {
                 continue;
             }
 
-            let reached_target = self.targets.iter().any(|target| *target == next_cell);
+            let reached_target = self.targets.contains(&next_cell);
 
             self.occupancy.vacate(from);
             self.occupancy.occupy(bug.id, next_cell);
@@ -198,6 +198,12 @@ impl World {
                 let _ = self.bugs.remove(position);
             }
         }
+    }
+}
+
+impl Default for World {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -520,9 +526,9 @@ pub mod query {
 
     /// Reports the number of navigation cells contained within a single tile.
     ///
-    /// The returned value is always at least `1`. The world normalises any
-    /// zero-valued configuration inputs to one during tile grid configuration
-    /// so that spatial reasoning never encounters empty scaling factors.
+    /// Always ≥ 1; the world normalizes zero-valued configuration inputs at
+    /// set-up, and this query enforces the invariant at the read boundary as
+    /// well.
     #[must_use]
     pub fn cells_per_tile(world: &World) -> u32 {
         world.cells_per_tile.max(1)
@@ -815,9 +821,8 @@ impl OccupancyGrid {
     }
 
     pub(crate) fn can_enter(&self, cell: CellCoord) -> bool {
-        self.index(cell).map_or(true, |index| {
-            self.cells.get(index).copied().unwrap_or(None).is_none()
-        })
+        self.index(cell)
+            .is_none_or(|index| self.cells.get(index).copied().unwrap_or(None).is_none())
     }
 
     fn occupy(&mut self, bug_id: BugId, cell: CellCoord) {

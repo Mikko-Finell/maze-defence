@@ -16,7 +16,7 @@
 //! react to deterministically. Systems consume event streams, query immutable
 //! snapshots, and respond exclusively with new command batches.
 
-use std::time::Duration;
+use std::{num::NonZeroU32, time::Duration};
 
 use serde::{Deserialize, Serialize};
 
@@ -478,7 +478,7 @@ impl BugView {
     }
 
     /// Iterator over the captured bug snapshots in deterministic order.
-    #[must_use]
+    #[must_use = "iterators are lazy and do nothing unless consumed"]
     pub fn iter(&self) -> impl Iterator<Item = &BugSnapshot> {
         self.snapshots.iter()
     }
@@ -519,9 +519,8 @@ impl<'a> OccupancyView<'a> {
     /// Reports whether the cell is currently free for traversal.
     #[must_use]
     pub fn is_free(&self, cell: CellCoord) -> bool {
-        self.index(cell).map_or(true, |index| {
-            self.cells.get(index).copied().unwrap_or(None).is_none()
-        })
+        self.index(cell)
+            .is_none_or(|index| self.cells.get(index).copied().unwrap_or(None).is_none())
     }
 
     /// Returns an iterator over all cells.
@@ -562,7 +561,7 @@ impl TowerView {
     }
 
     /// Iterator over the captured tower snapshots in deterministic order.
-    #[must_use]
+    #[must_use = "iterators are lazy and do nothing unless consumed"]
     pub fn iter(&self) -> impl Iterator<Item = &TowerSnapshot> {
         self.snapshots.iter()
     }
@@ -605,25 +604,49 @@ impl TowerKind {
 
     /// Converts the tower's targeting range into whole cell units.
     ///
+    /// Guarantees: returns `floor(self.range_in_tiles() * cells_per_tile)`.
+    /// This method never rounds up, ensuring deterministic, grid-aligned
+    /// behaviour that mirrors the targeting system's integer half-cell checks.
+    /// Targeting converts this radius to half-cells (`radius_half =
+    /// radius_cells * 2`) for integer-only distance comparisons.
+    ///
     /// The provided `cells_per_tile` factor originates from the authoritative
     /// world configuration. A value of zero produces a zero radius so that
     /// callers never observe negative or undefined distances. Fractional
-    /// results are truncated to keep the returned radius aligned with the
-    /// discrete cell grid used by systems. `TowerKind::Basic` therefore spans
-    /// four tiles multiplied by the configured `cells_per_tile` value.
+    /// results are truncated via the floor operation to keep the returned
+    /// radius aligned with the discrete cell grid used by systems. This
+    /// convenience helper tolerates zero for ergonomics; use
+    /// [`TowerKind::range_in_cells_nz`] when the configuration is already
+    /// validated.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use maze_defence_core::TowerKind;
+    ///
+    /// let cells_per_tile = 3;
+    /// assert_eq!(TowerKind::Basic.range_in_cells(cells_per_tile), 4 * cells_per_tile);
+    /// ```
     #[must_use]
     pub fn range_in_cells(self, cells_per_tile: u32) -> u32 {
         if cells_per_tile == 0 {
             return 0;
         }
 
-        let tiles = self.range_in_tiles();
-        if tiles <= 0.0 {
-            return 0;
-        }
+        let scaled = self.range_in_tiles() * cells_per_tile as f32;
+        scaled.floor() as u32
+    }
 
-        let scaled = tiles * cells_per_tile as f32;
-        scaled as u32
+    /// Converts the tower's targeting range into whole cell units while
+    /// encoding the non-zero invariant for `cells_per_tile` at the type level.
+    ///
+    /// This variant mirrors [`TowerKind::range_in_cells`] but accepts a
+    /// [`NonZeroU32`] to ensure callers uphold the positive spacing guarantee
+    /// established by the world configuration.
+    #[must_use]
+    pub fn range_in_cells_nz(self, cells_per_tile: NonZeroU32) -> u32 {
+        let scaled = self.range_in_tiles() * cells_per_tile.get() as f32;
+        scaled.floor() as u32
     }
 }
 
@@ -689,6 +712,8 @@ impl TileCoord {
 
 #[cfg(test)]
 mod tests {
+    use std::num::NonZeroU32;
+
     use super::{
         CellCoord, CellRect, CellRectSize, PlacementError, RemovalError, TowerId, TowerKind,
     };
@@ -742,7 +767,7 @@ mod tests {
 
     #[test]
     fn tower_basic_range_in_tiles_matches_specification() {
-        assert!((TowerKind::Basic.range_in_tiles() - 4.0).abs() < f32::EPSILON);
+        assert_eq!(TowerKind::Basic.range_in_tiles(), 4.0);
     }
 
     #[test]
@@ -754,5 +779,36 @@ mod tests {
     #[test]
     fn tower_range_in_cells_handles_zero_configuration() {
         assert_eq!(TowerKind::Basic.range_in_cells(0), 0);
+    }
+
+    #[test]
+    fn tower_range_in_cells_handles_large_configuration() {
+        let cells_per_tile = 10_000;
+        assert_eq!(TowerKind::Basic.range_in_cells(cells_per_tile), 40_000);
+    }
+
+    #[test]
+    fn range_in_cells_is_monotonic_and_truncates() {
+        for cells_per_tile in 0..=32 {
+            let got = TowerKind::Basic.range_in_cells(cells_per_tile);
+            let expect = (TowerKind::Basic.range_in_tiles() * cells_per_tile as f32).floor() as u32;
+            assert_eq!(got, expect, "cpt={cells_per_tile}");
+        }
+
+        let mut previous = 0;
+        for cells_per_tile in 0..=32 {
+            let now = TowerKind::Basic.range_in_cells(cells_per_tile);
+            assert!(now >= previous, "cpt={cells_per_tile}");
+            previous = now;
+        }
+    }
+
+    #[test]
+    fn range_in_cells_nz_matches_truncating_contract() {
+        let cells_per_tile = NonZeroU32::new(7).expect("non-zero");
+        assert_eq!(
+            TowerKind::Basic.range_in_cells_nz(cells_per_tile),
+            TowerKind::Basic.range_in_cells(cells_per_tile.get())
+        );
     }
 }
