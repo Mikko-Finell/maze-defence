@@ -304,6 +304,7 @@ dependencies = [
  "maze-defence-rendering",
  "maze-defence-rendering-macroquad",
  "maze-defence-system-bootstrap",
+ "maze-defence-system-builder",
  "maze-defence-system-movement",
  "maze-defence-system-spawning",
  "maze-defence-world",

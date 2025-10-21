@@ -75,7 +75,7 @@ Do not start working before you're read `tower-spec.md` so you understand the co
 
 **Goal:** Close the loop without changing visuals yet.
 
-**Status:** TODO
+**Status:** Done
 
 * Extend preview to compute snapped `CellCoord` + candidate `CellRect` + “placeable” bool using queries.
 * Queue system-emitted commands into the world at the proper step boundary.
