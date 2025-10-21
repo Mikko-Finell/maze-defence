@@ -562,18 +562,13 @@ impl Simulation {
 
     fn tile_position_to_cell(&self, position: TileSpacePosition) -> CellCoord {
         let half_cell_stride = (self.cells_per_tile / 2).max(1);
-        let column_offset = TileGridPresentation::SIDE_BORDER_CELL_LAYERS % half_cell_stride;
-        let row_offset = TileGridPresentation::TOP_BORDER_CELL_LAYERS % half_cell_stride;
-        let column = TileGridPresentation::SIDE_BORDER_CELL_LAYERS
-            .saturating_add(
-                position
-                    .column_half_steps()
-                    .saturating_mul(half_cell_stride),
-            )
-            .saturating_sub(column_offset);
+        let column = TileGridPresentation::SIDE_BORDER_CELL_LAYERS.saturating_add(
+            position
+                .column_half_steps()
+                .saturating_mul(half_cell_stride),
+        );
         let row = TileGridPresentation::TOP_BORDER_CELL_LAYERS
-            .saturating_add(position.row_half_steps().saturating_mul(half_cell_stride))
-            .saturating_sub(row_offset);
+            .saturating_add(position.row_half_steps().saturating_mul(half_cell_stride));
         CellCoord::new(column, row)
     }
 
@@ -837,8 +832,13 @@ mod tests {
         assert!(preview.placeable, "initial preview should be placeable");
         assert_eq!(preview.kind, TowerKind::Basic);
         let half_stride = (TileGridPresentation::DEFAULT_CELLS_PER_TILE / 2).max(1);
-        assert_eq!(preview.origin.column() % half_stride, 0);
-        assert_eq!(preview.origin.row() % half_stride, 0);
+        let expected_origin = CellCoord::new(
+            TileGridPresentation::SIDE_BORDER_CELL_LAYERS
+                .saturating_add(preview_tile.column_half_steps().saturating_mul(half_stride)),
+            TileGridPresentation::TOP_BORDER_CELL_LAYERS
+                .saturating_add(preview_tile.row_half_steps().saturating_mul(half_stride)),
+        );
+        assert_eq!(preview.origin, expected_origin);
         assert_eq!(
             preview.region,
             CellRect::from_origin_and_size(preview.origin, CellRectSize::new(2, 2))

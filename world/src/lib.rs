@@ -443,7 +443,24 @@ impl World {
         }
 
         if let Some(stride) = self.tower_alignment_stride() {
-            if origin.column() % stride != 0 || origin.row() % stride != 0 {
+            let Some(column_alignment) = origin.column().checked_sub(SIDE_BORDER_CELL_LAYERS)
+            else {
+                out_events.push(Event::TowerPlacementRejected {
+                    kind,
+                    origin,
+                    reason: PlacementError::Misaligned,
+                });
+                return;
+            };
+            let Some(row_alignment) = origin.row().checked_sub(TOP_BORDER_CELL_LAYERS) else {
+                out_events.push(Event::TowerPlacementRejected {
+                    kind,
+                    origin,
+                    reason: PlacementError::Misaligned,
+                });
+                return;
+            };
+            if column_alignment % stride != 0 || row_alignment % stride != 0 {
                 out_events.push(Event::TowerPlacementRejected {
                     kind,
                     origin,
@@ -1337,7 +1354,10 @@ mod tests {
         );
         events.clear();
 
-        let origin = CellCoord::new(1, 1);
+        let origin = CellCoord::new(
+            SIDE_BORDER_CELL_LAYERS.saturating_add(1),
+            TOP_BORDER_CELL_LAYERS,
+        );
         apply(
             &mut world,
             Command::PlaceTower {
