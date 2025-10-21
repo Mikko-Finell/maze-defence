@@ -297,7 +297,7 @@ impl TileGridPresentation {
     pub const TOP_BORDER_CELL_LAYERS: u32 = 1;
 
     /// Number of cell layers rendered below the tile grid.
-    pub const BOTTOM_BORDER_CELL_LAYERS: u32 = 0;
+    pub const BOTTOM_BORDER_CELL_LAYERS: u32 = 1;
 
     /// Creates a new tile grid descriptor.
     ///

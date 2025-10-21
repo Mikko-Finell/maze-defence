@@ -37,6 +37,7 @@ const DEFAULT_STEP_QUANTUM: Duration = Duration::from_millis(250);
 const MIN_STEP_QUANTUM: Duration = Duration::from_micros(1);
 const SIDE_BORDER_CELL_LAYERS: u32 = 1;
 const TOP_BORDER_CELL_LAYERS: u32 = 1;
+const BOTTOM_WALKWAY_CELL_LAYERS: u32 = 1;
 
 /// Represents the authoritative Maze Defence world state.
 #[derive(Debug)]
@@ -635,6 +636,18 @@ pub mod query {
     /// Reports whether the provided cell is blocked by the world state.
     #[must_use]
     pub fn is_cell_blocked(world: &World, cell: CellCoord) -> bool {
+        let (_, rows) = world.occupancy.dimensions();
+        if let Some(walkway_row) = rows.checked_sub(1) {
+            if cell.row() == walkway_row
+                && !world
+                    .targets
+                    .iter()
+                    .any(|target| target.column() == cell.column())
+            {
+                return true;
+            }
+        }
+
         if world.occupancy.index(cell).is_none() || !world.occupancy.can_enter(cell) {
             return true;
         }
@@ -971,7 +984,9 @@ fn total_cell_rows(rows: TileCoord, cells_per_tile: u32) -> u32 {
     if interior == 0 {
         0
     } else {
-        interior.saturating_add(TOP_BORDER_CELL_LAYERS)
+        interior
+            .saturating_add(TOP_BORDER_CELL_LAYERS)
+            .saturating_add(BOTTOM_WALKWAY_CELL_LAYERS)
     }
 }
 
@@ -1025,7 +1040,8 @@ fn advance_cell(
     rows: u32,
     target_columns: &[u32],
 ) -> Option<CellCoord> {
-    match direction {
+    let walkway_row = rows.checked_sub(1);
+    let destination = match direction {
         Direction::North => {
             let next_row = from.row().checked_sub(1)?;
             Some(CellCoord::new(from.column(), next_row))
@@ -1054,7 +1070,19 @@ fn advance_cell(
             let next_column = from.column().checked_sub(1)?;
             Some(CellCoord::new(next_column, from.row()))
         }
+    }?;
+
+    if let Some(walkway_row) = walkway_row {
+        if destination.row() == walkway_row
+            && !target_columns
+                .iter()
+                .any(|column| *column == destination.column())
+        {
+            return None;
+        }
     }
+
+    Some(destination)
 }
 
 fn target_cells_from_wall(wall: &Wall) -> Vec<CellCoord> {
@@ -1169,11 +1197,19 @@ mod tests {
         let world = World::new();
         let occupancy = query::occupancy_view(&world);
         let (columns, rows) = occupancy.dimensions();
+        let exit_columns: Vec<u32> = query::target_cells(&world)
+            .into_iter()
+            .map(|cell| cell.column())
+            .collect();
+        let walkway_row = rows.checked_sub(1);
 
         for column in 0..columns {
             for row in 0..rows {
                 let cell = CellCoord::new(column, row);
-                let expected = !occupancy.is_free(cell);
+                let walkway_blocked = walkway_row.is_some_and(|walkway| {
+                    row == walkway && !exit_columns.iter().any(|&target| target == column)
+                });
+                let expected = walkway_blocked || !occupancy.is_free(cell);
                 assert_eq!(query::is_cell_blocked(&world, cell), expected);
             }
         }
@@ -2044,6 +2080,259 @@ mod tests {
         let expected = expected_outer_rim(columns, rows);
 
         assert_eq!(world.bug_spawners.cells(), &expected);
+    }
+
+    #[test]
+    fn bug_spawners_exclude_walkway_row() {
+        let world = World::new();
+        let (_, rows) = world.occupancy.dimensions();
+        let Some(walkway_row) = rows.checked_sub(1) else {
+            panic!("expected walkway row in default world");
+        };
+
+        for spawner in query::bug_spawners(&world) {
+            assert_ne!(
+                spawner.row(),
+                walkway_row,
+                "walkway row must not host bug spawners"
+            );
+        }
+    }
+
+    #[test]
+    fn bugs_traverse_walkway_only_through_exit() {
+        let mut world = World::new();
+        let mut events = Vec::new();
+
+        apply(
+            &mut world,
+            Command::ConfigureTileGrid {
+                columns: TileCoord::new(1),
+                rows: TileCoord::new(1),
+                tile_length: 25.0,
+                cells_per_tile: 1,
+            },
+            &mut events,
+        );
+
+        events.clear();
+
+        let exit_column = query::target_cells(&world)
+            .first()
+            .map(|cell| cell.column())
+            .expect("expected exit column");
+        apply(
+            &mut world,
+            Command::SpawnBug {
+                spawner: CellCoord::new(exit_column, 0),
+                color: BugColor::from_rgb(0x10, 0x20, 0x30),
+            },
+            &mut events,
+        );
+
+        let bug_id = match events.as_slice() {
+            [Event::BugSpawned { bug_id, .. }] => *bug_id,
+            other => panic!("unexpected spawn events: {other:?}"),
+        };
+
+        let (_, rows) = world.occupancy.dimensions();
+        let walkway_row = rows.checked_sub(1).expect("walkway row expected");
+        let approach_row = walkway_row.saturating_sub(1);
+        let walkway_cell = CellCoord::new(exit_column, walkway_row);
+        let approach_cell = CellCoord::new(exit_column, approach_row);
+
+        events.clear();
+        apply(
+            &mut world,
+            Command::Tick {
+                dt: Duration::from_millis(250),
+            },
+            &mut events,
+        );
+
+        events.clear();
+        apply(
+            &mut world,
+            Command::StepBug {
+                bug_id,
+                direction: Direction::South,
+            },
+            &mut events,
+        );
+        assert!(events.iter().any(|event| {
+            matches!(
+                event,
+                Event::BugAdvanced { to, .. } if *to == approach_cell
+            )
+        }));
+        let bug_snapshot = query::bug_view(&world)
+            .into_vec()
+            .into_iter()
+            .find(|snapshot| snapshot.id == bug_id)
+            .expect("bug should have advanced toward walkway");
+        assert_eq!(bug_snapshot.cell, approach_cell);
+
+        events.clear();
+        apply(
+            &mut world,
+            Command::Tick {
+                dt: Duration::from_millis(250),
+            },
+            &mut events,
+        );
+
+        events.clear();
+        apply(
+            &mut world,
+            Command::StepBug {
+                bug_id,
+                direction: Direction::South,
+            },
+            &mut events,
+        );
+        assert!(events.iter().any(|event| {
+            matches!(
+                event,
+                Event::BugAdvanced { to, .. } if *to == walkway_cell
+            )
+        }));
+        let bug_snapshot = query::bug_view(&world)
+            .into_vec()
+            .into_iter()
+            .find(|snapshot| snapshot.id == bug_id)
+            .expect("bug should stand on walkway");
+        assert_eq!(bug_snapshot.cell, walkway_cell);
+
+        events.clear();
+        apply(
+            &mut world,
+            Command::Tick {
+                dt: Duration::from_millis(250),
+            },
+            &mut events,
+        );
+
+        events.clear();
+        apply(
+            &mut world,
+            Command::StepBug {
+                bug_id,
+                direction: Direction::East,
+            },
+            &mut events,
+        );
+        assert!(
+            events.is_empty(),
+            "eastward movement should be blocked outside exit columns"
+        );
+        let bug_snapshot = query::bug_view(&world)
+            .into_vec()
+            .into_iter()
+            .find(|snapshot| snapshot.id == bug_id)
+            .expect("bug should remain on walkway");
+        assert_eq!(bug_snapshot.cell, walkway_cell);
+
+        events.clear();
+        apply(
+            &mut world,
+            Command::Tick {
+                dt: Duration::from_millis(250),
+            },
+            &mut events,
+        );
+
+        events.clear();
+        apply(
+            &mut world,
+            Command::StepBug {
+                bug_id,
+                direction: Direction::South,
+            },
+            &mut events,
+        );
+        let exit_row = exit_row_for_tile_grid(TileCoord::new(1), 1);
+        assert!(events.iter().any(|event| {
+            matches!(
+                event,
+                Event::BugAdvanced { to, .. }
+                    if *to == CellCoord::new(exit_column, exit_row)
+            )
+        }));
+        assert!(
+            query::bug_view(&world).into_vec().is_empty(),
+            "bug should exit after leaving walkway"
+        );
+        assert!(query::occupancy_view(&world).is_free(walkway_cell));
+
+        events.clear();
+        apply(
+            &mut world,
+            Command::SpawnBug {
+                spawner: CellCoord::new(0, 0),
+                color: BugColor::from_rgb(0xaa, 0xbb, 0xcc),
+            },
+            &mut events,
+        );
+        let second_bug_id = match events.as_slice() {
+            [Event::BugSpawned { bug_id, .. }] => *bug_id,
+            other => panic!("unexpected spawn events: {other:?}"),
+        };
+
+        let alternate_cell = CellCoord::new(0, approach_row);
+
+        events.clear();
+        apply(
+            &mut world,
+            Command::Tick {
+                dt: Duration::from_millis(250),
+            },
+            &mut events,
+        );
+
+        events.clear();
+        apply(
+            &mut world,
+            Command::StepBug {
+                bug_id: second_bug_id,
+                direction: Direction::South,
+            },
+            &mut events,
+        );
+        assert!(events.iter().any(|event| {
+            matches!(
+                event,
+                Event::BugAdvanced { to, .. } if *to == alternate_cell
+            )
+        }));
+
+        events.clear();
+        apply(
+            &mut world,
+            Command::Tick {
+                dt: Duration::from_millis(250),
+            },
+            &mut events,
+        );
+
+        events.clear();
+        apply(
+            &mut world,
+            Command::StepBug {
+                bug_id: second_bug_id,
+                direction: Direction::South,
+            },
+            &mut events,
+        );
+        assert!(
+            events.is_empty(),
+            "non-exit columns must remain blocked on walkway row"
+        );
+        let second_snapshot = query::bug_view(&world)
+            .into_vec()
+            .into_iter()
+            .find(|snapshot| snapshot.id == second_bug_id)
+            .expect("bug should remain before walkway");
+        assert_eq!(second_snapshot.cell, alternate_cell);
     }
 
     #[test]
