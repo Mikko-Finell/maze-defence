@@ -592,6 +592,41 @@ pub enum TowerKind {
     Basic,
 }
 
+impl TowerKind {
+    /// Returns the tower's targeting range measured in tiles.
+    ///
+    /// `TowerKind::Basic` covers a radius of four tiles.
+    #[must_use]
+    pub const fn range_in_tiles(self) -> f32 {
+        match self {
+            Self::Basic => 4.0,
+        }
+    }
+
+    /// Converts the tower's targeting range into whole cell units.
+    ///
+    /// The provided `cells_per_tile` factor originates from the authoritative
+    /// world configuration. A value of zero produces a zero radius so that
+    /// callers never observe negative or undefined distances. Fractional
+    /// results are truncated to keep the returned radius aligned with the
+    /// discrete cell grid used by systems. `TowerKind::Basic` therefore spans
+    /// four tiles multiplied by the configured `cells_per_tile` value.
+    #[must_use]
+    pub fn range_in_cells(self, cells_per_tile: u32) -> u32 {
+        if cells_per_tile == 0 {
+            return 0;
+        }
+
+        let tiles = self.range_in_tiles();
+        if tiles <= 0.0 {
+            return 0;
+        }
+
+        let scaled = tiles * cells_per_tile as f32;
+        scaled as u32
+    }
+}
+
 /// Reasons a tower placement request may be rejected by the world.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum PlacementError {
@@ -703,5 +738,21 @@ mod tests {
         let size = CellRectSize::new(2, 3);
         let rect = CellRect::from_origin_and_size(origin, size);
         assert_round_trip(&rect);
+    }
+
+    #[test]
+    fn tower_basic_range_in_tiles_matches_specification() {
+        assert!((TowerKind::Basic.range_in_tiles() - 4.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn tower_range_in_cells_scales_with_configuration() {
+        let cells_per_tile = 3;
+        assert_eq!(TowerKind::Basic.range_in_cells(cells_per_tile), 12);
+    }
+
+    #[test]
+    fn tower_range_in_cells_handles_zero_configuration() {
+        assert_eq!(TowerKind::Basic.range_in_cells(0), 0);
     }
 }

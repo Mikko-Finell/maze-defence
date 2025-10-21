@@ -518,6 +518,16 @@ pub mod query {
         &world.tile_grid
     }
 
+    /// Reports the number of navigation cells contained within a single tile.
+    ///
+    /// The returned value is always at least `1`. The world normalises any
+    /// zero-valued configuration inputs to one during tile grid configuration
+    /// so that spatial reasoning never encounters empty scaling factors.
+    #[must_use]
+    pub fn cells_per_tile(world: &World) -> u32 {
+        world.cells_per_tile.max(1)
+    }
+
     /// Provides read-only access to the wall guarding the maze perimeter.
     #[must_use]
     pub fn wall(world: &World) -> &Wall {
@@ -1083,6 +1093,51 @@ mod tests {
         let world = World::new();
 
         assert!(query::bug_view(&world).into_vec().is_empty());
+    }
+
+    #[test]
+    fn default_cells_per_tile_is_one() {
+        let world = World::new();
+
+        assert_eq!(query::cells_per_tile(&world), 1);
+    }
+
+    #[test]
+    fn configured_cells_per_tile_reflects_world_settings() {
+        let mut world = World::new();
+        let mut events = Vec::new();
+
+        apply(
+            &mut world,
+            Command::ConfigureTileGrid {
+                columns: DEFAULT_GRID_COLUMNS,
+                rows: DEFAULT_GRID_ROWS,
+                tile_length: DEFAULT_TILE_LENGTH,
+                cells_per_tile: 4,
+            },
+            &mut events,
+        );
+
+        assert_eq!(query::cells_per_tile(&world), 4);
+    }
+
+    #[test]
+    fn zero_cells_per_tile_is_normalised_to_one() {
+        let mut world = World::new();
+        let mut events = Vec::new();
+
+        apply(
+            &mut world,
+            Command::ConfigureTileGrid {
+                columns: DEFAULT_GRID_COLUMNS,
+                rows: DEFAULT_GRID_ROWS,
+                tile_length: DEFAULT_TILE_LENGTH,
+                cells_per_tile: 0,
+            },
+            &mut events,
+        );
+
+        assert_eq!(query::cells_per_tile(&world), 1);
     }
 
     #[test]
