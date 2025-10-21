@@ -187,18 +187,12 @@ fn replans_after_failed_step() {
     );
 
     let target_cells = query::target_cells(&world);
-    let target_columns: Vec<u32> = target_cells.iter().map(|cell| cell.column()).collect();
     let bug_view = query::bug_view(&world);
     let occupancy_view_initial = query::occupancy_view(&world);
     let (columns, rows) = occupancy_view_initial.dimensions();
-    let (bug_id, blocked_direction) = select_blocked_bug(
-        &bug_view,
-        occupancy_view_initial,
-        columns,
-        rows,
-        &target_columns,
-    )
-    .expect("expected at least one bug on a boundary");
+    let (bug_id, blocked_direction) =
+        select_blocked_bug(&bug_view, occupancy_view_initial, columns, rows)
+            .expect("expected at least one bug on a boundary");
 
     let mut bad_step_events = Vec::new();
     world::apply(
@@ -547,7 +541,6 @@ fn select_blocked_bug(
     occupancy_view: OccupancyView<'_>,
     columns: u32,
     rows: u32,
-    target_columns: &[u32],
 ) -> Option<(maze_defence_core::BugId, Direction)> {
     for bug in bug_view.iter() {
         let column = bug.cell.column();
@@ -574,19 +567,8 @@ fn select_blocked_bug(
             }
         }
 
-        if row + 1 == rows && !target_columns.contains(&column) {
-            if column > 0 {
-                let west = CellCoord::new(column - 1, row);
-                if occupancy_view.is_free(west) {
-                    return Some((bug.id, Direction::South));
-                }
-            }
-            if column + 1 < columns {
-                let east = CellCoord::new(column + 1, row);
-                if occupancy_view.is_free(east) {
-                    return Some((bug.id, Direction::South));
-                }
-            }
+        if row.saturating_add(1) >= rows {
+            return Some((bug.id, Direction::South));
         }
     }
 
