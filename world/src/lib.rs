@@ -9,7 +9,10 @@
 
 //! Authoritative world state management for Maze Defence.
 
-use std::{collections::BTreeSet, time::Duration};
+use std::{
+    collections::{BTreeSet, HashMap},
+    time::Duration,
+};
 
 #[cfg(any(test, feature = "tower_scaffolding"))]
 mod towers;
@@ -44,6 +47,7 @@ pub struct World {
     wall: Wall,
     targets: Vec<CellCoord>,
     bugs: Vec<Bug>,
+    bug_positions: HashMap<BugId, usize>,
     bug_spawners: BugSpawnerRegistry,
     next_bug_id: u32,
     occupancy: OccupancyGrid,
@@ -73,6 +77,7 @@ impl World {
         let mut world = Self {
             banner: WELCOME_BANNER,
             bugs: Vec::new(),
+            bug_positions: HashMap::new(),
             bug_spawners: BugSpawnerRegistry::new(),
             next_bug_id: 0,
             occupancy,
@@ -96,6 +101,7 @@ impl World {
 
     fn clear_bugs(&mut self) {
         self.bugs.clear();
+        self.bug_positions.clear();
         self.occupancy.clear();
         self.reservations.clear();
         self.next_bug_id = 0;
@@ -106,7 +112,17 @@ impl World {
     }
 
     fn bug_index(&self, bug_id: BugId) -> Option<usize> {
-        self.bugs.iter().position(|bug| bug.id == bug_id)
+        self.bug_positions.get(&bug_id).copied()
+    }
+
+    fn remove_bug_at_index(&mut self, index: usize) {
+        let removed = self.bugs.swap_remove(index);
+        let _ = self.bug_positions.remove(&removed.id);
+        if index < self.bugs.len() {
+            let moved_bug = &self.bugs[index];
+            let replaced = self.bug_positions.insert(moved_bug.id, index);
+            debug_assert_eq!(replaced, Some(self.bugs.len()));
+        }
     }
 
     fn spawn_from_spawner(
@@ -126,7 +142,10 @@ impl World {
         let bug_id = self.next_bug_identifier();
         let bug = Bug::new(bug_id, cell, color);
         self.occupancy.occupy(bug_id, cell);
+        let index = self.bugs.len();
         self.bugs.push(bug);
+        let replaced = self.bug_positions.insert(bug_id, index);
+        debug_assert!(replaced.is_none());
         out_events.push(Event::BugSpawned {
             bug_id,
             cell,
@@ -195,7 +214,7 @@ impl World {
 
         for bug_id in exited_bugs {
             if let Some(position) = self.bug_index(bug_id) {
-                let _ = self.bugs.remove(position);
+                self.remove_bug_at_index(position);
             }
         }
     }
