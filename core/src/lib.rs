@@ -332,7 +332,7 @@ pub enum TowerKind {
 }
 
 /// Reasons a tower placement request may be rejected by the world.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum PlacementError {
     /// The simulation is not in builder mode, so placement is disabled.
     InvalidMode,
@@ -345,7 +345,7 @@ pub enum PlacementError {
 }
 
 /// Reasons a tower removal request may be rejected by the world.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum RemovalError {
     /// The simulation is not in builder mode, so removal is disabled.
     InvalidMode,
