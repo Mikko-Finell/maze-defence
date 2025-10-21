@@ -13,6 +13,7 @@ use std::{str::FromStr, time::Duration};
 
 use anyhow::Result;
 use clap::Parser;
+use glam::Vec2;
 use maze_defence_core::{
     CellCoord, CellRect, CellRectSize, Command, Event, PlacementError, PlayMode, RemovalError,
     TileCoord, TowerId, TowerKind,
@@ -190,6 +191,7 @@ fn main() -> Result<()> {
         query::play_mode(simulation.world()),
         None,
         None,
+        None,
     );
     simulation.populate_scene(&mut scene);
 
@@ -346,6 +348,11 @@ impl Simulation {
                     preview.rejection,
                 )
             })
+        } else {
+            None
+        };
+        scene.active_tower_footprint_tiles = if scene.play_mode == PlayMode::Builder {
+            Some(self.selected_tower_footprint_tiles())
         } else {
             None
         };
@@ -541,6 +548,18 @@ impl Simulation {
         }
     }
 
+    fn selected_tower_footprint_tiles(&self) -> Vec2 {
+        if self.cells_per_tile == 0 {
+            return Vec2::ZERO;
+        }
+
+        let footprint = Self::tower_footprint(self.selected_tower_kind());
+        Vec2::new(
+            footprint.width() as f32 / self.cells_per_tile as f32,
+            footprint.height() as f32 / self.cells_per_tile as f32,
+        )
+    }
+
     fn tile_position_to_cell(&self, position: TileSpacePosition) -> CellCoord {
         let half_cell_stride = (self.cells_per_tile / 2).max(1);
         let column_offset = TileGridPresentation::SIDE_BORDER_CELL_LAYERS % half_cell_stride;
@@ -647,6 +666,7 @@ mod tests {
             PlayMode::Attack,
             None,
             None,
+            None,
         )
     }
 
@@ -751,6 +771,12 @@ mod tests {
                 expected_preview.rejection,
             ))
         );
+        let footprint = Simulation::tower_footprint(simulation.selected_tower_kind());
+        let expected_footprint = Vec2::new(
+            footprint.width() as f32 / simulation.cells_per_tile as f32,
+            footprint.height() as f32 / simulation.cells_per_tile as f32,
+        );
+        assert_eq!(scene.active_tower_footprint_tiles, Some(expected_footprint));
         assert!(scene.towers.is_empty());
         assert_eq!(scene.tower_feedback, simulation.tower_feedback());
     }

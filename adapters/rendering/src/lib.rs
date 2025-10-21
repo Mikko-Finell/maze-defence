@@ -332,7 +332,11 @@ impl TileGridPresentation {
     ///
     /// Returns `None` when the position lies outside the grid or the grid has no area.
     #[must_use]
-    pub fn snap_world_to_tile(&self, position: Vec2) -> Option<TileSpacePosition> {
+    pub fn snap_world_to_tile(
+        &self,
+        position: Vec2,
+        footprint_in_tiles: Vec2,
+    ) -> Option<TileSpacePosition> {
         if self.columns == 0 || self.rows == 0 || self.tile_length <= f32::EPSILON {
             return None;
         }
@@ -344,9 +348,16 @@ impl TileGridPresentation {
         }
 
         let clamped = self.clamp_world_position(position);
-        let column_half_steps =
-            snap_axis_to_half_steps(clamped.x / self.tile_length, self.columns)?;
-        let row_half_steps = snap_axis_to_half_steps(clamped.y / self.tile_length, self.rows)?;
+        let column_half_steps = snap_axis_to_half_steps(
+            clamped.x / self.tile_length,
+            self.columns,
+            footprint_in_tiles.x,
+        )?;
+        let row_half_steps = snap_axis_to_half_steps(
+            clamped.y / self.tile_length,
+            self.rows,
+            footprint_in_tiles.y,
+        )?;
 
         Some(TileSpacePosition::from_half_steps(
             column_half_steps,
@@ -355,13 +366,17 @@ impl TileGridPresentation {
     }
 }
 
-fn snap_axis_to_half_steps(value_in_tiles: f32, tiles: u32) -> Option<u32> {
+fn snap_axis_to_half_steps(
+    value_in_tiles: f32,
+    tiles: u32,
+    footprint_in_tiles: f32,
+) -> Option<u32> {
     if tiles == 0 {
         return None;
     }
 
-    const PREVIEW_SIZE_IN_TILES: f32 = 1.0;
-    let half_preview = PREVIEW_SIZE_IN_TILES * 0.5;
+    let preview_size = footprint_in_tiles.max(0.0);
+    let half_preview = preview_size * 0.5;
     let min_center = half_preview;
     let max_center = tiles as f32 - half_preview;
 
@@ -474,6 +489,8 @@ pub struct Scene {
     pub play_mode: PlayMode,
     /// Optional builder placement preview emitted by the simulation.
     pub tower_preview: Option<TowerPreview>,
+    /// Footprint of the currently selected tower expressed in tile units.
+    pub active_tower_footprint_tiles: Option<Vec2>,
     /// Feedback about the last tower placement/removal attempt.
     pub tower_feedback: Option<TowerInteractionFeedback>,
 }
@@ -488,6 +505,7 @@ impl Scene {
         towers: Vec<SceneTower>,
         play_mode: PlayMode,
         tower_preview: Option<TowerPreview>,
+        active_tower_footprint_tiles: Option<Vec2>,
         tower_feedback: Option<TowerInteractionFeedback>,
     ) -> Self {
         Self {
@@ -497,6 +515,7 @@ impl Scene {
             towers,
             play_mode,
             tower_preview,
+            active_tower_footprint_tiles,
             tower_feedback,
         }
     }
@@ -609,7 +628,7 @@ mod tests {
         let presentation = TileGridPresentation::new(6, 3, 24.0, 4, Color::from_rgb_u8(0, 0, 0))
             .expect("valid grid");
         let snapped = presentation
-            .snap_world_to_tile(Vec2::new(24.0, 24.0))
+            .snap_world_to_tile(Vec2::new(24.0, 24.0), Vec2::splat(1.0))
             .expect("position inside grid should snap");
 
         assert_eq!(snapped.column_half_steps(), 1);
@@ -621,13 +640,19 @@ mod tests {
     fn snap_world_to_tile_clamps_preview_to_grid_bounds() {
         let presentation = TileGridPresentation::new(6, 3, 24.0, 4, Color::from_rgb_u8(0, 0, 0))
             .expect("valid grid");
+        let footprint = Vec2::new(1.5, 0.5);
         let snapped = presentation
-            .snap_world_to_tile(Vec2::new(143.9, 71.2))
+            .snap_world_to_tile(Vec2::new(143.9, 71.2), footprint)
             .expect("position inside grid should snap");
 
-        assert_eq!(snapped.column_half_steps(), 10);
-        assert_eq!(snapped.row_half_steps(), 4);
-        assert!(snapped.is_integer_aligned());
+        assert_eq!(snapped.column_half_steps(), 9);
+        assert_eq!(snapped.row_half_steps(), 5);
+        let origin_column_tiles = snapped.column_half_steps() as f32 * 0.5;
+        let origin_row_tiles = snapped.row_half_steps() as f32 * 0.5;
+        assert!(origin_column_tiles >= 0.0);
+        assert!(origin_row_tiles >= 0.0);
+        assert!(origin_column_tiles + footprint.x <= presentation.columns as f32 + 1e-5);
+        assert!(origin_row_tiles + footprint.y <= presentation.rows as f32 + 1e-5);
     }
 
     #[test]
@@ -636,10 +661,10 @@ mod tests {
             .expect("valid grid");
 
         assert!(presentation
-            .snap_world_to_tile(Vec2::new(100.0, 10.0))
+            .snap_world_to_tile(Vec2::new(100.0, 10.0), Vec2::splat(1.0))
             .is_none());
         assert!(presentation
-            .snap_world_to_tile(Vec2::new(10.0, 100.0))
+            .snap_world_to_tile(Vec2::new(10.0, 100.0), Vec2::splat(1.0))
             .is_none());
     }
 
@@ -668,6 +693,7 @@ mod tests {
             PlayMode::Attack,
             None,
             None,
+            None,
         );
 
         assert_eq!(scene.tile_grid, tile_grid);
@@ -675,6 +701,7 @@ mod tests {
         assert_eq!(scene.bugs, bugs);
         assert_eq!(scene.play_mode, PlayMode::Attack);
         assert!(scene.tower_preview.is_none());
+        assert!(scene.active_tower_footprint_tiles.is_none());
         assert!(scene.towers.is_empty());
         assert!(scene.tower_feedback.is_none());
     }
@@ -716,6 +743,7 @@ mod tests {
             )],
             PlayMode::Builder,
             Some(placement_preview),
+            Some(Vec2::splat(1.0)),
             Some(TowerInteractionFeedback::PlacementRejected {
                 kind: TowerKind::Basic,
                 origin: maze_defence_core::CellCoord::new(4, 6),
@@ -725,6 +753,7 @@ mod tests {
 
         assert_eq!(scene.play_mode, PlayMode::Builder);
         assert_eq!(scene.tower_preview, Some(placement_preview));
+        assert_eq!(scene.active_tower_footprint_tiles, Some(Vec2::splat(1.0)));
         assert_eq!(scene.towers.len(), 1);
         assert_eq!(scene.tile_grid, tile_grid);
         assert_eq!(scene.wall, wall);
