@@ -30,6 +30,35 @@ impl TowerRegistry {
             next_tower_id: TowerId::new(0),
         }
     }
+
+    /// Allocates a fresh tower identifier.
+    pub(crate) fn allocate(&mut self) -> TowerId {
+        let id = self.next_tower_id;
+        let next = self.next_tower_id.get().saturating_add(1);
+        self.next_tower_id = TowerId::new(next);
+        id
+    }
+
+    /// Inserts the provided tower state into the registry.
+    pub(crate) fn insert(&mut self, state: TowerState) {
+        let previous = self.entries.insert(state.id, state);
+        debug_assert!(previous.is_none());
+    }
+
+    /// Retrieves the tower state associated with the identifier, if present.
+    pub(crate) fn get(&self, id: TowerId) -> Option<&TowerState> {
+        self.entries.get(&id)
+    }
+
+    /// Removes the tower associated with the identifier, returning its state.
+    pub(crate) fn remove(&mut self, id: TowerId) -> Option<TowerState> {
+        self.entries.remove(&id)
+    }
+
+    /// Reports whether the registry currently stores any towers.
+    pub(crate) fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
 }
 
 /// Reports the footprint size associated with a tower kind.
@@ -56,6 +85,37 @@ mod tests {
         let registry = TowerRegistry::new();
         assert!(registry.entries.is_empty());
         assert_eq!(registry.next_tower_id.get(), 0);
+    }
+
+    #[test]
+    fn allocating_identifiers_advances_counter() {
+        let mut registry = TowerRegistry::new();
+        let first = registry.allocate();
+        let second = registry.allocate();
+
+        assert_eq!(first, TowerId::new(0));
+        assert_eq!(second, TowerId::new(1));
+        assert_eq!(registry.next_tower_id.get(), 2);
+    }
+
+    #[test]
+    fn insert_and_remove_round_trip_restores_state() {
+        let mut registry = TowerRegistry::new();
+        let id = registry.allocate();
+        let region = CellRect::from_origin_and_size(CellCoord::new(2, 3), CellRectSize::new(2, 2));
+        registry.insert(TowerState {
+            id,
+            kind: TowerKind::Basic,
+            region,
+        });
+
+        let retrieved = registry.get(id).expect("tower present");
+        assert_eq!(retrieved.id, id);
+        assert_eq!(retrieved.region, region);
+
+        let removed = registry.remove(id).expect("tower present");
+        assert_eq!(removed.id, id);
+        assert!(registry.is_empty());
     }
 
     #[test]

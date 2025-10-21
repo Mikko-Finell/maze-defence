@@ -15,11 +15,14 @@ use std::{collections::BTreeSet, time::Duration};
 mod towers;
 
 #[cfg(any(test, feature = "tower_scaffolding"))]
-use towers::TowerRegistry;
+use towers::{footprint_for, TowerRegistry, TowerState};
 
 use maze_defence_core::{
     BugColor, BugId, CellCoord, Command, Direction, Event, PlayMode, TileCoord, WELCOME_BANNER,
 };
+
+#[cfg(any(test, feature = "tower_scaffolding"))]
+use maze_defence_core::{CellRect, PlacementError, RemovalError, TowerId, TowerKind};
 
 const DEFAULT_GRID_COLUMNS: TileCoord = TileCoord::new(10);
 const DEFAULT_GRID_ROWS: TileCoord = TileCoord::new(10);
@@ -395,8 +398,24 @@ pub fn apply(world: &mut World, command: Command, out_events: &mut Vec<Event>) {
 
             world.spawn_from_spawner(spawner, color, out_events);
         }
-        Command::PlaceTower { .. } => {}
-        Command::RemoveTower { .. } => {}
+        Command::PlaceTower { kind, origin } => {
+            #[cfg(any(test, feature = "tower_scaffolding"))]
+            {
+                world.handle_place_tower(kind, origin, out_events);
+            }
+
+            #[cfg(not(any(test, feature = "tower_scaffolding")))]
+            let _ = (kind, origin);
+        }
+        Command::RemoveTower { tower } => {
+            #[cfg(any(test, feature = "tower_scaffolding"))]
+            {
+                world.handle_remove_tower(tower, out_events);
+            }
+
+            #[cfg(not(any(test, feature = "tower_scaffolding")))]
+            let _ = tower;
+        }
     }
 }
 
@@ -405,6 +424,175 @@ impl World {
         let (columns, rows) = self.occupancy.dimensions();
         self.bug_spawners.assign_outer_rim(columns, rows);
         self.bug_spawners.remove_bottom_row(columns, rows);
+    }
+
+    #[cfg(any(test, feature = "tower_scaffolding"))]
+    fn handle_place_tower(
+        &mut self,
+        kind: TowerKind,
+        origin: CellCoord,
+        out_events: &mut Vec<Event>,
+    ) {
+        if self.play_mode != PlayMode::Builder {
+            out_events.push(Event::TowerPlacementRejected {
+                kind,
+                origin,
+                reason: PlacementError::InvalidMode,
+            });
+            return;
+        }
+
+        if let Some(stride) = self.tower_alignment_stride() {
+            if origin.column() % stride != 0 || origin.row() % stride != 0 {
+                out_events.push(Event::TowerPlacementRejected {
+                    kind,
+                    origin,
+                    reason: PlacementError::Misaligned,
+                });
+                return;
+            }
+        }
+
+        let footprint = footprint_for(kind);
+        let region = CellRect::from_origin_and_size(origin, footprint);
+
+        if !self.tower_region_within_bounds(region) {
+            out_events.push(Event::TowerPlacementRejected {
+                kind,
+                origin,
+                reason: PlacementError::OutOfBounds,
+            });
+            return;
+        }
+
+        if self.tower_region_occupied(region) {
+            out_events.push(Event::TowerPlacementRejected {
+                kind,
+                origin,
+                reason: PlacementError::Occupied,
+            });
+            return;
+        }
+
+        let id = self.towers.allocate();
+        self.mark_tower_region(region, true);
+        self.towers.insert(TowerState { id, kind, region });
+        out_events.push(Event::TowerPlaced {
+            tower: id,
+            kind,
+            region,
+        });
+    }
+
+    #[cfg(any(test, feature = "tower_scaffolding"))]
+    fn handle_remove_tower(&mut self, tower: TowerId, out_events: &mut Vec<Event>) {
+        if self.play_mode != PlayMode::Builder {
+            out_events.push(Event::TowerRemovalRejected {
+                tower,
+                reason: RemovalError::InvalidMode,
+            });
+            return;
+        }
+
+        let Some(state) = self.towers.remove(tower) else {
+            out_events.push(Event::TowerRemovalRejected {
+                tower,
+                reason: RemovalError::MissingTower,
+            });
+            return;
+        };
+
+        self.mark_tower_region(state.region, false);
+        out_events.push(Event::TowerRemoved {
+            tower: state.id,
+            region: state.region,
+        });
+    }
+
+    #[cfg(any(test, feature = "tower_scaffolding"))]
+    fn tower_alignment_stride(&self) -> Option<u32> {
+        let stride = self.cells_per_tile / 2;
+        if stride <= 1 {
+            None
+        } else {
+            Some(stride)
+        }
+    }
+
+    #[cfg(any(test, feature = "tower_scaffolding"))]
+    fn tower_region_within_bounds(&self, region: CellRect) -> bool {
+        let (columns, rows) = self.tower_occupancy.dimensions();
+        let size = region.size();
+        if size.width() == 0 || size.height() == 0 {
+            return false;
+        }
+
+        let origin = region.origin();
+        if origin.column() >= columns || origin.row() >= rows {
+            return false;
+        }
+
+        let Some(end_column) = origin.column().checked_add(size.width()) else {
+            return false;
+        };
+        let Some(end_row) = origin.row().checked_add(size.height()) else {
+            return false;
+        };
+
+        end_column <= columns && end_row <= rows
+    }
+
+    #[cfg(any(test, feature = "tower_scaffolding"))]
+    fn tower_region_occupied(&self, region: CellRect) -> bool {
+        let origin = region.origin();
+        let size = region.size();
+
+        for column_offset in 0..size.width() {
+            for row_offset in 0..size.height() {
+                let column = origin
+                    .column()
+                    .checked_add(column_offset)
+                    .expect("column bounded by region");
+                let row = origin
+                    .row()
+                    .checked_add(row_offset)
+                    .expect("row bounded by region");
+                let cell = CellCoord::new(column, row);
+                if self.tower_occupancy.contains(cell) {
+                    return true;
+                }
+                if !self.occupancy.can_enter(cell) {
+                    return true;
+                }
+            }
+        }
+
+        false
+    }
+
+    #[cfg(any(test, feature = "tower_scaffolding"))]
+    fn mark_tower_region(&mut self, region: CellRect, occupied: bool) {
+        let origin = region.origin();
+        let size = region.size();
+
+        for column_offset in 0..size.width() {
+            for row_offset in 0..size.height() {
+                let column = origin
+                    .column()
+                    .checked_add(column_offset)
+                    .expect("column bounded by region");
+                let row = origin
+                    .row()
+                    .checked_add(row_offset)
+                    .expect("row bounded by region");
+                let cell = CellCoord::new(column, row);
+                if occupied {
+                    self.tower_occupancy.set(cell);
+                } else {
+                    self.tower_occupancy.clear(cell);
+                }
+            }
+        }
     }
 }
 
@@ -794,6 +982,26 @@ impl BitGrid {
             .map_or(false, |word| (*word & (1_u64 << bit_offset)) != 0)
     }
 
+    fn set(&mut self, cell: CellCoord) {
+        if let Some((index, bit_offset)) = self.bit_position(cell) {
+            if let Some(word) = self.words.get_mut(index) {
+                *word |= 1_u64 << bit_offset;
+            }
+        }
+    }
+
+    fn clear(&mut self, cell: CellCoord) {
+        if let Some((index, bit_offset)) = self.bit_position(cell) {
+            if let Some(word) = self.words.get_mut(index) {
+                *word &= !(1_u64 << bit_offset);
+            }
+        }
+    }
+
+    fn dimensions(&self) -> (u32, u32) {
+        (self.columns, self.rows)
+    }
+
     fn bit_position(&self, cell: CellCoord) -> Option<(usize, u32)> {
         if cell.column() >= self.columns || cell.row() >= self.rows {
             return None;
@@ -978,6 +1186,375 @@ mod tests {
                 let cell = CellCoord::new(column, row);
                 let expected = !occupancy.is_free(cell);
                 assert_eq!(query::is_cell_blocked(&world, cell), expected);
+            }
+        }
+    }
+
+    #[test]
+    fn placing_tower_requires_builder_mode() {
+        let mut world = World::new();
+        let mut events = Vec::new();
+        let origin = CellCoord::new(1, 1);
+
+        apply(
+            &mut world,
+            Command::PlaceTower {
+                kind: TowerKind::Basic,
+                origin,
+            },
+            &mut events,
+        );
+
+        assert_eq!(
+            events,
+            vec![Event::TowerPlacementRejected {
+                kind: TowerKind::Basic,
+                origin,
+                reason: PlacementError::InvalidMode,
+            }]
+        );
+        assert!(world.towers.is_empty());
+        assert!(!world.tower_occupancy.contains(origin));
+    }
+
+    #[test]
+    fn placing_tower_rejects_misaligned_origin() {
+        let mut world = World::new();
+        let mut events = Vec::new();
+
+        apply(
+            &mut world,
+            Command::SetPlayMode {
+                mode: PlayMode::Builder,
+            },
+            &mut events,
+        );
+        events.clear();
+
+        apply(
+            &mut world,
+            Command::ConfigureTileGrid {
+                columns: DEFAULT_GRID_COLUMNS,
+                rows: DEFAULT_GRID_ROWS,
+                tile_length: DEFAULT_TILE_LENGTH,
+                cells_per_tile: 4,
+            },
+            &mut events,
+        );
+        events.clear();
+
+        let origin = CellCoord::new(1, 1);
+        apply(
+            &mut world,
+            Command::PlaceTower {
+                kind: TowerKind::Basic,
+                origin,
+            },
+            &mut events,
+        );
+
+        assert_eq!(
+            events,
+            vec![Event::TowerPlacementRejected {
+                kind: TowerKind::Basic,
+                origin,
+                reason: PlacementError::Misaligned,
+            }]
+        );
+        assert!(world.towers.is_empty());
+    }
+
+    #[test]
+    fn placing_tower_rejects_out_of_bounds_origin() {
+        let mut world = World::new();
+        let mut events = Vec::new();
+
+        apply(
+            &mut world,
+            Command::SetPlayMode {
+                mode: PlayMode::Builder,
+            },
+            &mut events,
+        );
+        events.clear();
+
+        let (columns, _) = world.tower_occupancy.dimensions();
+        assert!(columns > 0);
+        let origin = CellCoord::new(columns.saturating_sub(1), 0);
+
+        apply(
+            &mut world,
+            Command::PlaceTower {
+                kind: TowerKind::Basic,
+                origin,
+            },
+            &mut events,
+        );
+
+        assert_eq!(
+            events,
+            vec![Event::TowerPlacementRejected {
+                kind: TowerKind::Basic,
+                origin,
+                reason: PlacementError::OutOfBounds,
+            }]
+        );
+        assert!(world.towers.is_empty());
+    }
+
+    #[test]
+    fn placing_tower_rejects_when_region_is_occupied() {
+        let mut world = World::new();
+        let mut events = Vec::new();
+
+        apply(
+            &mut world,
+            Command::SetPlayMode {
+                mode: PlayMode::Builder,
+            },
+            &mut events,
+        );
+        events.clear();
+
+        let first_origin = CellCoord::new(2, 2);
+        apply(
+            &mut world,
+            Command::PlaceTower {
+                kind: TowerKind::Basic,
+                origin: first_origin,
+            },
+            &mut events,
+        );
+
+        assert_eq!(
+            events,
+            vec![Event::TowerPlaced {
+                tower: TowerId::new(0),
+                kind: TowerKind::Basic,
+                region: CellRect::from_origin_and_size(
+                    first_origin,
+                    super::footprint_for(TowerKind::Basic),
+                ),
+            }]
+        );
+        events.clear();
+
+        apply(
+            &mut world,
+            Command::PlaceTower {
+                kind: TowerKind::Basic,
+                origin: first_origin,
+            },
+            &mut events,
+        );
+
+        assert_eq!(
+            events,
+            vec![Event::TowerPlacementRejected {
+                kind: TowerKind::Basic,
+                origin: first_origin,
+                reason: PlacementError::Occupied,
+            }]
+        );
+        events.clear();
+
+        let second_origin = CellCoord::new(5, 5);
+        apply(
+            &mut world,
+            Command::PlaceTower {
+                kind: TowerKind::Basic,
+                origin: second_origin,
+            },
+            &mut events,
+        );
+
+        assert_eq!(
+            events,
+            vec![Event::TowerPlaced {
+                tower: TowerId::new(1),
+                kind: TowerKind::Basic,
+                region: CellRect::from_origin_and_size(
+                    second_origin,
+                    super::footprint_for(TowerKind::Basic),
+                ),
+            }]
+        );
+    }
+
+    #[test]
+    fn placing_tower_sets_occupancy_bits() {
+        let mut world = World::new();
+        let mut events = Vec::new();
+
+        apply(
+            &mut world,
+            Command::SetPlayMode {
+                mode: PlayMode::Builder,
+            },
+            &mut events,
+        );
+        events.clear();
+
+        let origin = CellCoord::new(3, 4);
+        let region = CellRect::from_origin_and_size(origin, super::footprint_for(TowerKind::Basic));
+        apply(
+            &mut world,
+            Command::PlaceTower {
+                kind: TowerKind::Basic,
+                origin,
+            },
+            &mut events,
+        );
+
+        assert_eq!(
+            events,
+            vec![Event::TowerPlaced {
+                tower: TowerId::new(0),
+                kind: TowerKind::Basic,
+                region,
+            }]
+        );
+
+        for column_offset in 0..region.size().width() {
+            for row_offset in 0..region.size().height() {
+                let cell =
+                    CellCoord::new(origin.column() + column_offset, origin.row() + row_offset);
+                assert!(world.tower_occupancy.contains(cell));
+            }
+        }
+    }
+
+    #[test]
+    fn removing_tower_requires_builder_mode() {
+        let mut world = World::new();
+        let mut events = Vec::new();
+
+        apply(
+            &mut world,
+            Command::SetPlayMode {
+                mode: PlayMode::Builder,
+            },
+            &mut events,
+        );
+        events.clear();
+
+        let origin = CellCoord::new(2, 3);
+        apply(
+            &mut world,
+            Command::PlaceTower {
+                kind: TowerKind::Basic,
+                origin,
+            },
+            &mut events,
+        );
+        events.clear();
+
+        apply(
+            &mut world,
+            Command::SetPlayMode {
+                mode: PlayMode::Attack,
+            },
+            &mut events,
+        );
+        events.clear();
+
+        apply(
+            &mut world,
+            Command::RemoveTower {
+                tower: TowerId::new(0),
+            },
+            &mut events,
+        );
+
+        assert_eq!(
+            events,
+            vec![Event::TowerRemovalRejected {
+                tower: TowerId::new(0),
+                reason: RemovalError::InvalidMode,
+            }]
+        );
+        assert!(world.towers.get(TowerId::new(0)).is_some());
+    }
+
+    #[test]
+    fn removing_missing_tower_reports_error() {
+        let mut world = World::new();
+        let mut events = Vec::new();
+
+        apply(
+            &mut world,
+            Command::SetPlayMode {
+                mode: PlayMode::Builder,
+            },
+            &mut events,
+        );
+        events.clear();
+
+        apply(
+            &mut world,
+            Command::RemoveTower {
+                tower: TowerId::new(42),
+            },
+            &mut events,
+        );
+
+        assert_eq!(
+            events,
+            vec![Event::TowerRemovalRejected {
+                tower: TowerId::new(42),
+                reason: RemovalError::MissingTower,
+            }]
+        );
+    }
+
+    #[test]
+    fn removing_tower_clears_state_and_occupancy() {
+        let mut world = World::new();
+        let mut events = Vec::new();
+
+        apply(
+            &mut world,
+            Command::SetPlayMode {
+                mode: PlayMode::Builder,
+            },
+            &mut events,
+        );
+        events.clear();
+
+        let origin = CellCoord::new(4, 2);
+        let region = CellRect::from_origin_and_size(origin, super::footprint_for(TowerKind::Basic));
+        apply(
+            &mut world,
+            Command::PlaceTower {
+                kind: TowerKind::Basic,
+                origin,
+            },
+            &mut events,
+        );
+        events.clear();
+
+        apply(
+            &mut world,
+            Command::RemoveTower {
+                tower: TowerId::new(0),
+            },
+            &mut events,
+        );
+
+        assert_eq!(
+            events,
+            vec![Event::TowerRemoved {
+                tower: TowerId::new(0),
+                region,
+            }]
+        );
+        assert!(world.towers.is_empty());
+
+        for column_offset in 0..region.size().width() {
+            for row_offset in 0..region.size().height() {
+                let cell =
+                    CellCoord::new(origin.column() + column_offset, origin.row() + row_offset);
+                assert!(!world.tower_occupancy.contains(cell));
             }
         }
     }
