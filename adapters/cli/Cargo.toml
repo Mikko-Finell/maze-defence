@@ -6,6 +6,7 @@ edition.workspace = true
 [dependencies]
 anyhow.workspace = true
 clap = { version = "4.4", features = ["derive"] }
+glam = "0.24"
 maze-defence-system-bootstrap = { path = "../../systems/bootstrap" }
 maze-defence-system-builder = { path = "../../systems/builder" }
 maze-defence-system-movement = { path = "../../systems/movement" }
@@ -19,5 +20,3 @@ maze-defence-core = { path = "../../core" }
 name = "maze-defence"
 path = "src/main.rs"
 
-[dev-dependencies]
-glam = "0.24"
