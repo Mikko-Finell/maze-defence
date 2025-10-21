@@ -20,7 +20,7 @@ use anyhow::Result;
 use glam::Vec2;
 use macroquad::{
     color::BLACK,
-    input::{is_key_pressed, mouse_position, KeyCode},
+    input::{is_key_pressed, is_mouse_button_pressed, mouse_position, KeyCode, MouseButton},
 };
 use maze_defence_core::PlayMode;
 use maze_defence_rendering::{
@@ -211,6 +211,9 @@ fn gather_frame_input(scene: &Scene, metrics: &SceneMetrics) -> FrameInput {
         input.cursor_tile_space = tile_grid.snap_world_to_tile(world_position);
     }
 
+    input.remove_action =
+        is_mouse_button_pressed(MouseButton::Right) || is_key_pressed(KeyCode::Delete);
+
     input
 }
 
@@ -249,6 +252,7 @@ mod tests {
             Vec::new(),
             play_mode,
             placement_preview,
+            None,
         )
     }
 
@@ -256,7 +260,7 @@ mod tests {
     fn active_builder_preview_suppresses_attack_mode_preview() {
         let preview_region =
             CellRect::from_origin_and_size(CellCoord::new(2, 2), CellRectSize::new(2, 2));
-        let preview = TowerPreview::new(TowerKind::Basic, preview_region, true);
+        let preview = TowerPreview::new(TowerKind::Basic, preview_region, true, None);
         let mut scene = base_scene(PlayMode::Attack, Some(preview));
 
         assert!(active_builder_preview(&scene).is_none());

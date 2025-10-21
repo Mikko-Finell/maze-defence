@@ -9,6 +9,7 @@ fn basic_preview_at(cell: CellCoord, placeable: bool) -> PlacementPreview {
         cell,
         CellRect::from_origin_and_size(cell, CellRectSize::new(2, 2)),
         placeable,
+        None,
     )
 }
 

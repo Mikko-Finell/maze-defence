@@ -14,12 +14,13 @@ use std::{str::FromStr, time::Duration};
 use anyhow::Result;
 use clap::Parser;
 use maze_defence_core::{
-    CellCoord, CellRect, CellRectSize, Command, Event, PlayMode, TileCoord, TowerKind,
+    CellCoord, CellRect, CellRectSize, Command, Event, PlacementError, PlayMode, RemovalError,
+    TileCoord, TowerId, TowerKind,
 };
 use maze_defence_rendering::{
     BugPresentation, Color, FrameInput, Presentation, RenderingBackend, Scene, SceneTower,
     TargetCellPresentation, TargetPresentation, TileGridPresentation, TileSpacePosition,
-    TowerPreview, WallPresentation,
+    TowerInteractionFeedback, TowerPreview, WallPresentation,
 };
 use maze_defence_rendering_macroquad::MacroquadBackend;
 use maze_defence_system_bootstrap::Bootstrap;
@@ -37,6 +38,19 @@ const DEFAULT_TILE_LENGTH: f32 = 100.0;
 const DEFAULT_BUG_STEP_MS: u64 = 250;
 const DEFAULT_BUG_SPAWN_INTERVAL_MS: u64 = 1_000;
 const SPAWN_RNG_SEED: u64 = 0x4d59_5df4_d0f3_3173;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct PlacementRejection {
+    kind: TowerKind,
+    origin: CellCoord,
+    reason: PlacementError,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct RemovalRejection {
+    tower: TowerId,
+    reason: RemovalError,
+}
 
 /// Command-line arguments for launching the Maze Defence experience.
 #[derive(Debug, Parser)]
@@ -175,6 +189,7 @@ fn main() -> Result<()> {
         Vec::new(),
         query::play_mode(simulation.world()),
         None,
+        None,
     );
     simulation.populate_scene(&mut scene);
 
@@ -198,6 +213,9 @@ struct Simulation {
     queued_commands: Vec<Command>,
     pending_input: FrameInput,
     builder_preview: Option<BuilderPlacementPreview>,
+    tower_feedback: Option<TowerInteractionFeedback>,
+    last_placement_rejection: Option<PlacementRejection>,
+    last_removal_rejection: Option<RemovalRejection>,
     cells_per_tile: u32,
     #[cfg(test)]
     last_frame_events: Vec<Event>,
@@ -242,6 +260,9 @@ impl Simulation {
             queued_commands: Vec::new(),
             pending_input: FrameInput::default(),
             builder_preview: None,
+            tower_feedback: None,
+            last_placement_rejection: None,
+            last_removal_rejection: None,
             cells_per_tile,
             #[cfg(test)]
             last_frame_events: Vec::new(),
@@ -317,11 +338,18 @@ impl Simulation {
 
         scene.play_mode = query::play_mode(&self.world);
         scene.tower_preview = if scene.play_mode == PlayMode::Builder {
-            self.builder_preview()
-                .map(|preview| TowerPreview::new(preview.kind, preview.region, preview.placeable))
+            self.builder_preview().map(|preview| {
+                TowerPreview::new(
+                    preview.kind,
+                    preview.region,
+                    preview.placeable,
+                    preview.rejection,
+                )
+            })
         } else {
             None
         };
+        scene.tower_feedback = self.tower_feedback;
     }
 
     fn process_pending_events(
@@ -355,6 +383,8 @@ impl Simulation {
             {
                 self.last_frame_events.extend(events.iter().cloned());
             }
+
+            self.record_tower_feedback(&events);
 
             let play_mode = query::play_mode(&self.world);
             let spawners = query::bug_spawners(&self.world);
@@ -409,6 +439,60 @@ impl Simulation {
         }
     }
 
+    fn record_tower_feedback(&mut self, events: &[Event]) {
+        for event in events {
+            match event {
+                Event::TowerPlacementRejected {
+                    kind,
+                    origin,
+                    reason,
+                } => {
+                    let rejection = PlacementRejection {
+                        kind: *kind,
+                        origin: *origin,
+                        reason: *reason,
+                    };
+                    self.last_placement_rejection = Some(rejection);
+                    self.tower_feedback = Some(TowerInteractionFeedback::PlacementRejected {
+                        kind: *kind,
+                        origin: *origin,
+                        reason: *reason,
+                    });
+                }
+                Event::TowerRemovalRejected { tower, reason } => {
+                    let rejection = RemovalRejection {
+                        tower: *tower,
+                        reason: *reason,
+                    };
+                    self.last_removal_rejection = Some(rejection);
+                    self.tower_feedback = Some(TowerInteractionFeedback::RemovalRejected {
+                        tower: *tower,
+                        reason: *reason,
+                    });
+                }
+                Event::TowerPlaced { .. } => {
+                    self.last_placement_rejection = None;
+                    if matches!(
+                        self.tower_feedback,
+                        Some(TowerInteractionFeedback::PlacementRejected { .. })
+                    ) {
+                        self.tower_feedback = None;
+                    }
+                }
+                Event::TowerRemoved { .. } => {
+                    self.last_removal_rejection = None;
+                    if matches!(
+                        self.tower_feedback,
+                        Some(TowerInteractionFeedback::RemovalRejected { .. })
+                    ) {
+                        self.tower_feedback = None;
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
     fn prepare_builder_input(&mut self) -> TowerBuilderInput {
         let cursor_cell = self
             .pending_input
@@ -430,9 +514,19 @@ impl Simulation {
         let kind = self.selected_tower_kind();
         let footprint = Self::tower_footprint(kind);
         let region = CellRect::from_origin_and_size(origin, footprint);
-        let placeable = self.region_is_placeable(region);
+        let mut placeable = self.region_is_placeable(region);
+        let rejection = self.last_placement_rejection.and_then(|rejection| {
+            if rejection.kind == kind && rejection.origin == origin {
+                Some(rejection.reason)
+            } else {
+                None
+            }
+        });
+        if rejection.is_some() {
+            placeable = false;
+        }
         Some(BuilderPlacementPreview::new(
-            kind, origin, region, placeable,
+            kind, origin, region, placeable, rejection,
         ))
     }
 
@@ -497,6 +591,11 @@ impl Simulation {
         &self.last_frame_events
     }
 
+    #[cfg(test)]
+    fn tower_feedback(&self) -> Option<TowerInteractionFeedback> {
+        self.tower_feedback
+    }
+
     fn flush_queued_commands(&mut self) {
         if self.queued_commands.is_empty() {
             return;
@@ -545,6 +644,7 @@ mod tests {
             Vec::new(),
             Vec::new(),
             PlayMode::Attack,
+            None,
             None,
         )
     }
@@ -647,9 +747,11 @@ mod tests {
                 expected_preview.kind,
                 expected_preview.region,
                 expected_preview.placeable,
+                expected_preview.rejection,
             ))
         );
         assert!(scene.towers.is_empty());
+        assert_eq!(scene.tower_feedback, simulation.tower_feedback());
     }
 
     #[test]
@@ -741,6 +843,118 @@ mod tests {
             !updated_preview.placeable,
             "occupied region should be marked unplaceable"
         );
+    }
+
+    #[test]
+    fn placement_rejection_updates_preview_and_feedback() {
+        let mut simulation = new_simulation();
+        enter_builder_mode(&mut simulation);
+
+        let preview_tile = TileSpacePosition::from_indices(1, 1);
+        let preview_world = Vec2::new(64.0, 64.0);
+
+        simulation.handle_input(FrameInput {
+            cursor_world_space: Some(preview_world),
+            cursor_tile_space: Some(preview_tile),
+            ..FrameInput::default()
+        });
+        simulation.advance(Duration::ZERO);
+
+        let origin = simulation
+            .builder_preview()
+            .expect("preview available")
+            .origin;
+
+        simulation.handle_input(FrameInput {
+            cursor_world_space: Some(preview_world),
+            cursor_tile_space: Some(preview_tile),
+            confirm_action: true,
+            ..FrameInput::default()
+        });
+        simulation.advance(Duration::from_millis(16));
+
+        simulation.handle_input(FrameInput {
+            cursor_world_space: Some(preview_world),
+            cursor_tile_space: Some(preview_tile),
+            ..FrameInput::default()
+        });
+
+        simulation.queued_commands.push(Command::PlaceTower {
+            kind: TowerKind::Basic,
+            origin,
+        });
+        simulation.advance(Duration::ZERO);
+
+        let preview = simulation
+            .builder_preview()
+            .expect("preview should be available in builder mode");
+        assert_eq!(preview.rejection, Some(PlacementError::Occupied));
+        assert!(!preview.placeable);
+
+        let mut scene = make_scene();
+        simulation.populate_scene(&mut scene);
+        assert_eq!(
+            scene.tower_feedback,
+            Some(TowerInteractionFeedback::PlacementRejected {
+                kind: TowerKind::Basic,
+                origin: preview.origin,
+                reason: PlacementError::Occupied,
+            })
+        );
+    }
+
+    #[test]
+    fn scene_reflects_tower_removal() {
+        let mut simulation = new_simulation();
+        enter_builder_mode(&mut simulation);
+
+        let preview_tile = TileSpacePosition::from_indices(0, 0);
+        let preview_world = Vec2::new(16.0, 16.0);
+
+        simulation.handle_input(FrameInput {
+            cursor_world_space: Some(preview_world),
+            cursor_tile_space: Some(preview_tile),
+            confirm_action: true,
+            ..FrameInput::default()
+        });
+        simulation.advance(Duration::from_millis(16));
+
+        assert_eq!(query::towers(simulation.world()).into_vec().len(), 1);
+
+        simulation.handle_input(FrameInput {
+            cursor_world_space: Some(preview_world),
+            cursor_tile_space: Some(preview_tile),
+            remove_action: true,
+            ..FrameInput::default()
+        });
+        simulation.advance(Duration::from_millis(16));
+
+        assert!(query::towers(simulation.world()).into_vec().is_empty());
+
+        let mut scene = make_scene();
+        simulation.populate_scene(&mut scene);
+        assert!(scene.towers.is_empty());
+        assert!(scene.tower_feedback.is_none());
+    }
+
+    #[test]
+    fn removal_rejection_surfaces_feedback() {
+        let mut simulation = new_simulation();
+        enter_builder_mode(&mut simulation);
+
+        simulation.queued_commands.push(Command::RemoveTower {
+            tower: TowerId::new(42),
+        });
+        simulation.advance(Duration::ZERO);
+
+        let mut scene = make_scene();
+        simulation.populate_scene(&mut scene);
+        let expected_feedback = TowerInteractionFeedback::RemovalRejected {
+            tower: TowerId::new(42),
+            reason: RemovalError::MissingTower,
+        };
+        assert_eq!(simulation.tower_feedback(), Some(expected_feedback));
+        assert_eq!(scene.tower_feedback, Some(expected_feedback));
     }
 
     #[test]
