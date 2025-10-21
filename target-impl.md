@@ -38,7 +38,7 @@ Here’s the leanest sequence to bring tower targeting online without breaking d
 
 **Exit checks:** Headless simulation tests prove targets appear/disappear as play mode switches, and that equidistant bugs resolve to the same `BugId` every tick.
 
-# 4) [TODO] Scene & rendering adapters
+# 4) [DONE] Scene & rendering adapters
 
 **Goal:** Visualise targeting without embedding logic in adapters.
 
