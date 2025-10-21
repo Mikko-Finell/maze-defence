@@ -13,7 +13,9 @@ use std::{str::FromStr, time::Duration};
 
 use anyhow::Result;
 use clap::Parser;
-use maze_defence_core::{Command, Event, PlayMode, TileCoord};
+use maze_defence_core::{
+    CellCoord, CellRect, CellRectSize, Command, Event, PlayMode, TileCoord, TowerKind,
+};
 use maze_defence_rendering::{
     BugPresentation, Color, FrameInput, PlacementPreview, Presentation, RenderingBackend, Scene,
     TargetCellPresentation, TargetPresentation, TileGridPresentation, TileSpacePosition,
@@ -21,6 +23,10 @@ use maze_defence_rendering::{
 };
 use maze_defence_rendering_macroquad::MacroquadBackend;
 use maze_defence_system_bootstrap::Bootstrap;
+use maze_defence_system_builder::{
+    Builder as TowerBuilder, BuilderInput as TowerBuilderInput,
+    PlacementPreview as BuilderPlacementPreview,
+};
 use maze_defence_system_movement::Movement;
 use maze_defence_system_spawning::{Config as SpawningConfig, Spawning};
 use maze_defence_world::{self as world, query, World};
@@ -183,12 +189,17 @@ fn main() -> Result<()> {
 #[derive(Debug)]
 struct Simulation {
     world: World,
+    builder: TowerBuilder,
     movement: Movement,
     spawning: Spawning,
     pending_events: Vec<Event>,
     scratch_commands: Vec<Command>,
     queued_commands: Vec<Command>,
     pending_input: FrameInput,
+    builder_preview: Option<BuilderPlacementPreview>,
+    cells_per_tile: u32,
+    #[cfg(test)]
+    last_frame_events: Vec<Event>,
 }
 
 impl Simulation {
@@ -222,14 +233,20 @@ impl Simulation {
 
         let mut simulation = Self {
             world,
+            builder: TowerBuilder::default(),
             movement: Movement::default(),
             spawning: Spawning::new(SpawningConfig::new(bug_spawn_interval, SPAWN_RNG_SEED)),
             pending_events,
             scratch_commands: Vec::new(),
             queued_commands: Vec::new(),
             pending_input: FrameInput::default(),
+            builder_preview: None,
+            cells_per_tile,
+            #[cfg(test)]
+            last_frame_events: Vec::new(),
         };
-        simulation.process_pending_events();
+        simulation.process_pending_events(None, TowerBuilderInput::default());
+        simulation.builder_preview = simulation.compute_builder_preview();
         simulation
     }
 
@@ -258,6 +275,9 @@ impl Simulation {
     }
 
     fn advance(&mut self, dt: Duration) {
+        let builder_preview = self.compute_builder_preview();
+        let builder_input = self.prepare_builder_input();
+
         self.pending_events.clear();
         self.flush_queued_commands();
 
@@ -269,7 +289,8 @@ impl Simulation {
             );
         }
 
-        self.process_pending_events();
+        self.process_pending_events(builder_preview, builder_input);
+        self.builder_preview = self.compute_builder_preview();
     }
 
     fn populate_scene(&self, scene: &mut Scene) {
@@ -295,16 +316,36 @@ impl Simulation {
         };
     }
 
-    fn process_pending_events(&mut self) {
+    fn process_pending_events(
+        &mut self,
+        mut builder_preview: Option<BuilderPlacementPreview>,
+        mut builder_input: TowerBuilderInput,
+    ) {
         let mut events = std::mem::take(&mut self.pending_events);
         let mut next_events = Vec::new();
+
+        #[cfg(test)]
+        {
+            self.last_frame_events.clear();
+        }
+
+        let mut ran_iteration = false;
 
         loop {
             if events.is_empty() {
                 if next_events.is_empty() {
-                    break;
+                    if ran_iteration {
+                        break;
+                    }
                 }
                 events = std::mem::take(&mut next_events);
+            }
+
+            ran_iteration = true;
+
+            #[cfg(test)]
+            {
+                self.last_frame_events.extend(events.iter().cloned());
             }
 
             let play_mode = query::play_mode(&self.world);
@@ -331,11 +372,121 @@ impl Simulation {
                 world::apply(&mut self.world, command, &mut next_events);
             }
 
+            self.scratch_commands.clear();
+            let mut tower_at = |cell| query::tower_at(&self.world, cell);
+            let preview_for_frame = builder_preview;
+            let input_for_frame = builder_input;
+            self.builder.handle(
+                &events,
+                preview_for_frame,
+                input_for_frame,
+                &mut tower_at,
+                &mut self.scratch_commands,
+            );
+            builder_preview = None;
+            builder_input = TowerBuilderInput::default();
+            for command in self.scratch_commands.drain(..) {
+                world::apply(&mut self.world, command, &mut next_events);
+            }
+
             events.clear();
         }
 
         self.pending_events = events;
         self.pending_events.clear();
+
+        #[cfg(test)]
+        {
+            self.last_frame_events.extend(next_events.iter().cloned());
+        }
+    }
+
+    fn prepare_builder_input(&mut self) -> TowerBuilderInput {
+        let cursor_cell = self
+            .pending_input
+            .cursor_tile_space
+            .map(|tile| self.tile_position_to_cell(tile));
+        let input = TowerBuilderInput::new(
+            self.pending_input.confirm_action,
+            self.pending_input.remove_action,
+            cursor_cell,
+        );
+        self.pending_input.confirm_action = false;
+        self.pending_input.remove_action = false;
+        input
+    }
+
+    fn compute_builder_preview(&self) -> Option<BuilderPlacementPreview> {
+        let tile_position = self.pending_input.cursor_tile_space?;
+        let origin = self.tile_position_to_cell(tile_position);
+        let kind = self.selected_tower_kind();
+        let footprint = Self::tower_footprint(kind);
+        let region = CellRect::from_origin_and_size(origin, footprint);
+        let placeable = self.region_is_placeable(region);
+        Some(BuilderPlacementPreview::new(
+            kind, origin, region, placeable,
+        ))
+    }
+
+    fn selected_tower_kind(&self) -> TowerKind {
+        TowerKind::Basic
+    }
+
+    fn tower_footprint(kind: TowerKind) -> CellRectSize {
+        match kind {
+            TowerKind::Basic => CellRectSize::new(2, 2),
+        }
+    }
+
+    fn tile_position_to_cell(&self, position: TileSpacePosition) -> CellCoord {
+        let half_cell_stride = (self.cells_per_tile / 2).max(1);
+        let column_offset = TileGridPresentation::SIDE_BORDER_CELL_LAYERS % half_cell_stride;
+        let row_offset = TileGridPresentation::TOP_BORDER_CELL_LAYERS % half_cell_stride;
+        let column = TileGridPresentation::SIDE_BORDER_CELL_LAYERS
+            .saturating_add(
+                position
+                    .column_half_steps()
+                    .saturating_mul(half_cell_stride),
+            )
+            .saturating_sub(column_offset);
+        let row = TileGridPresentation::TOP_BORDER_CELL_LAYERS
+            .saturating_add(position.row_half_steps().saturating_mul(half_cell_stride))
+            .saturating_sub(row_offset);
+        CellCoord::new(column, row)
+    }
+
+    fn region_is_placeable(&self, region: CellRect) -> bool {
+        let size = region.size();
+        if size.width() == 0 || size.height() == 0 {
+            return false;
+        }
+
+        let origin = region.origin();
+        for column_offset in 0..size.width() {
+            let Some(column) = origin.column().checked_add(column_offset) else {
+                return false;
+            };
+            for row_offset in 0..size.height() {
+                let Some(row) = origin.row().checked_add(row_offset) else {
+                    return false;
+                };
+                let cell = CellCoord::new(column, row);
+                if query::is_cell_blocked(&self.world, cell) {
+                    return false;
+                }
+            }
+        }
+
+        true
+    }
+
+    fn builder_preview(&self) -> Option<BuilderPlacementPreview> {
+        self.builder_preview
+    }
+
+    #[cfg(test)]
+    fn last_frame_events(&self) -> &[Event] {
+        &self.last_frame_events
     }
 
     fn flush_queued_commands(&mut self) {
@@ -381,6 +532,14 @@ mod tests {
         );
 
         Scene::new(tile_grid, wall, Vec::new(), PlayMode::Attack, None)
+    }
+
+    fn enter_builder_mode(simulation: &mut Simulation) {
+        simulation.handle_input(FrameInput {
+            mode_toggle: true,
+            ..FrameInput::default()
+        });
+        simulation.advance(Duration::ZERO);
     }
 
     #[test]
@@ -503,5 +662,86 @@ mod tests {
         simulation.advance(Duration::from_secs(1));
 
         assert_eq!(query::bug_view(simulation.world()).into_vec().len(), 1);
+    }
+
+    #[test]
+    fn builder_preview_marks_region_unplaceable_when_occupied() {
+        let mut simulation = new_simulation();
+        enter_builder_mode(&mut simulation);
+
+        let preview_tile = TileSpacePosition::from_indices(1, 1);
+        let preview_world = Vec2::new(64.0, 64.0);
+
+        simulation.handle_input(FrameInput {
+            cursor_world_space: Some(preview_world),
+            cursor_tile_space: Some(preview_tile),
+            ..FrameInput::default()
+        });
+        simulation.advance(Duration::ZERO);
+
+        let preview = simulation
+            .builder_preview()
+            .expect("builder preview available in builder mode");
+        assert!(preview.placeable, "initial preview should be placeable");
+        assert_eq!(preview.kind, TowerKind::Basic);
+        let half_stride = (TileGridPresentation::DEFAULT_CELLS_PER_TILE / 2).max(1);
+        assert_eq!(preview.origin.column() % half_stride, 0);
+        assert_eq!(preview.origin.row() % half_stride, 0);
+        assert_eq!(
+            preview.region,
+            CellRect::from_origin_and_size(preview.origin, CellRectSize::new(2, 2))
+        );
+
+        simulation.handle_input(FrameInput {
+            cursor_world_space: Some(preview_world),
+            cursor_tile_space: Some(preview_tile),
+            confirm_action: true,
+            ..FrameInput::default()
+        });
+        simulation.advance(Duration::from_millis(16));
+        assert_eq!(
+            query::towers(simulation.world()).into_vec().len(),
+            1,
+            "tower placement should succeed"
+        );
+
+        simulation.handle_input(FrameInput {
+            cursor_world_space: Some(preview_world),
+            cursor_tile_space: Some(preview_tile),
+            ..FrameInput::default()
+        });
+        simulation.advance(Duration::ZERO);
+        let updated_preview = simulation
+            .builder_preview()
+            .expect("preview should remain available");
+        assert!(
+            !updated_preview.placeable,
+            "occupied region should be marked unplaceable"
+        );
+    }
+
+    #[test]
+    fn confirm_emits_tower_placed_event() {
+        let mut simulation = new_simulation();
+        enter_builder_mode(&mut simulation);
+
+        let preview_tile = TileSpacePosition::from_indices(0, 0);
+        let preview_world = Vec2::new(16.0, 16.0);
+
+        simulation.handle_input(FrameInput {
+            cursor_world_space: Some(preview_world),
+            cursor_tile_space: Some(preview_tile),
+            confirm_action: true,
+            ..FrameInput::default()
+        });
+        simulation.advance(Duration::from_millis(16));
+
+        assert!(
+            simulation
+                .last_frame_events()
+                .iter()
+                .any(|event| matches!(event, Event::TowerPlaced { .. })),
+            "confirming placement should emit TowerPlaced"
+        );
     }
 }

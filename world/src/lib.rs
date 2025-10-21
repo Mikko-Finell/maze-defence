@@ -477,6 +477,7 @@ impl World {
         let id = self.towers.allocate();
         self.mark_tower_region(region, true);
         self.towers.insert(TowerState { id, kind, region });
+        debug_assert!(self.towers.get(id).is_some());
         out_events.push(Event::TowerPlaced {
             tower: id,
             kind,
@@ -672,6 +673,12 @@ pub mod query {
     #[cfg(any(test, feature = "tower_scaffolding"))]
     #[must_use]
     pub fn towers(world: &World) -> TowerView {
+        if world.towers.is_empty() {
+            return TowerView {
+                snapshots: Vec::new(),
+            };
+        }
+
         let snapshots = world
             .towers
             .iter()
