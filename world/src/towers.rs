@@ -69,7 +69,7 @@ impl TowerRegistry {
 /// Reports the footprint size associated with a tower kind.
 pub(crate) fn footprint_for(kind: TowerKind) -> CellRectSize {
     match kind {
-        TowerKind::Basic => CellRectSize::new(2, 2),
+        TowerKind::Basic => CellRectSize::new(4, 4),
     }
 }
 
@@ -79,10 +79,10 @@ mod tests {
     use maze_defence_core::CellCoord;
 
     #[test]
-    fn basic_tower_footprint_is_two_by_two() {
+    fn basic_tower_footprint_is_four_by_four() {
         let footprint = footprint_for(TowerKind::Basic);
-        assert_eq!(footprint.width(), 2);
-        assert_eq!(footprint.height(), 2);
+        assert_eq!(footprint.width(), 4);
+        assert_eq!(footprint.height(), 4);
     }
 
     #[test]
@@ -107,7 +107,7 @@ mod tests {
     fn insert_and_remove_round_trip_restores_state() {
         let mut registry = TowerRegistry::new();
         let id = registry.allocate();
-        let region = CellRect::from_origin_and_size(CellCoord::new(2, 3), CellRectSize::new(2, 2));
+        let region = CellRect::from_origin_and_size(CellCoord::new(2, 3), CellRectSize::new(4, 4));
         registry.insert(TowerState {
             id,
             kind: TowerKind::Basic,

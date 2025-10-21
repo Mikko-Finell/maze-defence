@@ -291,7 +291,7 @@ mod tests {
     #[test]
     fn active_builder_preview_suppresses_attack_mode_preview() {
         let preview_region =
-            CellRect::from_origin_and_size(CellCoord::new(2, 2), CellRectSize::new(2, 2));
+            CellRect::from_origin_and_size(CellCoord::new(2, 2), CellRectSize::new(4, 4));
         let preview = TowerPreview::new(TowerKind::Basic, preview_region, true, None);
         let mut scene = base_scene(PlayMode::Attack, Some(preview));
 
