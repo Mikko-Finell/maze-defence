@@ -252,6 +252,8 @@ impl Simulation {
             mode_toggle: false,
             cursor_world_space: input.cursor_world_space,
             cursor_tile_space: input.cursor_tile_space,
+            confirm_action: input.confirm_action,
+            remove_action: input.remove_action,
         };
     }
 
@@ -391,6 +393,8 @@ mod tests {
             mode_toggle: true,
             cursor_world_space: Some(first_world),
             cursor_tile_space: Some(first_tile),
+            confirm_action: false,
+            remove_action: false,
         });
 
         assert_eq!(
@@ -412,6 +416,8 @@ mod tests {
             mode_toggle: false,
             cursor_world_space: Some(second_world),
             cursor_tile_space: Some(second_tile),
+            confirm_action: false,
+            remove_action: false,
         });
 
         assert_eq!(
@@ -438,6 +444,8 @@ mod tests {
             mode_toggle: true,
             cursor_world_space: Some(Vec2::new(16.0, 48.0)),
             cursor_tile_space: Some(initial_tile),
+            confirm_action: false,
+            remove_action: false,
         });
 
         simulation.advance(Duration::ZERO);
@@ -448,6 +456,8 @@ mod tests {
             mode_toggle: false,
             cursor_world_space: Some(Vec2::new(96.0, 64.0)),
             cursor_tile_space: Some(preview_tile),
+            confirm_action: false,
+            remove_action: false,
         });
 
         let mut scene = make_scene();

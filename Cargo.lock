@@ -345,6 +345,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "maze-defence-system-builder"
+version = "0.1.0"
+dependencies = [
+ "maze-defence-core",
+]
+
+[[package]]
 name = "maze-defence-system-movement"
 version = "0.1.0"
 dependencies = [

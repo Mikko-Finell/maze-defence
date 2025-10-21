@@ -2,6 +2,7 @@
 members = [
     "core",
     "world",
+    "systems/builder",
     "systems/bootstrap",
     "systems/movement",
     "systems/spawning",
