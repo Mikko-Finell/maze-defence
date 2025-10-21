@@ -59,6 +59,11 @@ impl TowerRegistry {
     pub(crate) fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
+
+    /// Returns an iterator over all tower states in identifier order.
+    pub(crate) fn iter(&self) -> impl Iterator<Item = &TowerState> {
+        self.entries.values()
+    }
 }
 
 /// Reports the footprint size associated with a tower kind.

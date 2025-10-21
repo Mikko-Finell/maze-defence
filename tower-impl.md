@@ -41,7 +41,7 @@ Do not start working before you're read `tower-spec.md` so you understand the co
 
 **Goal:** Give systems/adapters a projection surface without leaking internals.
 
-**Status:** TODO
+**Status:** Done
 
 * Add `query::towers(world) -> iter (TowerId, TowerKind, CellRect)`.
 * Add `query::tower_at(world, CellCoord) -> Option<TowerId>`.
