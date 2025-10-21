@@ -23,11 +23,12 @@ pub struct Movement {
     frontier: BinaryHeap<NodeState>,
     came_from: Vec<Option<CellCoord>>,
     g_score: Vec<u32>,
+    generation: Vec<u32>,
     targets: Vec<CellCoord>,
     prepared_dimensions: Option<(u32, u32)>,
     workspace_nodes: usize,
-    active_nodes: usize,
     play_mode: PlayMode,
+    current_generation: u32,
 }
 
 impl Movement {
@@ -137,6 +138,7 @@ impl Movement {
         let start_index = index(columns, rows_with_exit, bug.cell)?;
 
         self.reset_workspace();
+        self.prepare_node(start_index);
         self.g_score[start_index] = 0;
         self.frontier.push(NodeState::new(
             bug.cell,
@@ -157,6 +159,7 @@ impl Movement {
                 };
 
                 let tentative = current.g_cost + 1;
+                self.prepare_node(neighbor_index);
                 if tentative >= self.g_score[neighbor_index] {
                     continue;
                 }
@@ -174,6 +177,14 @@ impl Movement {
         None
     }
 
+    fn prepare_node(&mut self, index: usize) {
+        if self.generation[index] != self.current_generation {
+            self.generation[index] = self.current_generation;
+            self.g_score[index] = u32::MAX;
+            self.came_from[index] = None;
+        }
+    }
+
     fn reconstruct_first_hop(
         &self,
         start: CellCoord,
@@ -185,7 +196,7 @@ impl Movement {
 
         loop {
             let index = index(columns, rows, current)?;
-            let previous = self.came_from[index]?;
+            let previous = self.came_from_for_current_generation(index)?;
 
             if previous == start {
                 return Some(current);
@@ -195,11 +206,18 @@ impl Movement {
         }
     }
 
+    fn came_from_for_current_generation(&self, index: usize) -> Option<CellCoord> {
+        if self.generation.get(index) == Some(&self.current_generation) {
+            self.came_from[index]
+        } else {
+            None
+        }
+    }
+
     fn prepare_workspace(&mut self, columns: u32, rows: u32, targets: &[CellCoord]) -> usize {
         if targets.is_empty() {
             self.targets.clear();
             self.prepared_dimensions = Some((columns, rows));
-            self.active_nodes = 0;
             return 0;
         }
 
@@ -215,19 +233,21 @@ impl Movement {
         if node_count > self.workspace_nodes {
             self.g_score.resize(node_count, u32::MAX);
             self.came_from.resize(node_count, None);
+            self.generation.resize(node_count, 0);
             self.workspace_nodes = node_count;
         }
-        self.active_nodes = node_count;
         node_count
     }
 
     fn reset_workspace(&mut self) {
         self.frontier.clear();
-        for value in self.g_score.iter_mut().take(self.active_nodes) {
-            *value = u32::MAX;
-        }
-        for entry in self.came_from.iter_mut().take(self.active_nodes) {
-            *entry = None;
+        if self.current_generation == u32::MAX {
+            self.current_generation = 1;
+            for stamp in &mut self.generation {
+                *stamp = 0;
+            }
+        } else {
+            self.current_generation = self.current_generation.saturating_add(1);
         }
     }
 }
@@ -238,11 +258,12 @@ impl Default for Movement {
             frontier: BinaryHeap::new(),
             came_from: Vec::new(),
             g_score: Vec::new(),
+            generation: Vec::new(),
             targets: Vec::new(),
             prepared_dimensions: None,
             workspace_nodes: 0,
-            active_nodes: 0,
             play_mode: PlayMode::Attack,
+            current_generation: 0,
         }
     }
 }
@@ -393,6 +414,8 @@ fn index(columns: u32, rows: u32, cell: CellCoord) -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use maze_defence_core::BugColor;
+    use std::time::Duration;
 
     #[test]
     fn direction_between_neighbors() {
@@ -422,7 +445,6 @@ mod tests {
 
         assert_eq!(movement.prepare_workspace(0, 0, &[]), 0);
         assert!(movement.targets.is_empty());
-        assert_eq!(movement.active_nodes, 0);
 
         let targets = vec![CellCoord::new(1, 4)];
         assert_eq!(movement.prepare_workspace(3, 4, &targets), 15);
@@ -434,9 +456,90 @@ mod tests {
     }
 
     #[test]
+    fn path_planning_is_consistent_across_generations() {
+        let mut movement = Movement::default();
+        let columns = 5;
+        let rows = 4;
+        let target = CellCoord::new(4, 3);
+        assert_eq!(movement.prepare_workspace(columns, rows, &[target]), 25);
+        let goal = Goal::at(target);
+        let blocked = [
+            CellCoord::new(1, 0),
+            CellCoord::new(1, 1),
+            CellCoord::new(1, 2),
+            CellCoord::new(3, 2),
+        ];
+        let is_cell_blocked = |cell: CellCoord| blocked.iter().any(|candidate| *candidate == cell);
+
+        let expected_path = vec![
+            CellCoord::new(0, 1),
+            CellCoord::new(0, 2),
+            CellCoord::new(0, 3),
+            CellCoord::new(1, 3),
+            CellCoord::new(2, 3),
+            CellCoord::new(3, 3),
+            CellCoord::new(4, 3),
+        ];
+
+        let first_path = collect_path(
+            &mut movement,
+            bug_snapshot_at(CellCoord::new(0, 0)),
+            goal,
+            columns,
+            rows,
+            &is_cell_blocked,
+        );
+        assert_eq!(first_path, expected_path);
+
+        let _ = movement.prepare_workspace(columns, rows, &[target]);
+        let second_path = collect_path(
+            &mut movement,
+            bug_snapshot_at(CellCoord::new(0, 0)),
+            goal,
+            columns,
+            rows,
+            &is_cell_blocked,
+        );
+        assert_eq!(second_path, expected_path);
+    }
+
+    #[test]
     fn heuristic_matches_manhattan_distance() {
         let from = CellCoord::new(0, 0);
         let goal = CellCoord::new(3, 4);
         assert_eq!(heuristic_to_goal(from, goal), 7);
+    }
+
+    fn collect_path<F>(
+        movement: &mut Movement,
+        mut bug: BugSnapshot,
+        goal: Goal,
+        columns: u32,
+        rows: u32,
+        is_cell_blocked: &F,
+    ) -> Vec<CellCoord>
+    where
+        F: Fn(CellCoord) -> bool,
+    {
+        let mut path = Vec::new();
+        while bug.cell != goal.cell() {
+            let Some(next) = movement.plan_next_hop(&bug, goal, columns, rows, is_cell_blocked)
+            else {
+                break;
+            };
+            path.push(next);
+            bug.cell = next;
+        }
+        path
+    }
+
+    fn bug_snapshot_at(cell: CellCoord) -> BugSnapshot {
+        BugSnapshot {
+            id: BugId::new(1),
+            cell,
+            color: BugColor::from_rgb(0, 0, 0),
+            ready_for_step: true,
+            accumulated: Duration::default(),
+        }
     }
 }
