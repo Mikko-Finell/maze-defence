@@ -317,7 +317,7 @@ impl Simulation {
 
         scene.play_mode = query::play_mode(&self.world);
         scene.tower_preview = if scene.play_mode == PlayMode::Builder {
-            self.builder_preview
+            self.builder_preview()
                 .map(|preview| TowerPreview::new(preview.kind, preview.region, preview.placeable))
         } else {
             None
