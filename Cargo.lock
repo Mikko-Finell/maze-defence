@@ -370,6 +370,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "maze-defence-system-tower-targeting"
+version = "0.1.0"
+dependencies = [
+ "maze-defence-core",
+]
+
+[[package]]
 name = "maze-defence-world"
 version = "0.1.0"
 dependencies = [
