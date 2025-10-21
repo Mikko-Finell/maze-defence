@@ -15,8 +15,8 @@ use anyhow::Result;
 use clap::Parser;
 use glam::Vec2;
 use maze_defence_core::{
-    CellCoord, CellRect, CellRectSize, Command, Event, PlacementError, PlayMode, RemovalError,
-    TileCoord, TowerId, TowerKind,
+    BugColor, BugId, CellCoord, CellRect, CellRectSize, Command, Event, PlacementError, PlayMode,
+    RemovalError, TileCoord, TowerId, TowerKind,
 };
 use maze_defence_rendering::{
     BugPresentation, Color, FrameInput, Presentation, RenderingBackend, Scene, SceneTower,
@@ -31,6 +31,7 @@ use maze_defence_system_builder::{
 };
 use maze_defence_system_movement::Movement;
 use maze_defence_system_spawning::{Config as SpawningConfig, Spawning};
+use maze_defence_system_tower_targeting::{TowerTarget, TowerTargeting};
 use maze_defence_world::{self as world, query, World};
 
 const DEFAULT_GRID_COLUMNS: u32 = 10;
@@ -51,6 +52,24 @@ struct PlacementRejection {
 struct RemovalRejection {
     tower: TowerId,
     reason: RemovalError,
+}
+
+/// Converts tower targeting DTOs into line descriptors measured in cell space.
+///
+/// The returned tuples contain the tower identifier, bug identifier, and the
+/// centre positions expressed as `(column, row)` pairs using cell units.
+pub fn tower_target_lines_in_cells(targets: &[TowerTarget]) -> Vec<(TowerId, BugId, Vec2, Vec2)> {
+    targets
+        .iter()
+        .map(|target| {
+            let tower_center = Vec2::new(
+                target.tower_center_cells.column,
+                target.tower_center_cells.row,
+            );
+            let bug_center = Vec2::new(target.bug_center_cells.column, target.bug_center_cells.row);
+            (target.tower, target.bug, tower_center, bug_center)
+        })
+        .collect()
 }
 
 /// Command-line arguments for launching the Maze Defence experience.
@@ -211,6 +230,8 @@ struct Simulation {
     builder: TowerBuilder,
     movement: Movement,
     spawning: Spawning,
+    tower_targeting: TowerTargeting,
+    current_targets: Vec<TowerTarget>,
     pending_events: Vec<Event>,
     scratch_commands: Vec<Command>,
     queued_commands: Vec<Command>,
@@ -258,6 +279,8 @@ impl Simulation {
             builder: TowerBuilder::default(),
             movement: Movement::default(),
             spawning: Spawning::new(SpawningConfig::new(bug_spawn_interval, SPAWN_RNG_SEED)),
+            tower_targeting: TowerTargeting::new(),
+            current_targets: Vec::new(),
             pending_events,
             scratch_commands: Vec::new(),
             queued_commands: Vec::new(),
@@ -403,21 +426,25 @@ impl Simulation {
                 world::apply(&mut self.world, command, &mut next_events);
             }
 
-            let bug_view = query::bug_view(&self.world);
-            let occupancy_view = query::occupancy_view(&self.world);
-            let target_cells = query::target_cells(&self.world);
-            self.scratch_commands.clear();
-            self.movement.handle(
-                &events,
-                &bug_view,
-                occupancy_view,
-                &target_cells,
-                |cell| query::is_cell_blocked(&self.world, cell),
-                &mut self.scratch_commands,
-            );
+            {
+                let bug_view = query::bug_view(&self.world);
+                let occupancy_view = query::occupancy_view(&self.world);
+                let target_cells = query::target_cells(&self.world);
+                self.scratch_commands.clear();
+                self.movement.handle(
+                    &events,
+                    &bug_view,
+                    occupancy_view,
+                    &target_cells,
+                    |cell| query::is_cell_blocked(&self.world, cell),
+                    &mut self.scratch_commands,
+                );
+            }
             for command in self.scratch_commands.drain(..) {
                 world::apply(&mut self.world, command, &mut next_events);
             }
+
+            self.refresh_tower_targets(play_mode);
 
             self.scratch_commands.clear();
             let mut tower_at = |cell| query::tower_at(&self.world, cell);
@@ -500,6 +527,26 @@ impl Simulation {
                 _ => {}
             }
         }
+    }
+
+    fn refresh_tower_targets(&mut self, play_mode: PlayMode) {
+        if play_mode != PlayMode::Attack {
+            if !self.current_targets.is_empty() {
+                self.current_targets.clear();
+            }
+            return;
+        }
+
+        let towers = query::towers(&self.world);
+        let bugs = query::bug_view(&self.world);
+        let cells_per_tile = query::cells_per_tile(&self.world);
+        self.tower_targeting.handle(
+            play_mode,
+            &towers,
+            &bugs,
+            cells_per_tile,
+            &mut self.current_targets,
+        );
     }
 
     fn prepare_builder_input(&mut self) -> TowerBuilderInput {
@@ -609,6 +656,11 @@ impl Simulation {
         self.tower_feedback
     }
 
+    #[cfg(test)]
+    fn current_targets(&self) -> &[TowerTarget] {
+        &self.current_targets
+    }
+
     fn flush_queued_commands(&mut self) {
         if self.queued_commands.is_empty() {
             return;
@@ -669,6 +721,12 @@ mod tests {
             ..FrameInput::default()
         });
         simulation.advance(Duration::ZERO);
+    }
+
+    fn squared_distance_to_center(cell: CellCoord, center: (u32, u32)) -> u64 {
+        let dx = cell.column().abs_diff(center.0);
+        let dy = cell.row().abs_diff(center.1);
+        u64::from(dx) * u64::from(dx) + u64::from(dy) * u64::from(dy)
     }
 
     #[test]
@@ -982,6 +1040,173 @@ mod tests {
         };
         assert_eq!(simulation.tower_feedback(), Some(expected_feedback));
         assert_eq!(scene.tower_feedback, Some(expected_feedback));
+    }
+
+    #[test]
+    fn tower_targets_follow_play_mode_transitions() {
+        let mut simulation = new_simulation();
+        let spawner = query::bug_spawners(simulation.world())
+            .into_iter()
+            .next()
+            .expect("at least one bug spawner is configured");
+
+        simulation.queued_commands.push(Command::SetPlayMode {
+            mode: PlayMode::Builder,
+        });
+        simulation.advance(Duration::ZERO);
+
+        let placement_tile = TileSpacePosition::from_indices(1, 1);
+        let origin = simulation.tile_position_to_cell(placement_tile);
+        simulation.queued_commands.push(Command::PlaceTower {
+            kind: TowerKind::Basic,
+            origin,
+        });
+        simulation.advance(Duration::ZERO);
+
+        simulation.queued_commands.push(Command::SetPlayMode {
+            mode: PlayMode::Attack,
+        });
+        simulation.advance(Duration::ZERO);
+
+        simulation.queued_commands.push(Command::SpawnBug {
+            spawner,
+            color: BugColor::from_rgb(255, 0, 0),
+        });
+        simulation.advance(Duration::ZERO);
+
+        assert!(
+            !simulation.current_targets().is_empty(),
+            "attack mode should populate tower targets"
+        );
+        let initial_target = simulation.current_targets()[0];
+
+        let lines = tower_target_lines_in_cells(simulation.current_targets());
+        assert_eq!(lines.len(), 1);
+        let (tower, bug, from, to) = lines[0];
+        assert_eq!(tower, initial_target.tower);
+        assert_eq!(bug, initial_target.bug);
+        assert_eq!(
+            from,
+            Vec2::new(
+                initial_target.tower_center_cells.column,
+                initial_target.tower_center_cells.row,
+            )
+        );
+        assert_eq!(
+            to,
+            Vec2::new(
+                initial_target.bug_center_cells.column,
+                initial_target.bug_center_cells.row,
+            )
+        );
+
+        simulation.queued_commands.push(Command::SetPlayMode {
+            mode: PlayMode::Builder,
+        });
+        simulation.advance(Duration::ZERO);
+
+        assert!(
+            simulation.current_targets().is_empty(),
+            "builder mode should clear cached tower targets"
+        );
+
+        simulation.queued_commands.push(Command::SetPlayMode {
+            mode: PlayMode::Attack,
+        });
+        simulation.queued_commands.push(Command::SpawnBug {
+            spawner,
+            color: BugColor::from_rgb(255, 0, 0),
+        });
+        simulation.advance(Duration::ZERO);
+
+        assert!(
+            !simulation.current_targets().is_empty(),
+            "targets should repopulate after returning to attack mode"
+        );
+        assert_eq!(simulation.current_targets()[0].tower, initial_target.tower);
+    }
+
+    #[test]
+    fn equidistant_bugs_select_smallest_id_each_tick() {
+        let mut simulation = new_simulation();
+
+        simulation.queued_commands.push(Command::SetPlayMode {
+            mode: PlayMode::Builder,
+        });
+        simulation.advance(Duration::ZERO);
+
+        let placement_tile = TileSpacePosition::from_indices(1, 1);
+        let origin = simulation.tile_position_to_cell(placement_tile);
+        simulation.queued_commands.push(Command::PlaceTower {
+            kind: TowerKind::Basic,
+            origin,
+        });
+        simulation.advance(Duration::ZERO);
+
+        simulation.queued_commands.push(Command::SetPlayMode {
+            mode: PlayMode::Attack,
+        });
+        simulation.advance(Duration::ZERO);
+
+        let tower_snapshot = query::towers(simulation.world())
+            .into_vec()
+            .into_iter()
+            .next()
+            .expect("tower placement succeeded");
+        let tower_region = tower_snapshot.region;
+        let tower_center = (
+            tower_region.origin().column() + tower_region.size().width() / 2,
+            tower_region.origin().row() + tower_region.size().height() / 2,
+        );
+
+        let spawners = query::bug_spawners(simulation.world());
+        let mut pair = None;
+        for (index, first) in spawners.iter().enumerate() {
+            let first_distance = squared_distance_to_center(*first, tower_center);
+            for second in spawners.iter().skip(index + 1) {
+                if squared_distance_to_center(*second, tower_center) == first_distance {
+                    pair = Some((*first, *second));
+                    break;
+                }
+            }
+            if pair.is_some() {
+                break;
+            }
+        }
+
+        let (first_spawner, second_spawner) =
+            pair.expect("expected at least one pair of equidistant spawners");
+
+        simulation.queued_commands.push(Command::SpawnBug {
+            spawner: first_spawner,
+            color: BugColor::from_rgb(255, 0, 0),
+        });
+        simulation.queued_commands.push(Command::SpawnBug {
+            spawner: second_spawner,
+            color: BugColor::from_rgb(0, 255, 0),
+        });
+        simulation.advance(Duration::ZERO);
+
+        let expected_bug = query::bug_view(simulation.world())
+            .iter()
+            .map(|bug| bug.id)
+            .min()
+            .expect("two bugs should exist");
+
+        assert!(
+            !simulation.current_targets().is_empty(),
+            "tower targeting should select a bug"
+        );
+        assert_eq!(simulation.current_targets()[0].bug, expected_bug);
+
+        for _ in 0..3 {
+            simulation.advance(Duration::from_millis(32));
+            assert!(
+                !simulation.current_targets().is_empty(),
+                "tower targeting should remain stable"
+            );
+            assert_eq!(simulation.current_targets()[0].bug, expected_bug);
+        }
     }
 
     #[test]
