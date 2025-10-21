@@ -52,10 +52,10 @@ Do not start working before you're read `tower-spec.md` so you understand the co
 
 **Goal:** Prove the mutation semantics are replay-safe before wiring UI.
 
-**Status:** TODO
+**Status:** Done
 
-* Add a tiny replay script: place/remove/place with mixed valid/invalid commands.
-* Assert world snapshot/journal hashes and event sequence are identical across runs.
+* Added a deterministic replay harness that drives a place/remove/place script mixing valid placements with rejection cases.
+* Asserted the resulting tower snapshots and event journal hashes match across runs, establishing a reproducible fingerprint.
 
 **Tests/Exit:** New test runs in CI; marks a “determinism baseline” for towers.
 

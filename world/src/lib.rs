@@ -1212,7 +1212,11 @@ fn target_cells_from_wall(wall: &Wall) -> Vec<CellCoord> {
 mod tests {
     use super::*;
     use maze_defence_core::{BugColor, Goal, PlayMode};
-    use std::time::Duration;
+    use std::{
+        collections::hash_map::DefaultHasher,
+        hash::{Hash, Hasher},
+        time::Duration,
+    };
 
     fn expected_outer_rim(columns: u32, rows: u32) -> BTreeSet<CellCoord> {
         let mut cells = BTreeSet::new();
@@ -2415,5 +2419,173 @@ mod tests {
 
         let bug_view = query::bug_view(&world);
         assert!(bug_view.iter().any(|bug| bug.ready_for_step));
+    }
+
+    #[test]
+    fn tower_replay_is_deterministic() {
+        let first = replay_tower_script(scripted_tower_commands());
+        let second = replay_tower_script(scripted_tower_commands());
+
+        assert_eq!(first, second, "tower replay diverged between runs");
+
+        let fingerprint = first.fingerprint();
+        let expected = 0xca77_82e0_0509_7a98;
+        assert_eq!(
+            fingerprint, expected,
+            "tower replay fingerprint mismatch: {fingerprint:#x}"
+        );
+    }
+
+    fn replay_tower_script(commands: Vec<Command>) -> ReplayOutcome {
+        let mut world = World::new();
+        let mut log = Vec::new();
+
+        for command in commands {
+            let mut events = Vec::new();
+            apply(&mut world, command, &mut events);
+            log.extend(events.into_iter().map(EventRecord::from));
+        }
+
+        let towers = query::towers(&world)
+            .into_vec()
+            .into_iter()
+            .map(TowerRecord::from)
+            .collect();
+
+        ReplayOutcome {
+            towers,
+            events: log,
+        }
+    }
+
+    fn scripted_tower_commands() -> Vec<Command> {
+        vec![
+            Command::PlaceTower {
+                kind: TowerKind::Basic,
+                origin: CellCoord::new(1, 1),
+            },
+            Command::SetPlayMode {
+                mode: PlayMode::Builder,
+            },
+            Command::ConfigureTileGrid {
+                columns: TileCoord::new(6),
+                rows: TileCoord::new(5),
+                tile_length: 1.0,
+                cells_per_tile: 4,
+            },
+            Command::PlaceTower {
+                kind: TowerKind::Basic,
+                origin: CellCoord::new(3, 2),
+            },
+            Command::PlaceTower {
+                kind: TowerKind::Basic,
+                origin: CellCoord::new(4, 20),
+            },
+            Command::PlaceTower {
+                kind: TowerKind::Basic,
+                origin: CellCoord::new(4, 4),
+            },
+            Command::PlaceTower {
+                kind: TowerKind::Basic,
+                origin: CellCoord::new(4, 4),
+            },
+            Command::RemoveTower {
+                tower: TowerId::new(1),
+            },
+            Command::RemoveTower {
+                tower: TowerId::new(0),
+            },
+            Command::PlaceTower {
+                kind: TowerKind::Basic,
+                origin: CellCoord::new(8, 6),
+            },
+        ]
+    }
+
+    #[derive(Clone, Debug, PartialEq, Eq, Hash)]
+    struct ReplayOutcome {
+        towers: Vec<TowerRecord>,
+        events: Vec<EventRecord>,
+    }
+
+    impl ReplayOutcome {
+        fn fingerprint(&self) -> u64 {
+            let mut hasher = DefaultHasher::new();
+            self.hash(&mut hasher);
+            hasher.finish()
+        }
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+    struct TowerRecord {
+        id: TowerId,
+        kind: TowerKind,
+        region: CellRect,
+    }
+
+    impl From<query::TowerSnapshot> for TowerRecord {
+        fn from(snapshot: query::TowerSnapshot) -> Self {
+            Self {
+                id: snapshot.id,
+                kind: snapshot.kind,
+                region: snapshot.region,
+            }
+        }
+    }
+
+    #[derive(Clone, Debug, PartialEq, Eq, Hash)]
+    enum EventRecord {
+        PlayModeChanged {
+            mode: PlayMode,
+        },
+        TowerPlaced {
+            tower: TowerId,
+            kind: TowerKind,
+            region: CellRect,
+        },
+        TowerRemoved {
+            tower: TowerId,
+            region: CellRect,
+        },
+        TowerPlacementRejected {
+            kind: TowerKind,
+            origin: CellCoord,
+            reason: PlacementError,
+        },
+        TowerRemovalRejected {
+            tower: TowerId,
+            reason: RemovalError,
+        },
+    }
+
+    impl From<Event> for EventRecord {
+        fn from(event: Event) -> Self {
+            match event {
+                Event::PlayModeChanged { mode } => Self::PlayModeChanged { mode },
+                Event::TowerPlaced {
+                    tower,
+                    kind,
+                    region,
+                } => Self::TowerPlaced {
+                    tower,
+                    kind,
+                    region,
+                },
+                Event::TowerRemoved { tower, region } => Self::TowerRemoved { tower, region },
+                Event::TowerPlacementRejected {
+                    kind,
+                    origin,
+                    reason,
+                } => Self::TowerPlacementRejected {
+                    kind,
+                    origin,
+                    reason,
+                },
+                Event::TowerRemovalRejected { tower, reason } => {
+                    Self::TowerRemovalRejected { tower, reason }
+                }
+                other => panic!("unexpected event emitted during tower replay: {other:?}"),
+            }
+        }
     }
 }
