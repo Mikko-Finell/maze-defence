@@ -374,8 +374,8 @@ mod tests {
         let tile = input
             .cursor_tile_space
             .expect("cursor inside grid should snap to tile space");
-        let origin_column_tiles = tile.column_half_steps() as f32 * 0.5;
-        let origin_row_tiles = tile.row_half_steps() as f32 * 0.5;
+        let origin_column_tiles = tile.column_in_tiles();
+        let origin_row_tiles = tile.row_in_tiles();
 
         assert!(origin_column_tiles + footprint.x <= scene.tile_grid.columns as f32 + 1e-5);
         assert!(origin_row_tiles + footprint.y <= scene.tile_grid.rows as f32 + 1e-5);

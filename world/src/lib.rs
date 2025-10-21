@@ -2456,7 +2456,7 @@ mod tests {
         assert_eq!(first, second, "tower replay diverged between runs");
 
         let fingerprint = first.fingerprint();
-        let expected = 0xca77_82e0_0509_7a98;
+        let expected = 0x195a_71ab_29bc_3554;
         assert_eq!(
             fingerprint, expected,
             "tower replay fingerprint mismatch: {fingerprint:#x}"

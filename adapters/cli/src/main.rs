@@ -562,14 +562,11 @@ impl Simulation {
     }
 
     fn tile_position_to_cell(&self, position: TileSpacePosition) -> CellCoord {
-        let half_cell_stride = (self.cells_per_tile / 2).max(1);
-        let column = TileGridPresentation::SIDE_BORDER_CELL_LAYERS.saturating_add(
-            position
-                .column_half_steps()
-                .saturating_mul(half_cell_stride),
-        );
-        let row = TileGridPresentation::TOP_BORDER_CELL_LAYERS
-            .saturating_add(position.row_half_steps().saturating_mul(half_cell_stride));
+        let cells_per_tile = self.cells_per_tile.max(1);
+        let column_cells = (position.column_in_tiles() * cells_per_tile as f32).round() as u32;
+        let row_cells = (position.row_in_tiles() * cells_per_tile as f32).round() as u32;
+        let column = TileGridPresentation::SIDE_BORDER_CELL_LAYERS.saturating_add(column_cells);
+        let row = TileGridPresentation::TOP_BORDER_CELL_LAYERS.saturating_add(row_cells);
         CellCoord::new(column, row)
     }
 
@@ -832,12 +829,14 @@ mod tests {
             .expect("builder preview available in builder mode");
         assert!(preview.placeable, "initial preview should be placeable");
         assert_eq!(preview.kind, TowerKind::Basic);
-        let half_stride = (TileGridPresentation::DEFAULT_CELLS_PER_TILE / 2).max(1);
+        let cells_per_tile = TileGridPresentation::DEFAULT_CELLS_PER_TILE;
         let expected_origin = CellCoord::new(
-            TileGridPresentation::SIDE_BORDER_CELL_LAYERS
-                .saturating_add(preview_tile.column_half_steps().saturating_mul(half_stride)),
-            TileGridPresentation::TOP_BORDER_CELL_LAYERS
-                .saturating_add(preview_tile.row_half_steps().saturating_mul(half_stride)),
+            TileGridPresentation::SIDE_BORDER_CELL_LAYERS.saturating_add(
+                (preview_tile.column_in_tiles() * cells_per_tile as f32).round() as u32,
+            ),
+            TileGridPresentation::TOP_BORDER_CELL_LAYERS.saturating_add(
+                (preview_tile.row_in_tiles() * cells_per_tile as f32).round() as u32,
+            ),
         );
         assert_eq!(preview.origin, expected_origin);
         assert_eq!(

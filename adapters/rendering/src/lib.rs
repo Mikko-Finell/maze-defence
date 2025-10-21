@@ -77,7 +77,7 @@ pub struct FrameInput {
     pub mode_toggle: bool,
     /// Cursor position expressed in world units, clamped to the playable grid bounds.
     pub cursor_world_space: Option<Vec2>,
-    /// Cursor position snapped to tile coordinates with half-tile resolution within the playable grid.
+    /// Cursor position snapped to tile coordinates with adapter-provided subdivision resolution.
     pub cursor_tile_space: Option<TileSpacePosition>,
     /// Whether the adapter detected a placement confirmation on this frame.
     pub confirm_action: bool,
@@ -97,60 +97,85 @@ impl Default for FrameInput {
     }
 }
 
-/// Tile-space coordinate pair snapped to half-tile increments.
+/// Tile-space coordinate pair snapped to deterministic sub-tile increments.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct TileSpacePosition {
-    column_half_steps: u32,
-    row_half_steps: u32,
+    column_steps: u32,
+    row_steps: u32,
+    steps_per_tile: u32,
 }
 
 impl TileSpacePosition {
-    /// Creates a new tile-space position from zero-based integer indices.
+    /// Creates a new tile-space position from zero-based integer tile indices.
     #[must_use]
     pub const fn from_indices(column: u32, row: u32) -> Self {
+        Self::new(column, row, 1)
+    }
+
+    /// Creates a new tile-space position expressed in arbitrary sub-tile increments.
+    #[must_use]
+    pub const fn from_steps(column_steps: u32, row_steps: u32, steps_per_tile: u32) -> Self {
+        Self::new(column_steps, row_steps, steps_per_tile)
+    }
+
+    /// Creates a new tile-space position expressed in arbitrary sub-tile increments.
+    #[must_use]
+    pub const fn new(column_steps: u32, row_steps: u32, steps_per_tile: u32) -> Self {
+        let steps_per_tile = if steps_per_tile == 0 {
+            1
+        } else {
+            steps_per_tile
+        };
         Self {
-            column_half_steps: column * 2,
-            row_half_steps: row * 2,
+            column_steps,
+            row_steps,
+            steps_per_tile,
         }
     }
 
-    /// Creates a new tile-space position expressed in half-tile increments.
+    /// Number of sub-tile steps offset along the column axis.
     #[must_use]
-    pub const fn from_half_steps(column_half_steps: u32, row_half_steps: u32) -> Self {
-        Self {
-            column_half_steps,
-            row_half_steps,
+    pub const fn column_steps(&self) -> u32 {
+        self.column_steps
+    }
+
+    /// Number of sub-tile steps offset along the row axis.
+    #[must_use]
+    pub const fn row_steps(&self) -> u32 {
+        self.row_steps
+    }
+
+    /// Number of sub-tile steps that compose a full tile along each axis.
+    #[must_use]
+    pub const fn steps_per_tile(&self) -> u32 {
+        if self.steps_per_tile == 0 {
+            1
+        } else {
+            self.steps_per_tile
         }
-    }
-
-    /// Number of half-tile steps offset along the column axis.
-    #[must_use]
-    pub const fn column_half_steps(&self) -> u32 {
-        self.column_half_steps
-    }
-
-    /// Number of half-tile steps offset along the row axis.
-    #[must_use]
-    pub const fn row_half_steps(&self) -> u32 {
-        self.row_half_steps
     }
 
     /// Position expressed in tile units along the column axis.
     #[must_use]
     pub fn column_in_tiles(&self) -> f32 {
-        self.column_half_steps as f32 * 0.5
+        self.column_steps as f32 / self.steps_per_tile() as f32
     }
 
     /// Position expressed in tile units along the row axis.
     #[must_use]
     pub fn row_in_tiles(&self) -> f32 {
-        self.row_half_steps as f32 * 0.5
+        self.row_steps as f32 / self.steps_per_tile() as f32
     }
 
     /// Returns `true` when the position lies on whole-tile indices.
     #[must_use]
     pub const fn is_integer_aligned(&self) -> bool {
-        self.column_half_steps % 2 == 0 && self.row_half_steps % 2 == 0
+        let steps_per_tile = if self.steps_per_tile == 0 {
+            1
+        } else {
+            self.steps_per_tile
+        };
+        self.column_steps % steps_per_tile == 0 && self.row_steps % steps_per_tile == 0
     }
 }
 
@@ -328,7 +353,7 @@ impl TileGridPresentation {
         Vec2::new(position.x.clamp(0.0, width), position.y.clamp(0.0, height))
     }
 
-    /// Snaps a world-space position to half-tile increments within the grid bounds.
+    /// Snaps a world-space position to deterministic sub-tile increments within the grid bounds.
     ///
     /// Returns `None` when the position lies outside the grid or the grid has no area.
     #[must_use]
@@ -348,47 +373,59 @@ impl TileGridPresentation {
         }
 
         let clamped = self.clamp_world_position(position);
-        let column_half_steps = snap_axis_to_half_steps(
+        let steps_per_tile = self.cells_per_tile.max(1);
+        let column_steps = snap_axis_to_steps(
             clamped.x / self.tile_length,
             self.columns,
             footprint_in_tiles.x,
+            steps_per_tile,
         )?;
-        let row_half_steps = snap_axis_to_half_steps(
+        let row_steps = snap_axis_to_steps(
             clamped.y / self.tile_length,
             self.rows,
             footprint_in_tiles.y,
+            steps_per_tile,
         )?;
 
-        Some(TileSpacePosition::from_half_steps(
-            column_half_steps,
-            row_half_steps,
+        Some(TileSpacePosition::from_steps(
+            column_steps,
+            row_steps,
+            steps_per_tile,
         ))
     }
 }
 
-fn snap_axis_to_half_steps(
+fn snap_axis_to_steps(
     value_in_tiles: f32,
     tiles: u32,
     footprint_in_tiles: f32,
+    steps_per_tile: u32,
 ) -> Option<u32> {
-    if tiles == 0 {
+    if tiles == 0 || steps_per_tile == 0 {
         return None;
     }
 
-    let preview_size = footprint_in_tiles.max(0.0);
+    let total_steps = tiles.saturating_mul(steps_per_tile);
+    if total_steps == 0 {
+        return None;
+    }
+
+    let preview_size = (footprint_in_tiles * steps_per_tile as f32).max(0.0);
     let half_preview = preview_size * 0.5;
     let min_center = half_preview;
-    let max_center = tiles as f32 - half_preview;
+    let max_center = total_steps as f32 - half_preview;
 
     if max_center < min_center {
         return Some(0);
     }
 
-    let snapped_center = (value_in_tiles * 2.0).round() * 0.5;
+    let value_in_steps = value_in_tiles * steps_per_tile as f32;
+    let snapped_center = value_in_steps.round();
     let clamped_center = snapped_center.clamp(min_center, max_center);
     let origin = clamped_center - half_preview;
 
-    Some((origin * 2.0).round() as u32)
+    let clamped_origin = origin.max(0.0).min(total_steps as f32);
+    Some(clamped_origin.round() as u32)
 }
 
 /// Describes an outer wall that should be rendered near the grid.
@@ -624,15 +661,16 @@ mod tests {
     }
 
     #[test]
-    fn snap_world_to_tile_snaps_to_half_tile_increments() {
+    fn snap_world_to_tile_snaps_to_cell_increments() {
         let presentation = TileGridPresentation::new(6, 3, 24.0, 4, Color::from_rgb_u8(0, 0, 0))
             .expect("valid grid");
         let snapped = presentation
             .snap_world_to_tile(Vec2::new(24.0, 24.0), Vec2::splat(1.0))
             .expect("position inside grid should snap");
 
-        assert_eq!(snapped.column_half_steps(), 1);
-        assert_eq!(snapped.row_half_steps(), 1);
+        assert_eq!(snapped.steps_per_tile(), 4);
+        assert_eq!(snapped.column_steps(), 2);
+        assert_eq!(snapped.row_steps(), 2);
         assert!(!snapped.is_integer_aligned());
     }
 
@@ -645,10 +683,11 @@ mod tests {
             .snap_world_to_tile(Vec2::new(143.9, 71.2), footprint)
             .expect("position inside grid should snap");
 
-        assert_eq!(snapped.column_half_steps(), 9);
-        assert_eq!(snapped.row_half_steps(), 5);
-        let origin_column_tiles = snapped.column_half_steps() as f32 * 0.5;
-        let origin_row_tiles = snapped.row_half_steps() as f32 * 0.5;
+        assert_eq!(snapped.steps_per_tile(), 4);
+        assert_eq!(snapped.column_steps(), 18);
+        assert_eq!(snapped.row_steps(), 10);
+        let origin_column_tiles = snapped.column_in_tiles();
+        let origin_row_tiles = snapped.row_in_tiles();
         assert!(origin_column_tiles >= 0.0);
         assert!(origin_row_tiles >= 0.0);
         assert!(origin_column_tiles + footprint.x <= presentation.columns as f32 + 1e-5);
