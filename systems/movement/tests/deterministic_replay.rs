@@ -16,7 +16,7 @@ fn deterministic_replay_produces_expected_snapshot() {
     assert_eq!(first, second, "replay diverged between runs");
 
     let fingerprint = first.fingerprint();
-    let expected = 0x4ccd_e1c6_9b1c_4635;
+    let expected = 0xcefe_88fc_5623_038a;
     assert_eq!(
         fingerprint, expected,
         "fingerprint mismatch: {fingerprint:#x}"
@@ -237,6 +237,10 @@ enum EventRecord {
         from: CellCoord,
         to: CellCoord,
     },
+    BugExited {
+        bug_id: maze_defence_core::BugId,
+        cell: CellCoord,
+    },
     PlayModeChanged {
         mode: PlayMode,
     },
@@ -257,6 +261,10 @@ impl From<&Event> for EventRecord {
                 bug_id: *bug_id,
                 from: *from,
                 to: *to,
+            },
+            Event::BugExited { bug_id, cell } => Self::BugExited {
+                bug_id: *bug_id,
+                cell: *cell,
             },
             Event::PlayModeChanged { mode } => Self::PlayModeChanged { mode: *mode },
             Event::BugSpawned {

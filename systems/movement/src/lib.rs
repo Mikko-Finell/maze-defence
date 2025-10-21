@@ -134,8 +134,7 @@ impl Movement {
     where
         F: Fn(CellCoord) -> bool,
     {
-        let rows_with_exit = rows.saturating_add(1);
-        let start_index = index(columns, rows_with_exit, bug.cell)?;
+        let start_index = index(columns, rows, bug.cell)?;
 
         self.reset_workspace();
         self.prepare_node(start_index);
@@ -148,13 +147,13 @@ impl Movement {
 
         while let Some(current) = self.frontier.pop() {
             if current.cell == goal.cell() {
-                return self.reconstruct_first_hop(bug.cell, goal.cell(), columns, rows_with_exit);
+                return self.reconstruct_first_hop(bug.cell, goal.cell(), columns, rows);
             }
 
             let neighbors =
                 enumerate_neighbors(current.cell, columns, rows, goal.cell(), is_cell_blocked);
             for neighbor in neighbors {
-                let Some(neighbor_index) = index(columns, rows_with_exit, neighbor) else {
+                let Some(neighbor_index) = index(columns, rows, neighbor) else {
                     continue;
                 };
 
@@ -227,8 +226,7 @@ impl Movement {
             self.prepared_dimensions = Some((columns, rows));
         }
 
-        let rows_with_exit = rows.saturating_add(1);
-        let node_count_u64 = u64::from(columns) * u64::from(rows_with_exit);
+        let node_count_u64 = u64::from(columns) * u64::from(rows);
         let node_count = usize::try_from(node_count_u64).unwrap_or(0);
         if node_count > self.workspace_nodes {
             self.g_score.resize(node_count, u32::MAX);
@@ -319,21 +317,17 @@ where
         }
     };
 
-    if cell.row() < rows {
-        if cell.row() > 0 {
-            consider(CellCoord::new(cell.column(), cell.row() - 1));
-        }
-        if cell.column() > 0 {
-            consider(CellCoord::new(cell.column() - 1, cell.row()));
-        }
-        if cell.column() + 1 < columns {
-            consider(CellCoord::new(cell.column() + 1, cell.row()));
-        }
-        if cell.row() + 1 < rows {
-            consider(CellCoord::new(cell.column(), cell.row() + 1));
-        } else if cell.row() + 1 == rows && goal.row() >= rows && cell.column() == goal.column() {
-            consider(CellCoord::new(cell.column(), rows));
-        }
+    if cell.row() > 0 {
+        consider(CellCoord::new(cell.column(), cell.row() - 1));
+    }
+    if cell.column() > 0 {
+        consider(CellCoord::new(cell.column() - 1, cell.row()));
+    }
+    if cell.column() + 1 < columns {
+        consider(CellCoord::new(cell.column() + 1, cell.row()));
+    }
+    if cell.row() + 1 < rows {
+        consider(CellCoord::new(cell.column(), cell.row() + 1));
     }
 
     neighbors
@@ -447,11 +441,11 @@ mod tests {
         assert!(movement.targets.is_empty());
 
         let targets = vec![CellCoord::new(1, 4)];
-        assert_eq!(movement.prepare_workspace(3, 4, &targets), 15);
+        assert_eq!(movement.prepare_workspace(3, 4, &targets), 12);
         assert_eq!(movement.targets, targets);
 
         let alternate_targets = vec![CellCoord::new(2, 2), CellCoord::new(2, 3)];
-        assert_eq!(movement.prepare_workspace(4, 3, &alternate_targets), 16);
+        assert_eq!(movement.prepare_workspace(4, 3, &alternate_targets), 12);
         assert_eq!(movement.targets, alternate_targets);
     }
 
@@ -461,7 +455,7 @@ mod tests {
         let columns = 5;
         let rows = 4;
         let target = CellCoord::new(4, 3);
-        assert_eq!(movement.prepare_workspace(columns, rows, &[target]), 25);
+        assert_eq!(movement.prepare_workspace(columns, rows, &[target]), 20);
         let goal = Goal::at(target);
         let blocked = [
             CellCoord::new(1, 0),
