@@ -77,6 +77,10 @@ pub struct FrameInput {
     pub cursor_world_space: Option<Vec2>,
     /// Cursor position snapped to tile coordinates with half-tile resolution within the playable grid.
     pub cursor_tile_space: Option<TileSpacePosition>,
+    /// Whether the adapter detected a placement confirmation on this frame.
+    pub confirm_action: bool,
+    /// Whether the adapter detected a tower removal request on this frame.
+    pub remove_action: bool,
 }
 
 impl Default for FrameInput {
@@ -85,6 +89,8 @@ impl Default for FrameInput {
             mode_toggle: false,
             cursor_world_space: None,
             cursor_tile_space: None,
+            confirm_action: false,
+            remove_action: false,
         }
     }
 }

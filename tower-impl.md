@@ -63,7 +63,7 @@ Do not start working before you're read `tower-spec.md` so you understand the co
 
 **Goal:** Emit messages; still no rendering changes.
 
-**Status:** TODO
+**Status:** Done
 
 * New system subscribes to play-mode/cache, consumes preview & `FrameInput`.
 * On confirm → `PlaceTower { kind, origin }`; on remove over hovered tower → `RemoveTower`.
