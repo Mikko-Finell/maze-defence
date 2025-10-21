@@ -554,8 +554,8 @@ fn draw_towers(towers: &[SceneTower], metrics: &SceneMetrics) {
         }
 
         let origin = region.origin();
-        let x = metrics.offset_x + origin.column() as f32 * metrics.cell_step;
-        let y = metrics.offset_y + origin.row() as f32 * metrics.cell_step;
+        let x = metrics.grid_offset_x + origin.column() as f32 * metrics.cell_step;
+        let y = metrics.grid_offset_y + origin.row() as f32 * metrics.cell_step;
         let width = size.width() as f32 * metrics.cell_step;
         let height = size.height() as f32 * metrics.cell_step;
 
@@ -591,8 +591,8 @@ fn draw_tower_preview(preview: TowerPreview, metrics: &SceneMetrics) {
     };
 
     let origin = preview.region.origin();
-    let x = metrics.offset_x + origin.column() as f32 * metrics.cell_step;
-    let y = metrics.offset_y + origin.row() as f32 * metrics.cell_step;
+    let x = metrics.grid_offset_x + origin.column() as f32 * metrics.cell_step;
+    let y = metrics.grid_offset_y + origin.row() as f32 * metrics.cell_step;
     let width = size.width() as f32 * metrics.cell_step;
     let height = size.height() as f32 * metrics.cell_step;
 
