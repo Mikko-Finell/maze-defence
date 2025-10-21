@@ -27,7 +27,7 @@ use maze_defence_rendering::{
     BugPresentation, Color, FrameInput, Presentation, RenderingBackend, Scene, SceneTower,
     TileGridPresentation, TowerPreview, TowerTargetLine,
 };
-use std::time::Duration;
+use std::{collections::VecDeque, time::Duration};
 
 /// Rendering backend implemented on top of macroquad.
 #[derive(Debug, Default)]
@@ -38,13 +38,34 @@ pub struct MacroquadBackend;
 struct FpsCounter {
     elapsed: Duration,
     frames: u32,
+    frame_times: VecDeque<Duration>,
+    window_duration: Duration,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct FpsMetrics {
+    per_second: f32,
+    trailing_ten_seconds: f32,
 }
 
 impl FpsCounter {
-    /// Records a rendered frame and returns the average FPS once one second has elapsed.
-    fn record_frame(&mut self, frame_time: Duration) -> Option<f32> {
+    /// Records a rendered frame and returns the per-second and trailing ten-second averages once
+    /// one second has elapsed.
+    fn record_frame(&mut self, frame_time: Duration) -> Option<FpsMetrics> {
         self.elapsed += frame_time;
         self.frames = self.frames.saturating_add(1);
+
+        self.frame_times.push_back(frame_time);
+        self.window_duration += frame_time;
+
+        let trailing_window = Duration::from_secs(10);
+        while self.window_duration > trailing_window {
+            if let Some(removed) = self.frame_times.pop_front() {
+                self.window_duration = self.window_duration.saturating_sub(removed);
+            } else {
+                break;
+            }
+        }
 
         if self.elapsed < Duration::from_secs(1) {
             return None;
@@ -57,10 +78,19 @@ impl FpsCounter {
             return None;
         }
 
-        let fps = self.frames as f32 / seconds;
+        let per_second = self.frames as f32 / seconds;
+        let window_seconds = self.window_duration.as_secs_f32();
+        let trailing_ten_seconds = if window_seconds <= f32::EPSILON {
+            per_second
+        } else {
+            self.frame_times.len() as f32 / window_seconds
+        };
         self.elapsed = Duration::ZERO;
         self.frames = 0;
-        Some(fps)
+        Some(FpsMetrics {
+            per_second,
+            trailing_ten_seconds,
+        })
     }
 }
 
@@ -100,8 +130,15 @@ impl RenderingBackend for MacroquadBackend {
 
                 let dt_seconds = macroquad::time::get_frame_time();
                 let frame_dt = Duration::from_secs_f32(dt_seconds.max(0.0));
-                if let Some(fps) = fps_counter.record_frame(frame_dt) {
-                    println!("FPS: {:.2}", fps);
+                if let Some(FpsMetrics {
+                    per_second,
+                    trailing_ten_seconds,
+                }) = fps_counter.record_frame(frame_dt)
+                {
+                    println!(
+                        "FPS: {:.2} (10s avg: {:.2})",
+                        per_second, trailing_ten_seconds
+                    );
                 }
                 let metrics_before = SceneMetrics::from_scene(&scene, screen_width, screen_height);
                 let frame_input = gather_frame_input(&scene, &metrics_before);
@@ -784,10 +821,40 @@ mod tests {
         assert!(counter.record_frame(Duration::from_millis(250)).is_none());
         assert!(counter.record_frame(Duration::from_millis(250)).is_none());
 
-        let fps = counter
+        let metrics = counter
             .record_frame(Duration::from_millis(250))
             .expect("should report FPS after one second of samples");
-        assert!((fps - 4.0).abs() <= 1e-3);
+        assert!((metrics.per_second - 4.0).abs() <= 1e-3);
+        assert!((metrics.trailing_ten_seconds - 4.0).abs() <= 1e-3);
         assert!(counter.record_frame(Duration::from_millis(250)).is_none());
+    }
+
+    #[test]
+    fn fps_counter_tracks_trailing_ten_second_average() {
+        let mut counter = FpsCounter::default();
+
+        for _ in 0..10 {
+            for sample in 0..5 {
+                let metrics = counter.record_frame(Duration::from_millis(200));
+                if sample == 4 {
+                    let metrics = metrics.expect("should report every second");
+                    assert!((metrics.per_second - 5.0).abs() <= 1e-3);
+                    assert!((metrics.trailing_ten_seconds - 5.0).abs() <= 1e-3);
+                } else {
+                    assert!(metrics.is_none());
+                }
+            }
+        }
+
+        for sample in 0..10 {
+            let metrics = counter.record_frame(Duration::from_millis(100));
+            if sample == 9 {
+                let metrics = metrics.expect("should report every second");
+                assert!((metrics.per_second - 10.0).abs() <= 1e-3);
+                assert!((metrics.trailing_ten_seconds - 5.5).abs() <= 1e-3);
+            } else {
+                assert!(metrics.is_none());
+            }
+        }
     }
 }
