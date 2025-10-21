@@ -185,9 +185,7 @@ impl Movement {
 
         loop {
             let index = index(columns, rows, current)?;
-            let Some(previous) = self.came_from[index] else {
-                return None;
-            };
+            let previous = self.came_from[index]?;
 
             if previous == start {
                 return Some(current);

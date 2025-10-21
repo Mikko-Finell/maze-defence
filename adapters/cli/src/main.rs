@@ -15,8 +15,8 @@ use anyhow::Result;
 use clap::Parser;
 use glam::Vec2;
 use maze_defence_core::{
-    BugColor, CellCoord, CellRect, CellRectSize, Command, Event, PlacementError, PlayMode,
-    RemovalError, TileCoord, TowerId, TowerKind,
+    CellCoord, CellRect, CellRectSize, Command, Event, PlacementError, PlayMode, RemovalError,
+    TileCoord, TowerId, TowerKind,
 };
 use maze_defence_rendering::{
     BugPresentation, Color, FrameInput, Presentation, RenderingBackend, Scene, SceneTower,
@@ -175,7 +175,7 @@ fn main() -> Result<()> {
         bug_step_duration,
         bug_spawn_interval,
     );
-    let bootstrap = Bootstrap::default();
+    let bootstrap = Bootstrap;
     let (banner, grid_scene, wall_scene) = {
         let world = simulation.world();
         let banner = bootstrap.welcome_banner(world).to_owned();
@@ -216,7 +216,7 @@ fn main() -> Result<()> {
 
     let presentation = Presentation::new(banner, Color::from_rgb_u8(85, 142, 52), scene);
 
-    MacroquadBackend::default().run(presentation, move |dt, input, scene| {
+    MacroquadBackend.run(presentation, move |dt, input, scene| {
         simulation.handle_input(input);
         simulation.advance(dt);
         simulation.populate_scene(scene);
@@ -401,10 +401,8 @@ impl Simulation {
 
         loop {
             if events.is_empty() {
-                if next_events.is_empty() {
-                    if ran_iteration {
-                        break;
-                    }
+                if next_events.is_empty() && ran_iteration {
+                    break;
                 }
                 events = std::mem::take(&mut next_events);
             }
@@ -677,6 +675,7 @@ impl Simulation {
 mod tests {
     use super::*;
     use glam::Vec2;
+    use maze_defence_core::BugColor;
 
     fn new_simulation() -> Simulation {
         Simulation::new(

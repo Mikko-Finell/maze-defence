@@ -892,7 +892,7 @@ impl BitGrid {
         };
         self.words
             .get(index)
-            .map_or(false, |word| (*word & (1_u64 << bit_offset)) != 0)
+            .is_some_and(|word| (*word & (1_u64 << bit_offset)) != 0)
     }
 
     fn set(&mut self, cell: CellCoord) {

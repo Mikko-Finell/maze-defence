@@ -71,7 +71,7 @@ fn lighten_channel(channel: f32, amount: f32) -> f32 {
 }
 
 /// Input snapshot gathered by adapters before updating the scene.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Default)]
 pub struct FrameInput {
     /// Whether the adapter detected a toggle press on this frame.
     pub mode_toggle: bool,
@@ -83,18 +83,6 @@ pub struct FrameInput {
     pub confirm_action: bool,
     /// Whether the adapter detected a tower removal request on this frame.
     pub remove_action: bool,
-}
-
-impl Default for FrameInput {
-    fn default() -> Self {
-        Self {
-            mode_toggle: false,
-            cursor_world_space: None,
-            cursor_tile_space: None,
-            confirm_action: false,
-            remove_action: false,
-        }
-    }
 }
 
 /// Tile-space coordinate pair snapped to deterministic sub-tile increments.
@@ -287,7 +275,6 @@ impl TileGridPresentation {
     /// Creates a new tile grid descriptor.
     ///
     /// Returns an error when `cells_per_tile` is zero.
-    #[must_use]
     pub fn new(
         columns: u32,
         rows: u32,
@@ -563,6 +550,7 @@ pub struct Scene {
 impl Scene {
     /// Creates a new scene descriptor.
     #[must_use]
+    #[allow(clippy::too_many_arguments)] // Scene construction intentionally enumerates every channel explicitly.
     pub fn new(
         tile_grid: TileGridPresentation,
         wall: WallPresentation,
@@ -755,7 +743,7 @@ mod tests {
         let bugs = vec![BugPresentation::new(2, 3, Color::from_rgb_u8(255, 0, 0))];
 
         let scene = Scene::new(
-            tile_grid.clone(),
+            tile_grid,
             wall.clone(),
             bugs.clone(),
             Vec::new(),
@@ -811,7 +799,7 @@ mod tests {
         );
 
         let scene = Scene::new(
-            tile_grid.clone(),
+            tile_grid,
             wall.clone(),
             vec![],
             vec![SceneTower::new(

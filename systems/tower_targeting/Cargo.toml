@@ -8,3 +8,6 @@ path = "src/lib.rs"
 
 [dependencies]
 maze-defence-core = { path = "../../core" }
+
+[dev-dependencies]
+maze-defence-world = { path = "../../world", features = ["tower_scaffolding"] }

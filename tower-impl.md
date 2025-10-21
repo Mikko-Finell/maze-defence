@@ -2,6 +2,8 @@ Here’s a tight, low-risk sequence that keeps the tree green at every merge and
 
 Do not start working before you're read `tower-spec.md` so you understand the context of what you're doing.
 
+For tower targeting behaviour and its determinism guard, see the replay harness documented in `target-impl.md` step 5.
+
 # 1) Contracts first (core)
 
 **Goal:** Define the vocabulary; no behavior.

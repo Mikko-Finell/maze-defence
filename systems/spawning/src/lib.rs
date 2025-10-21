@@ -13,7 +13,7 @@ use std::time::Duration;
 
 use maze_defence_core::{BugColor, CellCoord, Command, Event, PlayMode};
 
-const RNG_MULTIPLIER: u64 = 636_413_622_384_679_3005;
+const RNG_MULTIPLIER: u64 = 6_364_136_223_846_793_005;
 const RNG_INCREMENT: u64 = 1;
 const SPAWN_COLORS: [BugColor; 4] = [
     BugColor::from_rgb(0x2f, 0x95, 0x32),
