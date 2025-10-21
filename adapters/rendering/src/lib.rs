@@ -410,22 +410,62 @@ fn snap_axis_to_steps(
         return None;
     }
 
-    let preview_size = (footprint_in_tiles * steps_per_tile as f32).max(0.0);
+    let steps_per_tile_f64 = f64::from(steps_per_tile);
+    let preview_size = (f64::from(footprint_in_tiles) * steps_per_tile_f64).max(0.0);
     let half_preview = preview_size * 0.5;
     let min_center = half_preview;
-    let max_center = total_steps as f32 - half_preview;
+    let max_center = f64::from(total_steps) - half_preview;
 
     if max_center < min_center {
         return Some(0);
     }
 
-    let value_in_steps = value_in_tiles * steps_per_tile as f32;
-    let snapped_center = value_in_steps.round();
-    let clamped_center = snapped_center.clamp(min_center, max_center);
-    let origin = clamped_center - half_preview;
+    let value_in_steps = f64::from(value_in_tiles) * steps_per_tile_f64;
+    let clamped_center = value_in_steps.clamp(min_center, max_center);
+    let max_origin = f64::from(total_steps) - preview_size;
+    let mut origin = clamped_center - half_preview;
+    origin = origin.clamp(0.0, max_origin);
 
-    let clamped_origin = origin.max(0.0).min(total_steps as f32);
-    Some(clamped_origin.round() as u32)
+    let alignment_stride = (steps_per_tile / 2).max(1);
+    if alignment_stride == 1 {
+        let rounded = origin.round().clamp(0.0, f64::from(total_steps));
+        return Some(rounded as u32);
+    }
+
+    let stride = f64::from(alignment_stride);
+    let floor_candidate = (origin / stride).floor() * stride;
+    let ceil_candidate = (origin / stride).ceil() * stride;
+    let tolerance = 1e-6;
+
+    let mut best_candidate: Option<(f64, f64)> = None;
+
+    for candidate in [floor_candidate, ceil_candidate] {
+        if candidate < -tolerance || candidate > max_origin + tolerance {
+            continue;
+        }
+
+        let distance = (candidate - origin).abs();
+        match best_candidate {
+            Some((best_value, best_distance)) => {
+                if distance < best_distance - tolerance
+                    || ((distance - best_distance).abs() <= tolerance && candidate < best_value)
+                {
+                    best_candidate = Some((candidate, distance));
+                }
+            }
+            None => {
+                best_candidate = Some((candidate, distance));
+            }
+        }
+    }
+
+    if let Some((candidate, _)) = best_candidate {
+        let rounded = candidate.round().clamp(0.0, f64::from(total_steps));
+        return Some(rounded as u32);
+    }
+
+    let fallback = origin.round().clamp(0.0, f64::from(total_steps));
+    Some(fallback as u32)
 }
 
 /// Describes an outer wall that should be rendered near the grid.
@@ -672,6 +712,39 @@ mod tests {
         assert_eq!(snapped.column_steps(), 2);
         assert_eq!(snapped.row_steps(), 2);
         assert!(!snapped.is_integer_aligned());
+    }
+
+    #[test]
+    fn snap_world_to_tile_limits_alignment_to_tiles_and_half_tiles() {
+        let presentation = TileGridPresentation::new(6, 3, 24.0, 4, Color::from_rgb_u8(0, 0, 0))
+            .expect("valid grid");
+        let footprint = Vec2::splat(1.0);
+        let tile_length = presentation.tile_length;
+
+        let sample_columns = [0.1_f32, 0.25, 0.5, 0.75, 1.2, 2.3];
+        let sample_rows = [0.1_f32, 0.4, 1.1, 1.9];
+
+        for &column in &sample_columns {
+            for &row in &sample_rows {
+                let position = Vec2::new(column * tile_length, row * tile_length);
+                let snapped = presentation
+                    .snap_world_to_tile(position, footprint)
+                    .expect("position inside grid should snap");
+
+                assert_eq!(
+                    snapped.column_steps() % 2,
+                    0,
+                    "column step {} must align to half-tile stride",
+                    snapped.column_steps(),
+                );
+                assert_eq!(
+                    snapped.row_steps() % 2,
+                    0,
+                    "row step {} must align to half-tile stride",
+                    snapped.row_steps(),
+                );
+            }
+        }
     }
 
     #[test]
