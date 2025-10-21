@@ -391,6 +391,269 @@ impl TileCoord {
     }
 }
 
+/// Read-only description of the world's coarse tile layout.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TileGrid {
+    columns: TileCoord,
+    rows: TileCoord,
+    tile_length: f32,
+}
+
+impl TileGrid {
+    /// Creates a new tile grid description.
+    #[must_use]
+    pub const fn new(columns: TileCoord, rows: TileCoord, tile_length: f32) -> Self {
+        Self {
+            columns,
+            rows,
+            tile_length,
+        }
+    }
+
+    /// Number of columns contained in the grid.
+    #[must_use]
+    pub const fn columns(&self) -> TileCoord {
+        self.columns
+    }
+
+    /// Number of rows contained in the grid.
+    #[must_use]
+    pub const fn rows(&self) -> TileCoord {
+        self.rows
+    }
+
+    /// Side length of a single square tile expressed in world units.
+    #[must_use]
+    pub const fn tile_length(&self) -> f32 {
+        self.tile_length
+    }
+
+    /// Total width of the grid measured in world units.
+    #[must_use]
+    pub const fn width(&self) -> f32 {
+        self.columns.get() as f32 * self.tile_length
+    }
+
+    /// Total height of the grid measured in world units.
+    #[must_use]
+    pub const fn height(&self) -> f32 {
+        self.rows.get() as f32 * self.tile_length
+    }
+}
+
+/// Describes the perimeter wall that surrounds the maze.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Wall {
+    target: Target,
+}
+
+impl Wall {
+    /// Creates a new wall using the provided target opening.
+    #[must_use]
+    pub const fn new(target: Target) -> Self {
+        Self { target }
+    }
+
+    /// Retrieves the target carved into the perimeter wall.
+    #[must_use]
+    pub const fn target(&self) -> &Target {
+        &self.target
+    }
+}
+
+/// Opening carved into the wall to connect the maze with the outside world.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Target {
+    cells: Vec<TargetCell>,
+}
+
+impl Target {
+    /// Creates a new target comprised of the provided cells.
+    #[must_use]
+    pub fn new(cells: Vec<TargetCell>) -> Self {
+        Self { cells }
+    }
+
+    /// Collection of cells that occupy the target within the wall.
+    #[must_use]
+    pub fn cells(&self) -> &[TargetCell] {
+        &self.cells
+    }
+}
+
+/// Discrete cell that composes part of the wall target.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct TargetCell {
+    cell: CellCoord,
+}
+
+impl TargetCell {
+    /// Creates a new target cell located at the provided column and row.
+    #[must_use]
+    pub const fn new(column: u32, row: u32) -> Self {
+        Self {
+            cell: CellCoord::new(column, row),
+        }
+    }
+
+    /// Column that contains the cell relative to the tile grid.
+    #[must_use]
+    pub const fn column(&self) -> u32 {
+        self.cell.column()
+    }
+
+    /// Row that contains the cell relative to the tile grid.
+    #[must_use]
+    pub const fn row(&self) -> u32 {
+        self.cell.row()
+    }
+
+    /// Returns the complete cell coordinate for the target cell.
+    #[must_use]
+    pub const fn cell(&self) -> CellCoord {
+        self.cell
+    }
+}
+
+/// Immutable representation of a single bug's state used for queries.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BugSnapshot {
+    /// Unique identifier assigned to the bug.
+    pub id: BugId,
+    /// Grid cell currently occupied by the bug.
+    pub cell: CellCoord,
+    /// Appearance assigned to the bug.
+    pub color: BugColor,
+    /// Indicates whether the bug accrued enough time to advance.
+    pub ready_for_step: bool,
+    /// Duration accumulated toward the next step.
+    pub accumulated: Duration,
+}
+
+/// Read-only snapshot describing all bugs within the maze.
+#[derive(Clone, Debug, Default)]
+pub struct BugView {
+    snapshots: Vec<BugSnapshot>,
+}
+
+impl BugView {
+    /// Creates a new bug view from the provided snapshots.
+    #[must_use]
+    pub fn new(snapshots: Vec<BugSnapshot>) -> Self {
+        Self { snapshots }
+    }
+
+    /// Iterator over the captured bug snapshots in deterministic order.
+    pub fn iter(&self) -> impl Iterator<Item = &BugSnapshot> {
+        self.snapshots.iter()
+    }
+
+    /// Consumes the view, yielding the underlying snapshots.
+    #[must_use]
+    pub fn into_vec(self) -> Vec<BugSnapshot> {
+        self.snapshots
+    }
+}
+
+/// Read-only view into the dense occupancy grid.
+#[derive(Clone, Copy, Debug)]
+pub struct OccupancyView<'a> {
+    columns: u32,
+    rows: u32,
+    cells: &'a [Option<BugId>],
+}
+
+impl<'a> OccupancyView<'a> {
+    /// Creates a new occupancy view backed by the provided cell data.
+    #[must_use]
+    pub fn new(columns: u32, rows: u32, cells: &'a [Option<BugId>]) -> Self {
+        debug_assert_eq!(
+            usize::try_from(columns)
+                .ok()
+                .and_then(|cols| { usize::try_from(rows).ok().and_then(|r| cols.checked_mul(r)) }),
+            Some(cells.len())
+        );
+        Self {
+            columns,
+            rows,
+            cells,
+        }
+    }
+
+    /// Returns the bug occupying the provided cell, if any.
+    #[must_use]
+    pub fn occupant(&self, cell: CellCoord) -> Option<BugId> {
+        self.index(cell)
+            .and_then(|index| self.cells.get(index).copied().flatten())
+    }
+
+    /// Reports whether the cell is currently free for traversal.
+    #[must_use]
+    pub fn is_free(&self, cell: CellCoord) -> bool {
+        self.index(cell).map_or(true, |index| {
+            self.cells.get(index).copied().unwrap_or(None).is_none()
+        })
+    }
+
+    /// Returns an iterator over all cells.
+    pub fn iter(&self) -> impl Iterator<Item = Option<BugId>> + 'a {
+        self.cells.iter().copied()
+    }
+
+    /// Provides the dimensions of the underlying occupancy grid.
+    #[must_use]
+    pub const fn dimensions(&self) -> (u32, u32) {
+        (self.columns, self.rows)
+    }
+
+    fn index(&self, cell: CellCoord) -> Option<usize> {
+        if cell.column() < self.columns && cell.row() < self.rows {
+            let row = usize::try_from(cell.row()).ok()?;
+            let column = usize::try_from(cell.column()).ok()?;
+            let width = usize::try_from(self.columns).ok()?;
+            Some(row * width + column)
+        } else {
+            None
+        }
+    }
+}
+
+/// Immutable representation of a single tower's state used for queries.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TowerSnapshot {
+    /// Identifier allocated to the tower by the world.
+    pub id: TowerId,
+    /// Kind of tower that was constructed.
+    pub kind: TowerKind,
+    /// Region of cells occupied by the tower.
+    pub region: CellRect,
+}
+
+/// Read-only snapshot describing all towers placed within the maze.
+#[derive(Clone, Debug, Default)]
+pub struct TowerView {
+    snapshots: Vec<TowerSnapshot>,
+}
+
+impl TowerView {
+    /// Creates a new tower view from the provided snapshots.
+    #[must_use]
+    pub fn new(snapshots: Vec<TowerSnapshot>) -> Self {
+        Self { snapshots }
+    }
+
+    /// Iterator over the captured tower snapshots in deterministic order.
+    pub fn iter(&self) -> impl Iterator<Item = &TowerSnapshot> {
+        self.snapshots.iter()
+    }
+
+    /// Consumes the view, yielding the underlying snapshots.
+    #[must_use]
+    pub fn into_vec(self) -> Vec<TowerSnapshot> {
+        self.snapshots
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{

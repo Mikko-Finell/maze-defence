@@ -4,7 +4,7 @@ use std::{
     time::Duration,
 };
 
-use maze_defence_core::{BugColor, CellCoord, Command, Event, PlayMode, TileCoord};
+use maze_defence_core::{BugColor, BugSnapshot, CellCoord, Command, Event, PlayMode, TileCoord};
 use maze_defence_system_spawning::{Config, Spawning};
 use maze_defence_world::{self as world, query, World};
 
@@ -243,8 +243,8 @@ struct BugState {
     color: BugColor,
 }
 
-impl From<maze_defence_world::query::BugSnapshot> for BugState {
-    fn from(snapshot: maze_defence_world::query::BugSnapshot) -> Self {
+impl From<BugSnapshot> for BugState {
+    fn from(snapshot: BugSnapshot) -> Self {
         Self {
             cell: snapshot.cell,
             color: snapshot.color,

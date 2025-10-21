@@ -7,4 +7,5 @@ edition.workspace = true
 path = "src/lib.rs"
 
 [dependencies]
+maze-defence-core = { path = "../../core" }
 maze-defence-world = { path = "../../world" }

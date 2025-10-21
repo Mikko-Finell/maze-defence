@@ -342,6 +342,7 @@ dependencies = [
 name = "maze-defence-system-bootstrap"
 version = "0.1.0"
 dependencies = [
+ "maze-defence-core",
  "maze-defence-world",
 ]
 
