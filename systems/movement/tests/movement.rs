@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use maze_defence_core::{
-    BugColor, CellCoord, Command, Direction, Event, PlayMode, TileCoord, TowerKind,
+    BugColor, BugId, CellCoord, Command, Direction, Event, PlayMode, TileCoord, TowerKind,
 };
 use maze_defence_system_movement::Movement;
 use maze_defence_world::{self as world, query, World};
@@ -362,6 +362,147 @@ fn bugs_respect_tower_blockers() {
             );
         }
     }
+}
+
+#[test]
+fn blocked_bugs_do_not_accumulate_extra_step_time() {
+    fn drive_tick(
+        world_state: &mut World,
+        movement: &mut Movement,
+        dt: Duration,
+        bug_id: BugId,
+        apply_steps: bool,
+    ) -> usize {
+        let mut tick_events = Vec::new();
+        world::apply(world_state, Command::Tick { dt }, &mut tick_events);
+        let mut pending_events = tick_events;
+        let mut iteration = 0;
+        let mut step_commands = 0;
+
+        loop {
+            if pending_events.is_empty() {
+                break;
+            }
+
+            let bug_view = query::bug_view(world_state);
+            let occupancy_view = query::occupancy_view(world_state);
+            let targets = query::target_cells(world_state);
+            let mut commands = Vec::new();
+            movement.handle(
+                &pending_events,
+                &bug_view,
+                occupancy_view,
+                &targets,
+                |cell| query::is_cell_blocked(world_state, cell),
+                &mut commands,
+            );
+
+            if iteration == 0 {
+                step_commands = commands
+                    .iter()
+                    .filter(|command| {
+                        matches!(
+                            command,
+                            Command::StepBug { bug_id: id, .. } if *id == bug_id
+                        )
+                    })
+                    .count();
+            }
+
+            if commands.is_empty() {
+                break;
+            }
+
+            pending_events.clear();
+            for command in commands {
+                let should_skip = !apply_steps
+                    && matches!(
+                        command,
+                        Command::StepBug { bug_id: id, .. } if id == bug_id
+                    );
+                if should_skip {
+                    continue;
+                }
+                world::apply(world_state, command, &mut pending_events);
+            }
+
+            iteration += 1;
+        }
+
+        step_commands
+    }
+
+    let mut world = World::new();
+    let mut movement = Movement::default();
+    let mut events = Vec::new();
+
+    world::apply(
+        &mut world,
+        Command::ConfigureTileGrid {
+            columns: TileCoord::new(3),
+            rows: TileCoord::new(3),
+            tile_length: 1.0,
+            cells_per_tile: 1,
+        },
+        &mut events,
+    );
+    world::apply(
+        &mut world,
+        Command::SpawnBug {
+            spawner: CellCoord::new(0, 0),
+            color: BugColor::from_rgb(0x2f, 0x95, 0x32),
+        },
+        &mut events,
+    );
+
+    pump_system(&mut world, &mut movement, events);
+
+    let bug_id = query::bug_view(&world)
+        .into_vec()
+        .into_iter()
+        .next()
+        .map(|snapshot| snapshot.id)
+        .expect("bug must be present");
+
+    let step_quantum = Duration::from_millis(250);
+
+    for _ in 0..3 {
+        let _ = drive_tick(&mut world, &mut movement, step_quantum, bug_id, false);
+        let bug_snapshot = query::bug_view(&world)
+            .into_vec()
+            .into_iter()
+            .find(|bug| bug.id == bug_id)
+            .expect("bug should remain while blocked");
+        assert_eq!(
+            bug_snapshot.accumulated, step_quantum,
+            "blocked bug must saturate the accumulator",
+        );
+        assert!(
+            bug_snapshot.ready_for_step,
+            "blocked bug should stay ready to advance",
+        );
+    }
+
+    let step_commands_after_unblock =
+        drive_tick(&mut world, &mut movement, step_quantum, bug_id, true);
+    assert_eq!(
+        step_commands_after_unblock, 1,
+        "bug should advance exactly once after unblocking",
+    );
+
+    let bug_snapshot = query::bug_view(&world)
+        .into_vec()
+        .into_iter()
+        .find(|bug| bug.id == bug_id)
+        .expect("bug should remain after advancing");
+    assert!(
+        bug_snapshot.accumulated < step_quantum,
+        "bug must not retain more than one quantum",
+    );
+    assert!(
+        !bug_snapshot.ready_for_step,
+        "bug should wait for a new quantum before the next step",
+    );
 }
 
 fn pump_system(world: &mut World, movement: &mut Movement, mut events: Vec<Event>) {

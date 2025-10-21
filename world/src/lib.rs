@@ -358,8 +358,9 @@ pub fn apply(world: &mut World, command: Command, out_events: &mut Vec<Event>) {
             world.tick_index = world.tick_index.saturating_add(1);
             out_events.push(Event::TimeAdvanced { dt });
 
+            let step_quantum = world.step_quantum;
             for bug in world.iter_bugs_mut() {
-                bug.accumulator = bug.accumulator.saturating_add(dt);
+                bug.accumulator = bug.accumulator.saturating_add(dt).min(step_quantum);
             }
         }
         Command::ConfigureBugStep { step_duration } => {
