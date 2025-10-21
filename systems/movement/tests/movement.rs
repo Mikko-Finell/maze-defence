@@ -553,12 +553,10 @@ fn select_blocked_bug(
         let column = bug.cell.column();
         let row = bug.cell.row();
 
-        if column + 1 >= columns {
-            if column > 0 {
-                let west = CellCoord::new(column - 1, row);
-                if occupancy_view.is_free(west) {
-                    return Some((bug.id, Direction::East));
-                }
+        if column + 1 >= columns && column > 0 {
+            let west = CellCoord::new(column - 1, row);
+            if occupancy_view.is_free(west) {
+                return Some((bug.id, Direction::East));
             }
         }
 

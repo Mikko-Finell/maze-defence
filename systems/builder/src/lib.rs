@@ -55,7 +55,7 @@ impl PlacementPreview {
 }
 
 /// Input snapshot distilled from adapter-provided frame input data.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub struct BuilderInput {
     /// Indicates whether the player confirmed a placement on this frame.
     pub confirm_action: bool,
@@ -77,16 +77,6 @@ impl BuilderInput {
             confirm_action,
             remove_action,
             cursor_cell,
-        }
-    }
-}
-
-impl Default for BuilderInput {
-    fn default() -> Self {
-        Self {
-            confirm_action: false,
-            remove_action: false,
-            cursor_cell: None,
         }
     }
 }

@@ -77,10 +77,12 @@ impl RenderingBackend for MacroquadBackend {
 
         let mut scene = scene;
 
-        let mut config = macroquad::window::Conf::default();
-        config.window_title = window_title;
-        config.window_width = 960;
-        config.window_height = 960;
+        let config = macroquad::window::Conf {
+            window_title,
+            window_width: 960,
+            window_height: 960,
+            ..macroquad::window::Conf::default()
+        };
 
         macroquad::Window::from_config(config, async move {
             let background = to_macroquad_color(clear_color);
@@ -244,8 +246,10 @@ fn gather_frame_input_from_observations(
     remove_click: bool,
     delete_pressed: bool,
 ) -> FrameInput {
-    let mut input = FrameInput::default();
-    input.mode_toggle = mode_toggle;
+    let mut input = FrameInput {
+        mode_toggle,
+        ..FrameInput::default()
+    };
 
     if metrics.scale <= f32::EPSILON {
         return input;
@@ -289,202 +293,6 @@ fn active_builder_preview(scene: &Scene) -> Option<TowerPreview> {
         scene.tower_preview
     } else {
         None
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use glam::Vec2;
-    use maze_defence_core::{BugId, CellCoord, CellRect, CellRectSize, TowerId, TowerKind};
-    use std::time::Duration;
-
-    fn base_scene(play_mode: PlayMode, placement_preview: Option<TowerPreview>) -> Scene {
-        let grid = TileGridPresentation::new(
-            4,
-            4,
-            32.0,
-            TileGridPresentation::DEFAULT_CELLS_PER_TILE,
-            Color::from_rgb_u8(40, 40, 40),
-        )
-        .expect("valid grid");
-        let wall = maze_defence_rendering::WallPresentation::new(
-            8.0,
-            Color::from_rgb_u8(64, 64, 64),
-            maze_defence_rendering::TargetPresentation::new(Vec::new()),
-        );
-
-        Scene::new(
-            grid,
-            wall,
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            play_mode,
-            placement_preview,
-            None,
-            None,
-        )
-    }
-
-    #[test]
-    fn active_builder_preview_suppresses_attack_mode_preview() {
-        let preview_region =
-            CellRect::from_origin_and_size(CellCoord::new(2, 2), CellRectSize::new(4, 4));
-        let preview = TowerPreview::new(TowerKind::Basic, preview_region, true, None);
-        let mut scene = base_scene(PlayMode::Attack, Some(preview));
-
-        assert!(active_builder_preview(&scene).is_none());
-
-        scene.play_mode = PlayMode::Builder;
-        scene.tower_preview = Some(preview);
-
-        assert_eq!(active_builder_preview(&scene), Some(preview));
-    }
-
-    #[test]
-    fn target_columns_are_normalized_by_side_margin() {
-        let margin = TileGridPresentation::SIDE_BORDER_CELL_LAYERS;
-        let input = vec![margin, margin + 1, margin + 5];
-        let normalized = normalize_target_columns(&input);
-
-        assert_eq!(normalized, vec![0, 1, 5]);
-    }
-
-    #[test]
-    fn confirm_action_only_set_when_cursor_inside_grid() {
-        let mut scene = base_scene(PlayMode::Builder, None);
-        scene.active_tower_footprint_tiles = Some(Vec2::new(1.5, 0.5));
-        let metrics = SceneMetrics::from_scene(&scene, 960.0, 960.0);
-
-        let inside_cursor = Vec2::new(
-            metrics.grid_offset_x + metrics.cell_step * 0.5,
-            metrics.grid_offset_y + metrics.cell_step * 0.5,
-        );
-        let inside_input = gather_frame_input_from_observations(
-            &scene,
-            &metrics,
-            inside_cursor,
-            false,
-            true,
-            false,
-            false,
-        );
-        assert!(
-            inside_input.confirm_action,
-            "left click inside the grid should be treated as a confirm action",
-        );
-
-        let outside_cursor = Vec2::new(metrics.grid_offset_x - 10.0, metrics.grid_offset_y - 10.0);
-        let outside_input = gather_frame_input_from_observations(
-            &scene,
-            &metrics,
-            outside_cursor,
-            false,
-            true,
-            false,
-            false,
-        );
-        assert!(
-            outside_input.cursor_tile_space.is_none(),
-            "cursor outside the grid must not snap to tile space",
-        );
-        assert!(
-            !outside_input.confirm_action,
-            "clicking outside the grid must not emit confirm actions",
-        );
-    }
-
-    #[test]
-    fn cursor_tile_space_respects_active_tower_footprint() {
-        let mut scene = base_scene(PlayMode::Builder, None);
-        let footprint = Vec2::new(1.5, 0.5);
-        scene.active_tower_footprint_tiles = Some(footprint);
-        let metrics = SceneMetrics::from_scene(&scene, 960.0, 960.0);
-
-        let cursor = Vec2::new(
-            metrics.grid_offset_x + metrics.grid_width_scaled - 1.0,
-            metrics.grid_offset_y + metrics.grid_height_scaled - 1.0,
-        );
-        let input = gather_frame_input_from_observations(
-            &scene, &metrics, cursor, false, false, false, false,
-        );
-
-        let tile = input
-            .cursor_tile_space
-            .expect("cursor inside grid should snap to tile space");
-        let origin_column_tiles = tile.column_in_tiles();
-        let origin_row_tiles = tile.row_in_tiles();
-
-        assert!(origin_column_tiles + footprint.x <= scene.tile_grid.columns as f32 + 1e-5);
-        assert!(origin_row_tiles + footprint.y <= scene.tile_grid.rows as f32 + 1e-5);
-    }
-
-    #[test]
-    fn tower_target_segments_empty_when_no_targets() {
-        let mut scene = base_scene(PlayMode::Attack, None);
-        let metrics = SceneMetrics::from_scene(&scene, 960.0, 960.0);
-
-        assert!(tower_target_segments(&scene.tower_targets, &metrics).is_empty());
-
-        scene.tower_targets.push(TowerTargetLine::new(
-            TowerId::new(1),
-            BugId::new(2),
-            Vec2::new(3.0, 4.0),
-            Vec2::new(5.5, 6.5),
-        ));
-        let metrics = SceneMetrics::from_scene(&scene, 960.0, 960.0);
-        let segments = tower_target_segments(&scene.tower_targets, &metrics);
-
-        assert_eq!(segments.len(), 1);
-        let (start, end) = segments[0];
-        let expected_start = Vec2::new(
-            metrics.offset_x + 3.0 * metrics.cell_step,
-            metrics.offset_y + 4.0 * metrics.cell_step,
-        );
-        let expected_end = Vec2::new(
-            metrics.offset_x + 5.5 * metrics.cell_step,
-            metrics.offset_y + 6.5 * metrics.cell_step,
-        );
-        assert_eq!(start, expected_start);
-        assert_eq!(end, expected_end);
-    }
-
-    #[test]
-    fn preview_rectangle_matches_footprint_in_world_space() {
-        let mut scene = base_scene(PlayMode::Builder, None);
-        let origin = CellCoord::new(4, 2);
-        let size = CellRectSize::new(6, 4);
-        let preview_region = CellRect::from_origin_and_size(origin, size);
-        let preview = TowerPreview::new(TowerKind::Basic, preview_region, true, None);
-        scene.tower_preview = Some(preview);
-        let metrics = SceneMetrics::from_scene(&scene, 640.0, 640.0);
-
-        let (_, _, width, height) =
-            preview_rectangle(preview, &metrics).expect("preview geometry should be available");
-        let footprint_tiles = Vec2::new(
-            size.width() as f32 / scene.tile_grid.cells_per_tile as f32,
-            size.height() as f32 / scene.tile_grid.cells_per_tile as f32,
-        );
-        let expected_width = footprint_tiles.x * scene.tile_grid.tile_length * metrics.scale;
-        let expected_height = footprint_tiles.y * scene.tile_grid.tile_length * metrics.scale;
-
-        assert!((width - expected_width).abs() < 1e-5);
-        assert!((height - expected_height).abs() < 1e-5);
-    }
-
-    #[test]
-    fn fps_counter_reports_average_frames_per_second() {
-        let mut counter = FpsCounter::default();
-        assert!(counter.record_frame(Duration::from_millis(250)).is_none());
-        assert!(counter.record_frame(Duration::from_millis(250)).is_none());
-        assert!(counter.record_frame(Duration::from_millis(250)).is_none());
-
-        let fps = counter
-            .record_frame(Duration::from_millis(250))
-            .expect("should report FPS after one second of samples");
-        assert!((fps - 4.0).abs() <= 1e-3);
-        assert!(counter.record_frame(Duration::from_millis(250)).is_none());
     }
 }
 
@@ -786,4 +594,200 @@ fn preview_rectangle(
 
 fn to_macroquad_color(color: maze_defence_rendering::Color) -> macroquad::color::Color {
     macroquad::color::Color::new(color.red, color.green, color.blue, color.alpha)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use glam::Vec2;
+    use maze_defence_core::{BugId, CellCoord, CellRect, CellRectSize, TowerId, TowerKind};
+    use std::time::Duration;
+
+    fn base_scene(play_mode: PlayMode, placement_preview: Option<TowerPreview>) -> Scene {
+        let grid = TileGridPresentation::new(
+            4,
+            4,
+            32.0,
+            TileGridPresentation::DEFAULT_CELLS_PER_TILE,
+            Color::from_rgb_u8(40, 40, 40),
+        )
+        .expect("valid grid");
+        let wall = maze_defence_rendering::WallPresentation::new(
+            8.0,
+            Color::from_rgb_u8(64, 64, 64),
+            maze_defence_rendering::TargetPresentation::new(Vec::new()),
+        );
+
+        Scene::new(
+            grid,
+            wall,
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            play_mode,
+            placement_preview,
+            None,
+            None,
+        )
+    }
+
+    #[test]
+    fn active_builder_preview_suppresses_attack_mode_preview() {
+        let preview_region =
+            CellRect::from_origin_and_size(CellCoord::new(2, 2), CellRectSize::new(4, 4));
+        let preview = TowerPreview::new(TowerKind::Basic, preview_region, true, None);
+        let mut scene = base_scene(PlayMode::Attack, Some(preview));
+
+        assert!(active_builder_preview(&scene).is_none());
+
+        scene.play_mode = PlayMode::Builder;
+        scene.tower_preview = Some(preview);
+
+        assert_eq!(active_builder_preview(&scene), Some(preview));
+    }
+
+    #[test]
+    fn target_columns_are_normalized_by_side_margin() {
+        let margin = TileGridPresentation::SIDE_BORDER_CELL_LAYERS;
+        let input = vec![margin, margin + 1, margin + 5];
+        let normalized = normalize_target_columns(&input);
+
+        assert_eq!(normalized, vec![0, 1, 5]);
+    }
+
+    #[test]
+    fn confirm_action_only_set_when_cursor_inside_grid() {
+        let mut scene = base_scene(PlayMode::Builder, None);
+        scene.active_tower_footprint_tiles = Some(Vec2::new(1.5, 0.5));
+        let metrics = SceneMetrics::from_scene(&scene, 960.0, 960.0);
+
+        let inside_cursor = Vec2::new(
+            metrics.grid_offset_x + metrics.cell_step * 0.5,
+            metrics.grid_offset_y + metrics.cell_step * 0.5,
+        );
+        let inside_input = gather_frame_input_from_observations(
+            &scene,
+            &metrics,
+            inside_cursor,
+            false,
+            true,
+            false,
+            false,
+        );
+        assert!(
+            inside_input.confirm_action,
+            "left click inside the grid should be treated as a confirm action",
+        );
+
+        let outside_cursor = Vec2::new(metrics.grid_offset_x - 10.0, metrics.grid_offset_y - 10.0);
+        let outside_input = gather_frame_input_from_observations(
+            &scene,
+            &metrics,
+            outside_cursor,
+            false,
+            true,
+            false,
+            false,
+        );
+        assert!(
+            outside_input.cursor_tile_space.is_none(),
+            "cursor outside the grid must not snap to tile space",
+        );
+        assert!(
+            !outside_input.confirm_action,
+            "clicking outside the grid must not emit confirm actions",
+        );
+    }
+
+    #[test]
+    fn cursor_tile_space_respects_active_tower_footprint() {
+        let mut scene = base_scene(PlayMode::Builder, None);
+        let footprint = Vec2::new(1.5, 0.5);
+        scene.active_tower_footprint_tiles = Some(footprint);
+        let metrics = SceneMetrics::from_scene(&scene, 960.0, 960.0);
+
+        let cursor = Vec2::new(
+            metrics.grid_offset_x + metrics.grid_width_scaled - 1.0,
+            metrics.grid_offset_y + metrics.grid_height_scaled - 1.0,
+        );
+        let input = gather_frame_input_from_observations(
+            &scene, &metrics, cursor, false, false, false, false,
+        );
+
+        let tile = input
+            .cursor_tile_space
+            .expect("cursor inside grid should snap to tile space");
+        let origin_column_tiles = tile.column_in_tiles();
+        let origin_row_tiles = tile.row_in_tiles();
+
+        assert!(origin_column_tiles + footprint.x <= scene.tile_grid.columns as f32 + 1e-5);
+        assert!(origin_row_tiles + footprint.y <= scene.tile_grid.rows as f32 + 1e-5);
+    }
+
+    #[test]
+    fn tower_target_segments_empty_when_no_targets() {
+        let mut scene = base_scene(PlayMode::Attack, None);
+        let metrics = SceneMetrics::from_scene(&scene, 960.0, 960.0);
+
+        assert!(tower_target_segments(&scene.tower_targets, &metrics).is_empty());
+
+        scene.tower_targets.push(TowerTargetLine::new(
+            TowerId::new(1),
+            BugId::new(2),
+            Vec2::new(3.0, 4.0),
+            Vec2::new(5.5, 6.5),
+        ));
+        let metrics = SceneMetrics::from_scene(&scene, 960.0, 960.0);
+        let segments = tower_target_segments(&scene.tower_targets, &metrics);
+
+        assert_eq!(segments.len(), 1);
+        let (start, end) = segments[0];
+        let expected_start = Vec2::new(
+            metrics.offset_x + 3.0 * metrics.cell_step,
+            metrics.offset_y + 4.0 * metrics.cell_step,
+        );
+        let expected_end = Vec2::new(
+            metrics.offset_x + 5.5 * metrics.cell_step,
+            metrics.offset_y + 6.5 * metrics.cell_step,
+        );
+        assert_eq!(start, expected_start);
+        assert_eq!(end, expected_end);
+    }
+
+    #[test]
+    fn preview_rectangle_matches_footprint_in_world_space() {
+        let mut scene = base_scene(PlayMode::Builder, None);
+        let origin = CellCoord::new(4, 2);
+        let size = CellRectSize::new(6, 4);
+        let preview_region = CellRect::from_origin_and_size(origin, size);
+        let preview = TowerPreview::new(TowerKind::Basic, preview_region, true, None);
+        scene.tower_preview = Some(preview);
+        let metrics = SceneMetrics::from_scene(&scene, 640.0, 640.0);
+
+        let (_, _, width, height) =
+            preview_rectangle(preview, &metrics).expect("preview geometry should be available");
+        let footprint_tiles = Vec2::new(
+            size.width() as f32 / scene.tile_grid.cells_per_tile as f32,
+            size.height() as f32 / scene.tile_grid.cells_per_tile as f32,
+        );
+        let expected_width = footprint_tiles.x * scene.tile_grid.tile_length * metrics.scale;
+        let expected_height = footprint_tiles.y * scene.tile_grid.tile_length * metrics.scale;
+
+        assert!((width - expected_width).abs() < 1e-5);
+        assert!((height - expected_height).abs() < 1e-5);
+    }
+
+    #[test]
+    fn fps_counter_reports_average_frames_per_second() {
+        let mut counter = FpsCounter::default();
+        assert!(counter.record_frame(Duration::from_millis(250)).is_none());
+        assert!(counter.record_frame(Duration::from_millis(250)).is_none());
+        assert!(counter.record_frame(Duration::from_millis(250)).is_none());
+
+        let fps = counter
+            .record_frame(Duration::from_millis(250))
+            .expect("should report FPS after one second of samples");
+        assert!((fps - 4.0).abs() <= 1e-3);
+        assert!(counter.record_frame(Duration::from_millis(250)).is_none());
+    }
 }

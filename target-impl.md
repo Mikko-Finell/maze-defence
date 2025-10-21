@@ -50,15 +50,15 @@ Here’s the leanest sequence to bring tower targeting online without breaking d
 
 **Exit checks:** Rendering unit/golden tests cover the new vector population, and manual run shows lines anchored at entity centres. No adapter pulls in system logic.
 
-# 5) [TODO] Determinism harness & polish
+# 5) [DONE] Determinism harness & polish
 
 **Goal:** Lock in behaviour and guard against regressions.
 
 **Deliverables:**
 
-* Add replay coverage that positions two equidistant bugs to assert stable tie-breaking, plus a case verifying builder mode yields zero targets.
-* Document the new targeting flow in developer docs if needed (cross-link from `tower-impl.md`).
-* Audit `cargo fmt`, `clippy`, `udeps`, and feature checks for green CI.
+* Added replay coverage in `systems/tower_targeting/tests/deterministic_replay.rs` that positions two equidistant bugs to assert stable tie-breaking and verifies builder mode yields zero targets.
+* Documented the new targeting flow by cross-linking `tower-impl.md` to the targeting implementation notes.
+* Audited the CI guard set locally via `cargo fmt --check`, `cargo clippy --all-targets --all-features -- -D warnings`, `cargo +nightly udeps`, `cargo hack check --each-feature`, and `cargo test` to confirm a clean baseline.
 
 **Exit checks:** Deterministic replay test passes repeatedly; CI suite is clean; documentation references the targeting contracts without duplication.
 
