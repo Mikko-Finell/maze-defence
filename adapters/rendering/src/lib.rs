@@ -11,7 +11,7 @@
 
 use anyhow::Result as AnyResult;
 use glam::Vec2;
-use maze_defence_core::PlayMode;
+use maze_defence_core::{CellRect, PlayMode, TowerId, TowerKind};
 use std::{error::Error, fmt, time::Duration};
 
 /// RGBA color used when presenting frames.
@@ -152,22 +152,44 @@ impl TileSpacePosition {
     }
 }
 
-/// Declarative builder-mode placement preview emitted by the simulation.
+/// Immutable snapshot describing a tower placed within the scene.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct PlacementPreview {
-    /// Origin tile coordinate for the preview region.
-    pub origin: TileSpacePosition,
-    /// Square footprint of the preview measured in tiles along one edge.
-    pub size_in_tiles: u32,
+pub struct SceneTower {
+    /// Identifier allocated to the tower by the world.
+    pub id: TowerId,
+    /// Kind of tower placed at the associated region.
+    pub kind: TowerKind,
+    /// Region of cells occupied by the tower.
+    pub region: CellRect,
 }
 
-impl PlacementPreview {
-    /// Creates a new placement preview descriptor.
+impl SceneTower {
+    /// Creates a new scene tower descriptor.
     #[must_use]
-    pub const fn new(origin: TileSpacePosition, size_in_tiles: u32) -> Self {
+    pub const fn new(id: TowerId, kind: TowerKind, region: CellRect) -> Self {
+        Self { id, kind, region }
+    }
+}
+
+/// Declarative builder-mode preview emitted by the simulation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct TowerPreview {
+    /// Kind of tower proposed for placement.
+    pub kind: TowerKind,
+    /// Region of cells that would be occupied by the tower if constructed.
+    pub region: CellRect,
+    /// Indicates whether the preview location is valid for placement.
+    pub placeable: bool,
+}
+
+impl TowerPreview {
+    /// Creates a new tower preview descriptor.
+    #[must_use]
+    pub const fn new(kind: TowerKind, region: CellRect, placeable: bool) -> Self {
         Self {
-            origin,
-            size_in_tiles,
+            kind,
+            region,
+            placeable,
         }
     }
 }
@@ -409,10 +431,12 @@ pub struct Scene {
     pub wall: WallPresentation,
     /// Bugs currently visible within the maze, positioned using cell coordinates.
     pub bugs: Vec<BugPresentation>,
+    /// Towers currently visible within the maze.
+    pub towers: Vec<SceneTower>,
     /// Active play mode for the simulation.
     pub play_mode: PlayMode,
     /// Optional builder placement preview emitted by the simulation.
-    pub placement_preview: Option<PlacementPreview>,
+    pub tower_preview: Option<TowerPreview>,
 }
 
 impl Scene {
@@ -422,15 +446,17 @@ impl Scene {
         tile_grid: TileGridPresentation,
         wall: WallPresentation,
         bugs: Vec<BugPresentation>,
+        towers: Vec<SceneTower>,
         play_mode: PlayMode,
-        placement_preview: Option<PlacementPreview>,
+        tower_preview: Option<TowerPreview>,
     ) -> Self {
         Self {
             tile_grid,
             wall,
             bugs,
+            towers,
             play_mode,
-            placement_preview,
+            tower_preview,
         }
     }
 
@@ -597,6 +623,7 @@ mod tests {
             tile_grid.clone(),
             wall.clone(),
             bugs.clone(),
+            Vec::new(),
             PlayMode::Attack,
             None,
         );
@@ -605,7 +632,8 @@ mod tests {
         assert_eq!(scene.wall, wall);
         assert_eq!(scene.bugs, bugs);
         assert_eq!(scene.play_mode, PlayMode::Attack);
-        assert!(scene.placement_preview.is_none());
+        assert!(scene.tower_preview.is_none());
+        assert!(scene.towers.is_empty());
     }
 
     #[test]
@@ -623,18 +651,28 @@ mod tests {
             Color::from_rgb_u8(90, 90, 90),
             TargetPresentation::new(vec![]),
         );
-        let placement_preview = PlacementPreview::new(TileSpacePosition::from_indices(1, 2), 2);
+        let preview_region = CellRect::from_origin_and_size(
+            maze_defence_core::CellCoord::new(4, 6),
+            maze_defence_core::CellRectSize::new(2, 2),
+        );
+        let placement_preview = TowerPreview::new(TowerKind::Basic, preview_region, true);
 
         let scene = Scene::new(
             tile_grid.clone(),
             wall.clone(),
             vec![],
+            vec![SceneTower::new(
+                TowerId::new(1),
+                TowerKind::Basic,
+                preview_region,
+            )],
             PlayMode::Builder,
             Some(placement_preview),
         );
 
         assert_eq!(scene.play_mode, PlayMode::Builder);
-        assert_eq!(scene.placement_preview, Some(placement_preview));
+        assert_eq!(scene.tower_preview, Some(placement_preview));
+        assert_eq!(scene.towers.len(), 1);
         assert_eq!(scene.tile_grid, tile_grid);
         assert_eq!(scene.wall, wall);
     }
