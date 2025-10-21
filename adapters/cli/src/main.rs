@@ -56,6 +56,7 @@ struct RemovalRejection {
 /// Command-line arguments for launching the Maze Defence experience.
 #[derive(Debug, Parser)]
 #[command(author, version, about, long_about = None)]
+// Developers: changing CLI arguments requires updating the README's command-line documentation.
 struct CliArgs {
     /// Tile grid dimensions expressed as WIDTHxHEIGHT (for example 12x18).
     #[arg(short = 's', long = "size", value_name = "WIDTHxHEIGHT", conflicts_with_all = ["width", "height"])]
