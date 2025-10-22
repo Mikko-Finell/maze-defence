@@ -11,7 +11,7 @@
 
 use maze_defence_core::{
     BugId, BugSnapshot, BugView, CellCoord, Command, Direction, Event, NavigationFieldView,
-    OccupancyView, PlayMode, ReservationLedgerView, CONGESTION_LOOKAHEAD, CONGESTION_WEIGHT,
+    OccupancyView, PlayMode, ReservationLedgerView, CONGESTION_LOOKAHEAD,
 };
 use maze_defence_world::query::select_goal;
 
@@ -265,9 +265,6 @@ impl CrowdPlanner {
             };
 
             let neighbor_congestion = self.congestion.get(index).copied().unwrap_or_default();
-            let congestion_penalty =
-                u32::from(neighbor_congestion).saturating_mul(CONGESTION_WEIGHT);
-            let score = u32::from(distance).saturating_add(congestion_penalty);
             let distance_delta = i32::from(distance) - i32::from(current_distance);
 
             if distance_delta < 0 {
@@ -275,7 +272,6 @@ impl CrowdPlanner {
                     cell: neighbor,
                     distance,
                     congestion: neighbor_congestion,
-                    score,
                 };
                 update_best(&mut decreasing_best, candidate);
                 continue;
@@ -289,7 +285,6 @@ impl CrowdPlanner {
                     cell: neighbor,
                     distance,
                     congestion: neighbor_congestion,
-                    score,
                 };
                 update_best(&mut flat_best, candidate);
             }
@@ -384,27 +379,35 @@ struct Candidate {
     cell: CellCoord,
     distance: u16,
     congestion: u8,
-    score: u32,
 }
 
 fn update_best(current: &mut Option<Candidate>, candidate: Candidate) {
     match current {
         None => *current = Some(candidate),
         Some(existing) => {
-            if candidate.score < existing.score
-                || (candidate.score == existing.score && candidate.distance < existing.distance)
-                || (candidate.score == existing.score
-                    && candidate.distance == existing.distance
-                    && candidate.congestion < existing.congestion)
-                || (candidate.score == existing.score
-                    && candidate.distance == existing.distance
-                    && candidate.congestion == existing.congestion
-                    && lexicographically_less(candidate.cell, existing.cell))
-            {
+            if candidate_better_than(candidate, *existing) {
                 *existing = candidate;
             }
         }
     }
+}
+
+fn candidate_better_than(candidate: Candidate, existing: Candidate) -> bool {
+    if candidate.distance < existing.distance {
+        return true;
+    }
+    if candidate.distance > existing.distance {
+        return false;
+    }
+
+    if candidate.congestion < existing.congestion {
+        return true;
+    }
+    if candidate.congestion > existing.congestion {
+        return false;
+    }
+
+    lexicographically_less(candidate.cell, existing.cell)
 }
 
 impl Default for CrowdPlanner {

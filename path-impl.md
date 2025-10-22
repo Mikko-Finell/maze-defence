@@ -108,7 +108,7 @@ walker so bugs always advance when a lower-distance neighbour is free.
 **Exit checks:** Movement tests cover gradient-only progress, and the planner no
 longer falls back to full-path searches.
 
-# 6) [IN PROGRESS] Congestion map & side-step heuristics (`systems/movement`)
+# 6) [DONE] Congestion map & side-step heuristics (`systems/movement`)
 
 **Goal:** Bias traffic away from saturated lanes and allow controlled lateral
 moves without oscillation.
@@ -117,15 +117,15 @@ moves without oscillation.
 
 * Build the transient congestion `Vec<u8>` each tick by following the gradient
   up to `CONGESTION_LOOKAHEAD` cells per bug, skipping their current cell.
-* [TODO] Fold the congestion data into the neighbour ranking with the lexicographic
+* Fold the congestion data into the neighbour ranking with the lexicographic
   distance-first, congestion-second comparator described in the spec.
 * Implement the flat side-step rule: allow `distance_delta == 0` moves only when
   the neighbour’s congestion is lower than the current cell and it differs from
   the two-tick `last_cell` ring buffer entry.
 * Add deterministic tests that demonstrate lane-formation behaviour and verify
   the anti-oscillation guard.
-* [TODO] Replace the previous weight-based score with the lexicographic comparator so
-  the planner drops `CONGESTION_WEIGHT` before the remaining `[TODO]` stages.
+* Replace the previous weight-based score with the lexicographic comparator so
+  the planner drops `CONGESTION_WEIGHT` before the remaining planned stages.
 
 **Exit checks:** System tests confirm congestion-influenced routing, and
 profiling/logging shows congestion buffers are reused between ticks.
