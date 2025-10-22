@@ -1075,6 +1075,8 @@ pub enum PlacementError {
     Misaligned,
     /// The requested footprint overlaps an occupied cell.
     Occupied,
+    /// The placement would block all paths between the exit and bug spawners.
+    PathBlocked,
 }
 
 /// Reasons a tower removal request may be rejected by the world.
@@ -1188,6 +1190,7 @@ mod tests {
     #[test]
     fn placement_error_round_trips_through_bincode() {
         assert_round_trip(&PlacementError::Occupied);
+        assert_round_trip(&PlacementError::PathBlocked);
     }
 
     #[test]
