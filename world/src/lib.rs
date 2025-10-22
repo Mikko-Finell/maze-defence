@@ -27,7 +27,7 @@ use towers::{footprint_for, TowerRegistry, TowerState};
 
 use maze_defence_core::{
     BugColor, BugId, CellCoord, CellPointHalf, Command, Damage, Direction, Event, Health, PlayMode,
-    ProjectileId, Target, TargetCell, TileCoord, TileGrid, WELCOME_BANNER,
+    ProjectileId, ReservationClaim, Target, TargetCell, TileCoord, TileGrid, WELCOME_BANNER,
 };
 
 #[cfg(any(test, feature = "tower_scaffolding"))]
@@ -249,8 +249,8 @@ impl World {
         }
 
         let (columns, rows) = self.occupancy.dimensions();
-        for request in requests {
-            let Some(index) = self.bug_index(request.bug_id) else {
+        for claim in requests {
+            let Some(index) = self.bug_index(claim.bug_id()) else {
                 continue;
             };
 
@@ -262,7 +262,7 @@ impl World {
                 continue;
             }
 
-            let Some(next_cell) = advance_cell(from, request.direction, columns, rows) else {
+            let Some(next_cell) = advance_cell(from, claim.direction(), columns, rows) else {
                 continue;
             };
 
@@ -426,7 +426,7 @@ pub fn apply(world: &mut World, command: Command, out_events: &mut Vec<Event>) {
             }
             world
                 .reservations
-                .queue(world.tick_index, StepRequest { bug_id, direction });
+                .queue(world.tick_index, ReservationClaim::new(bug_id, direction));
             world.resolve_pending_steps(out_events);
             world.process_exit_cells(out_events);
         }
@@ -967,7 +967,7 @@ pub mod query {
     use super::World;
     use maze_defence_core::{
         BugSnapshot, BugView, CellCoord, Goal, NavigationFieldView, OccupancyView, PlayMode,
-        ProjectileSnapshot, Target, TileGrid,
+        ProjectileSnapshot, ReservationLedgerView, Target, TileGrid,
     };
 
     use maze_defence_core::structures::{Wall as CellWall, WallView as CellWallView};
@@ -1080,6 +1080,12 @@ pub mod query {
     pub fn occupancy_view(world: &World) -> OccupancyView<'_> {
         let (columns, rows) = world.occupancy.dimensions();
         OccupancyView::new(world.occupancy.cells(), columns, rows)
+    }
+
+    /// Captures a read-only view of the pending movement reservations for the active tick.
+    #[must_use]
+    pub fn reservation_ledger(world: &World) -> ReservationLedgerView<'_> {
+        ReservationLedgerView::from_slice(world.reservations.claims())
     }
 
     /// Captures a read-only view of the cell-sized walls stored in the world.
@@ -1359,42 +1365,40 @@ impl BugSpawnerRegistry {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
-struct StepRequest {
-    bug_id: BugId,
-    direction: Direction,
-}
-
 #[derive(Debug)]
 struct ReservationFrame {
     tick_index: u64,
-    requests: Vec<StepRequest>,
+    claims: Vec<ReservationClaim>,
 }
 
 impl ReservationFrame {
     fn new() -> Self {
         Self {
             tick_index: 0,
-            requests: Vec::new(),
+            claims: Vec::new(),
         }
     }
 
     fn clear(&mut self) {
         self.tick_index = 0;
-        self.requests.clear();
+        self.claims.clear();
     }
 
-    fn queue(&mut self, tick_index: u64, request: StepRequest) {
+    fn queue(&mut self, tick_index: u64, claim: ReservationClaim) {
         if self.tick_index != tick_index {
             self.tick_index = tick_index;
-            self.requests.clear();
+            self.claims.clear();
         }
-        self.requests.push(request);
+        self.claims.push(claim);
+        self.claims.sort_by_key(|claim| claim.bug_id());
     }
 
-    fn drain_sorted(&mut self) -> Vec<StepRequest> {
-        self.requests.sort_by_key(|request| request.bug_id);
-        self.requests.drain(..).collect()
+    fn claims(&self) -> &[ReservationClaim] {
+        &self.claims
+    }
+
+    fn drain_sorted(&mut self) -> Vec<ReservationClaim> {
+        self.claims.drain(..).collect()
     }
 }
 
@@ -3964,7 +3968,7 @@ mod tests {
 
         assert!(events.is_empty());
         assert_eq!(world.tick_index, tick_before);
-        assert!(world.reservations.requests.is_empty());
+        assert!(world.reservations.claims.is_empty());
     }
 
     #[test]
@@ -3991,7 +3995,7 @@ mod tests {
         );
 
         assert!(events.is_empty());
-        assert!(world.reservations.requests.is_empty());
+        assert!(world.reservations.claims.is_empty());
     }
 
     #[test]

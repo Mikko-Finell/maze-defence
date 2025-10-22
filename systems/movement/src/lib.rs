@@ -12,23 +12,16 @@
 use std::{cmp::Ordering, collections::BinaryHeap};
 
 use maze_defence_core::{
-    BugId, BugSnapshot, BugView, CellCoord, Command, Direction, Event, Goal, OccupancyView,
-    PlayMode,
+    BugId, BugSnapshot, BugView, CellCoord, Command, Direction, Event, Goal, NavigationFieldView,
+    OccupancyView, PlayMode, ReservationLedgerView,
 };
 use maze_defence_world::query::select_goal;
 
 /// Pure system that reacts to world events and emits movement commands.
 #[derive(Debug)]
 pub struct Movement {
-    frontier: BinaryHeap<NodeState>,
-    came_from: Vec<Option<CellCoord>>,
-    g_score: Vec<u32>,
-    generation: Vec<u32>,
-    targets: Vec<CellCoord>,
-    prepared_dimensions: Option<(u32, u32)>,
-    workspace_nodes: usize,
+    planner: CrowdPlanner,
     play_mode: PlayMode,
-    current_generation: u32,
 }
 
 impl Movement {
@@ -38,6 +31,8 @@ impl Movement {
         events: &[Event],
         bug_view: &BugView,
         occupancy_view: OccupancyView<'_>,
+        navigation_view: NavigationFieldView<'_>,
+        reservation_ledger: ReservationLedgerView<'_>,
         targets: &[CellCoord],
         is_cell_blocked: F,
         out: &mut Vec<Command>,
@@ -55,7 +50,9 @@ impl Movement {
         }
 
         let (columns, rows) = occupancy_view.dimensions();
-        let node_count = self.prepare_workspace(columns, rows, targets);
+        let node_count = self
+            .planner
+            .prepare_workspace(columns, rows, &navigation_view, targets);
         if node_count == 0 {
             return;
         }
@@ -67,14 +64,128 @@ impl Movement {
             return;
         }
 
-        self.emit_step_commands(
+        self.planner.plan(
             bug_view,
             occupancy_view,
+            &navigation_view,
+            &reservation_ledger,
             columns,
             rows,
             &is_cell_blocked,
             out,
         );
+    }
+}
+
+impl Default for Movement {
+    fn default() -> Self {
+        Self {
+            planner: CrowdPlanner::default(),
+            play_mode: PlayMode::Attack,
+        }
+    }
+}
+
+#[derive(Debug)]
+struct CrowdPlanner {
+    frontier: BinaryHeap<NodeState>,
+    came_from: Vec<Option<CellCoord>>,
+    g_score: Vec<u32>,
+    generation: Vec<u32>,
+    targets: Vec<CellCoord>,
+    prepared_dimensions: Option<(u32, u32)>,
+    workspace_nodes: usize,
+    current_generation: u32,
+    congestion: Vec<u8>,
+    detour_queue: Vec<CellCoord>,
+    last_cell: LastCellRing,
+}
+
+impl CrowdPlanner {
+    fn prepare_workspace(
+        &mut self,
+        columns: u32,
+        rows: u32,
+        navigation_view: &NavigationFieldView<'_>,
+        targets: &[CellCoord],
+    ) -> usize {
+        if targets.is_empty() {
+            self.targets.clear();
+            self.prepared_dimensions = Some((columns, rows));
+            self.congestion.clear();
+            self.detour_queue.clear();
+            return 0;
+        }
+
+        if self.prepared_dimensions != Some((columns, rows)) || self.targets.as_slice() != targets {
+            self.targets.clear();
+            self.targets.extend_from_slice(targets);
+            self.prepared_dimensions = Some((columns, rows));
+        }
+
+        let node_count_u64 = u64::from(columns) * u64::from(rows);
+        let node_count = usize::try_from(node_count_u64).unwrap_or(0);
+        if node_count > self.workspace_nodes {
+            self.g_score.resize(node_count, u32::MAX);
+            self.came_from.resize(node_count, None);
+            self.generation.resize(node_count, 0);
+            self.workspace_nodes = node_count;
+        }
+
+        let field_cells = navigation_view.cells().len();
+        if self.congestion.len() < field_cells {
+            self.congestion.resize(field_cells, 0);
+        } else {
+            for value in &mut self.congestion {
+                *value = 0;
+            }
+        }
+        if self.detour_queue.capacity() < field_cells {
+            self.detour_queue
+                .reserve(field_cells - self.detour_queue.capacity());
+        }
+
+        node_count
+    }
+
+    fn plan<F>(
+        &mut self,
+        bug_view: &BugView,
+        occupancy_view: OccupancyView<'_>,
+        navigation_view: &NavigationFieldView<'_>,
+        reservation_ledger: &ReservationLedgerView<'_>,
+        columns: u32,
+        rows: u32,
+        is_cell_blocked: &F,
+        out: &mut Vec<Command>,
+    ) where
+        F: Fn(CellCoord) -> bool,
+    {
+        self.prepare_per_tick(navigation_view, reservation_ledger.len());
+        self.emit_step_commands(
+            bug_view,
+            occupancy_view,
+            columns,
+            rows,
+            is_cell_blocked,
+            out,
+        );
+    }
+
+    fn prepare_per_tick(
+        &mut self,
+        navigation_view: &NavigationFieldView<'_>,
+        reservation_count: usize,
+    ) {
+        if self.congestion.len() < navigation_view.cells().len() {
+            self.congestion.resize(navigation_view.cells().len(), 0);
+        }
+        for value in &mut self.congestion {
+            *value = 0;
+        }
+
+        self.detour_queue.clear();
+        self.detour_queue.reserve(reservation_count);
     }
 
     fn emit_step_commands<F>(
@@ -88,7 +199,11 @@ impl Movement {
     ) where
         F: Fn(CellCoord) -> bool,
     {
-        for bug in bug_view.iter() {
+        let mut ordered: Vec<_> = bug_view.iter().collect();
+        ordered.sort_by_key(|bug| bug.id);
+        self.last_cell.begin_tick(&ordered);
+
+        for bug in ordered {
             if !bug.ready_for_step {
                 continue;
             }
@@ -213,30 +328,6 @@ impl Movement {
         }
     }
 
-    fn prepare_workspace(&mut self, columns: u32, rows: u32, targets: &[CellCoord]) -> usize {
-        if targets.is_empty() {
-            self.targets.clear();
-            self.prepared_dimensions = Some((columns, rows));
-            return 0;
-        }
-
-        if self.prepared_dimensions != Some((columns, rows)) || self.targets.as_slice() != targets {
-            self.targets.clear();
-            self.targets.extend_from_slice(targets);
-            self.prepared_dimensions = Some((columns, rows));
-        }
-
-        let node_count_u64 = u64::from(columns) * u64::from(rows);
-        let node_count = usize::try_from(node_count_u64).unwrap_or(0);
-        if node_count > self.workspace_nodes {
-            self.g_score.resize(node_count, u32::MAX);
-            self.came_from.resize(node_count, None);
-            self.generation.resize(node_count, 0);
-            self.workspace_nodes = node_count;
-        }
-        node_count
-    }
-
     fn reset_workspace(&mut self) {
         self.frontier.clear();
         if self.current_generation == u32::MAX {
@@ -250,7 +341,7 @@ impl Movement {
     }
 }
 
-impl Default for Movement {
+impl Default for CrowdPlanner {
     fn default() -> Self {
         Self {
             frontier: BinaryHeap::new(),
@@ -260,8 +351,31 @@ impl Default for Movement {
             targets: Vec::new(),
             prepared_dimensions: None,
             workspace_nodes: 0,
-            play_mode: PlayMode::Attack,
             current_generation: 0,
+            congestion: Vec::new(),
+            detour_queue: Vec::new(),
+            last_cell: LastCellRing::default(),
+        }
+    }
+}
+
+#[derive(Debug, Default)]
+struct LastCellRing {
+    history: Vec<[Option<CellCoord>; 2]>,
+    bug_ids: Vec<Option<BugId>>,
+}
+
+impl LastCellRing {
+    fn begin_tick(&mut self, ordered: &[&BugSnapshot]) {
+        let bug_count = ordered.len();
+        self.history.resize(bug_count, [None, None]);
+        self.bug_ids.resize(bug_count, None);
+
+        for (index, bug) in ordered.iter().enumerate() {
+            if self.bug_ids[index] != Some(bug.id) {
+                self.history[index] = [None, None];
+                self.bug_ids[index] = Some(bug.id);
+            }
         }
     }
 }
@@ -437,16 +551,31 @@ mod tests {
     fn provided_targets_are_cached() {
         let mut movement = Movement::default();
 
-        assert_eq!(movement.prepare_workspace(0, 0, &[]), 0);
-        assert!(movement.targets.is_empty());
+        assert_eq!(
+            movement
+                .planner
+                .prepare_workspace(0, 0, &navigation_stub(0, 0), &[]),
+            0
+        );
+        assert!(movement.planner.targets.is_empty());
 
         let targets = vec![CellCoord::new(1, 4)];
-        assert_eq!(movement.prepare_workspace(3, 4, &targets), 12);
-        assert_eq!(movement.targets, targets);
+        assert_eq!(
+            movement
+                .planner
+                .prepare_workspace(3, 4, &navigation_stub(3, 4), &targets),
+            12
+        );
+        assert_eq!(movement.planner.targets, targets);
 
         let alternate_targets = vec![CellCoord::new(2, 2), CellCoord::new(2, 3)];
-        assert_eq!(movement.prepare_workspace(4, 3, &alternate_targets), 12);
-        assert_eq!(movement.targets, alternate_targets);
+        assert_eq!(
+            movement
+                .planner
+                .prepare_workspace(4, 3, &navigation_stub(4, 3), &alternate_targets),
+            12
+        );
+        assert_eq!(movement.planner.targets, alternate_targets);
     }
 
     #[test]
@@ -455,7 +584,15 @@ mod tests {
         let columns = 5;
         let rows = 4;
         let target = CellCoord::new(4, 3);
-        assert_eq!(movement.prepare_workspace(columns, rows, &[target]), 20);
+        assert_eq!(
+            movement.planner.prepare_workspace(
+                columns,
+                rows,
+                &navigation_stub(columns, rows),
+                &[target]
+            ),
+            20
+        );
         let goal = Goal::at(target);
         let blocked = [
             CellCoord::new(1, 0),
@@ -485,7 +622,12 @@ mod tests {
         );
         assert_eq!(first_path, expected_path);
 
-        let _ = movement.prepare_workspace(columns, rows, &[target]);
+        let _ = movement.planner.prepare_workspace(
+            columns,
+            rows,
+            &navigation_stub(columns, rows),
+            &[target],
+        );
         let second_path = collect_path(
             &mut movement,
             bug_snapshot_at(CellCoord::new(0, 0)),
@@ -517,7 +659,10 @@ mod tests {
     {
         let mut path = Vec::new();
         while bug.cell != goal.cell() {
-            let Some(next) = movement.plan_next_hop(&bug, goal, columns, rows, is_cell_blocked)
+            let Some(next) =
+                movement
+                    .planner
+                    .plan_next_hop(&bug, goal, columns, rows, is_cell_blocked)
             else {
                 break;
             };
@@ -525,6 +670,11 @@ mod tests {
             bug.cell = next;
         }
         path
+    }
+
+    fn navigation_stub(width: u32, height: u32) -> NavigationFieldView<'static> {
+        let cells = usize::try_from(width).unwrap_or(0) * usize::try_from(height).unwrap_or(0);
+        NavigationFieldView::from_owned(vec![0; cells], width, height)
     }
 
     fn bug_snapshot_at(cell: CellCoord) -> BugSnapshot {

@@ -69,7 +69,7 @@ it without violating authority boundaries.
 **Exit checks:** Query tests pass, replay fixtures compile, and no caller needs
 mutable access to the field.
 
-# 4) [TODO] Movement system scaffolding (`systems/movement`)
+# 4) [DONE] Movement system scaffolding (`systems/movement`)
 
 **Goal:** Restructure the movement system to drive all stepping through a new
 crowd planner while keeping legacy behaviour intact for now.
