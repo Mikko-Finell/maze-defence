@@ -1,8 +1,8 @@
 use std::time::Duration;
 
 use maze_defence_core::{
-    BugColor, BugId, BugView, CellCoord, Command, Direction, Event, OccupancyView, PlayMode,
-    TileCoord, TowerKind,
+    BugColor, BugId, BugView, CellCoord, Command, Direction, Event, Health, OccupancyView,
+    PlayMode, TileCoord, TowerKind,
 };
 use maze_defence_system_movement::Movement;
 use maze_defence_world::{self as world, query, World};
@@ -26,6 +26,7 @@ fn emits_step_commands_toward_target() {
         Command::SpawnBug {
             spawner: CellCoord::new(0, 0),
             color: BugColor::from_rgb(0x2f, 0x95, 0x32),
+            health: Health::new(3),
         },
         &mut events,
     );
@@ -104,6 +105,7 @@ fn step_commands_target_free_cells() {
         Command::SpawnBug {
             spawner: CellCoord::new(0, 0),
             color: BugColor::from_rgb(0x2f, 0x95, 0x32),
+            health: Health::new(3),
         },
         &mut events,
     );
@@ -170,6 +172,7 @@ fn replans_after_failed_step() {
         Command::SpawnBug {
             spawner: CellCoord::new(0, 0),
             color: BugColor::from_rgb(0x2f, 0x95, 0x32),
+            health: Health::new(3),
         },
         &mut events,
     );
@@ -300,6 +303,7 @@ fn bugs_respect_tower_blockers() {
         Command::SpawnBug {
             spawner: spawn,
             color: BugColor::from_rgb(0x2f, 0x95, 0x32),
+            health: Health::new(3),
         },
         &mut spawn_events,
     );
@@ -446,6 +450,7 @@ fn blocked_bugs_do_not_accumulate_extra_step_time() {
         Command::SpawnBug {
             spawner: CellCoord::new(0, 0),
             color: BugColor::from_rgb(0x2f, 0x95, 0x32),
+            health: Health::new(3),
         },
         &mut events,
     );

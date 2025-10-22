@@ -74,6 +74,15 @@ pub enum Command {
         spawner: CellCoord,
         /// Appearance to assign to the spawned bug.
         color: BugColor,
+        /// Health assigned to the spawned bug.
+        health: Health,
+    },
+    /// Requests that a tower fire a projectile at a targeted bug.
+    FireProjectile {
+        /// Identifier of the tower attempting to shoot.
+        tower: TowerId,
+        /// Identifier of the targeted bug.
+        target: BugId,
     },
     /// Requests placement of a tower anchored at the provided origin cell.
     PlaceTower {
@@ -126,6 +135,8 @@ pub enum Event {
         cell: CellCoord,
         /// Appearance applied to the bug.
         color: BugColor,
+        /// Health assigned to the bug on spawn.
+        health: Health,
     },
     /// Confirms that a tower was placed into the world.
     TowerPlaced {
@@ -158,6 +169,50 @@ pub enum Event {
         tower: TowerId,
         /// Specific reason the removal failed.
         reason: RemovalError,
+    },
+    /// Confirms that a projectile was fired at a target bug.
+    ProjectileFired {
+        /// Identifier of the spawned projectile.
+        projectile: ProjectileId,
+        /// Tower responsible for firing the projectile.
+        tower: TowerId,
+        /// Bug targeted by the projectile.
+        target: BugId,
+    },
+    /// Reports that the projectile reached its target and applied damage.
+    ProjectileHit {
+        /// Identifier of the projectile that connected.
+        projectile: ProjectileId,
+        /// Bug that was struck by the projectile.
+        target: BugId,
+        /// Damage applied to the bug.
+        damage: Damage,
+    },
+    /// Reports that a projectile expired before hitting a living bug.
+    ProjectileExpired {
+        /// Identifier of the projectile that expired.
+        projectile: ProjectileId,
+    },
+    /// Reports that a firing attempt was rejected by the world.
+    ProjectileRejected {
+        /// Tower that attempted to fire.
+        tower: TowerId,
+        /// Intended bug target.
+        target: BugId,
+        /// Specific reason the request failed.
+        reason: ProjectileRejection,
+    },
+    /// Reports that a bug took damage from a projectile hit.
+    BugDamaged {
+        /// Bug that took damage.
+        bug: BugId,
+        /// Remaining health after damage was applied.
+        remaining: Health,
+    },
+    /// Announces that a bug died because its health reached zero.
+    BugDied {
+        /// Identifier of the bug that died.
+        bug: BugId,
     },
 }
 
@@ -224,6 +279,92 @@ impl BugId {
     pub const fn get(&self) -> u32 {
         self.0
     }
+}
+
+/// Amount of health a bug currently possesses.
+///
+/// A `Health` value of zero represents a dead bug. Health never becomes
+/// negative—arithmetic performed with [`Damage`] saturates at zero so callers
+/// can rely on monotonic, deterministic behaviour when subtracting damage.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct Health(u32);
+
+impl Health {
+    /// Canonical zero value representing a dead bug.
+    pub const ZERO: Self = Self(0);
+
+    /// Creates a new health value from the provided raw integer.
+    #[must_use]
+    pub const fn new(value: u32) -> Self {
+        Self(value)
+    }
+
+    /// Retrieves the underlying health amount.
+    #[must_use]
+    pub const fn get(&self) -> u32 {
+        self.0
+    }
+
+    /// Reports whether the health value equals zero.
+    #[must_use]
+    pub const fn is_zero(self) -> bool {
+        self.0 == 0
+    }
+
+    /// Subtracts the provided damage while saturating at zero.
+    #[must_use]
+    pub const fn saturating_sub(self, damage: Damage) -> Self {
+        Self(self.0.saturating_sub(damage.get()))
+    }
+}
+
+/// Fixed amount of damage applied to a bug in a single hit.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct Damage(u32);
+
+impl Damage {
+    /// Creates a new damage value from the provided raw integer.
+    #[must_use]
+    pub const fn new(value: u32) -> Self {
+        Self(value)
+    }
+
+    /// Retrieves the underlying damage amount.
+    #[must_use]
+    pub const fn get(&self) -> u32 {
+        self.0
+    }
+}
+
+/// Unique identifier assigned to a projectile fired by a tower.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct ProjectileId(u32);
+
+impl ProjectileId {
+    /// Creates a new projectile identifier with the provided numeric value.
+    #[must_use]
+    pub const fn new(value: u32) -> Self {
+        Self(value)
+    }
+
+    /// Retrieves the numeric representation of the identifier.
+    #[must_use]
+    pub const fn get(&self) -> u32 {
+        self.0
+    }
+}
+
+/// Reasons the world may reject a projectile firing request.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum ProjectileRejection {
+    /// Towers cannot fire while the simulation is in builder mode.
+    InvalidMode,
+    /// The tower's cooldown has not yet elapsed.
+    CooldownActive,
+    /// The targeted tower either does not exist or was removed earlier.
+    MissingTower,
+    /// The intended bug target does not exist or already died.
+    MissingTarget,
 }
 
 /// Unique identifier assigned to a tower.
@@ -655,6 +796,30 @@ impl TowerKind {
         let scaled = self.range_in_tiles() * cells_per_tile.get() as f32;
         scaled.floor() as u32
     }
+
+    /// Cooldown between successive shots measured in milliseconds.
+    #[must_use]
+    pub const fn fire_cooldown_ms(self) -> u32 {
+        match self {
+            Self::Basic => 1_000,
+        }
+    }
+
+    /// Projectile speed expressed in half-cell units advanced per millisecond.
+    #[must_use]
+    pub const fn speed_half_cells_per_ms(self) -> u32 {
+        match self {
+            Self::Basic => 12,
+        }
+    }
+
+    /// Damage dealt by a projectile fired by this tower kind.
+    #[must_use]
+    pub const fn projectile_damage(self) -> Damage {
+        match self {
+            Self::Basic => Damage::new(1),
+        }
+    }
 }
 
 /// Reasons a tower placement request may be rejected by the world.
@@ -722,7 +887,8 @@ mod tests {
     use std::num::NonZeroU32;
 
     use super::{
-        CellCoord, CellRect, CellRectSize, PlacementError, RemovalError, TowerId, TowerKind,
+        CellCoord, CellRect, CellRectSize, Damage, Health, PlacementError, ProjectileId,
+        ProjectileRejection, RemovalError, TowerId, TowerKind,
     };
     use serde::{de::DeserializeOwned, Serialize};
 
@@ -755,6 +921,29 @@ mod tests {
     }
 
     #[test]
+    fn projectile_id_round_trips_through_bincode() {
+        let projectile = ProjectileId::new(7);
+        assert_round_trip(&projectile);
+    }
+
+    #[test]
+    fn damage_round_trips_through_bincode() {
+        let damage = Damage::new(3);
+        assert_round_trip(&damage);
+    }
+
+    #[test]
+    fn health_round_trips_through_bincode() {
+        let health = Health::new(9);
+        assert_round_trip(&health);
+    }
+
+    #[test]
+    fn projectile_rejection_round_trips_through_bincode() {
+        assert_round_trip(&ProjectileRejection::CooldownActive);
+    }
+
+    #[test]
     fn placement_error_round_trips_through_bincode() {
         assert_round_trip(&PlacementError::Occupied);
     }
@@ -775,6 +964,21 @@ mod tests {
     #[test]
     fn tower_basic_range_in_tiles_matches_specification() {
         assert_eq!(TowerKind::Basic.range_in_tiles(), 4.0);
+    }
+
+    #[test]
+    fn tower_basic_fire_cooldown_matches_specification() {
+        assert_eq!(TowerKind::Basic.fire_cooldown_ms(), 1_000);
+    }
+
+    #[test]
+    fn tower_basic_projectile_speed_matches_specification() {
+        assert_eq!(TowerKind::Basic.speed_half_cells_per_ms(), 12);
+    }
+
+    #[test]
+    fn tower_basic_projectile_damage_matches_specification() {
+        assert_eq!(TowerKind::Basic.projectile_damage(), Damage::new(1));
     }
 
     #[test]
@@ -808,6 +1012,17 @@ mod tests {
             assert!(now >= previous, "cpt={cells_per_tile}");
             previous = now;
         }
+    }
+
+    #[test]
+    fn health_saturating_sub_saturates_at_zero() {
+        let start = Health::new(5);
+        let reduced = start.saturating_sub(Damage::new(2));
+        assert_eq!(reduced, Health::new(3));
+
+        let zeroed = start.saturating_sub(Damage::new(9));
+        assert_eq!(zeroed, Health::ZERO);
+        assert!(zeroed.is_zero());
     }
 
     #[test]

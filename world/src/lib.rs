@@ -21,8 +21,8 @@ mod towers;
 use towers::{footprint_for, TowerRegistry, TowerState};
 
 use maze_defence_core::{
-    BugColor, BugId, CellCoord, Command, Direction, Event, PlayMode, Target, TargetCell, TileCoord,
-    TileGrid, Wall, WELCOME_BANNER,
+    BugColor, BugId, CellCoord, Command, Direction, Event, Health, PlayMode, Target, TargetCell,
+    TileCoord, TileGrid, Wall, WELCOME_BANNER,
 };
 
 #[cfg(any(test, feature = "tower_scaffolding"))]
@@ -130,6 +130,7 @@ impl World {
         &mut self,
         cell: CellCoord,
         color: BugColor,
+        health: Health,
         out_events: &mut Vec<Event>,
     ) {
         if !self.bug_spawners.contains(cell) {
@@ -151,6 +152,7 @@ impl World {
             bug_id,
             cell,
             color,
+            health,
         });
     }
 
@@ -297,12 +299,19 @@ pub fn apply(world: &mut World, command: Command, out_events: &mut Vec<Event>) {
 
             out_events.push(Event::PlayModeChanged { mode });
         }
-        Command::SpawnBug { spawner, color } => {
+        Command::SpawnBug {
+            spawner,
+            color,
+            health,
+        } => {
             if world.play_mode == PlayMode::Builder {
                 return;
             }
 
-            world.spawn_from_spawner(spawner, color, out_events);
+            world.spawn_from_spawner(spawner, color, health, out_events);
+        }
+        Command::FireProjectile { tower, target } => {
+            let _ = (tower, target);
         }
         Command::PlaceTower { kind, origin } => {
             #[cfg(any(test, feature = "tower_scaffolding"))]
@@ -1070,7 +1079,8 @@ fn target_cells_from_wall(wall: &Wall) -> Vec<CellCoord> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use maze_defence_core::{BugColor, BugId, Direction, Goal, PlayMode};
+    use maze_defence_core::{BugColor, BugId, Direction, Goal, Health, PlayMode};
+  
     use std::{
         collections::hash_map::DefaultHasher,
         hash::{Hash, Hasher},
@@ -1679,6 +1689,7 @@ mod tests {
             Command::SpawnBug {
                 spawner: CellCoord::new(0, 0),
                 color: BugColor::from_rgb(0x2f, 0x95, 0x32),
+                health: Health::new(3),
             },
             &mut events,
         );
@@ -1887,6 +1898,7 @@ mod tests {
             Command::SpawnBug {
                 spawner: CellCoord::new(0, 0),
                 color: BugColor::from_rgb(0x12, 0x34, 0x56),
+                health: Health::new(3),
             },
             &mut events,
         );
@@ -1897,6 +1909,7 @@ mod tests {
                 bug_id: BugId::new(0),
                 cell: CellCoord::new(0, 0),
                 color: BugColor::from_rgb(0x12, 0x34, 0x56),
+                health: Health::new(3),
             }]
         );
 
@@ -1934,6 +1947,7 @@ mod tests {
             Command::SpawnBug {
                 spawner: CellCoord::new(0, 0),
                 color: BugColor::from_rgb(0xaa, 0xbb, 0xcc),
+                health: Health::new(3),
             },
             &mut events,
         );
@@ -1946,6 +1960,7 @@ mod tests {
             Command::SpawnBug {
                 spawner: CellCoord::new(0, 0),
                 color: BugColor::from_rgb(0x10, 0x20, 0x30),
+                health: Health::new(3),
             },
             &mut events,
         );
@@ -1980,6 +1995,7 @@ mod tests {
             Command::SpawnBug {
                 spawner: CellCoord::new(1, 1),
                 color: BugColor::from_rgb(0xaa, 0x00, 0xff),
+                health: Health::new(3),
             },
             &mut events,
         );
@@ -2007,6 +2023,7 @@ mod tests {
             Command::SpawnBug {
                 spawner: CellCoord::new(0, 0),
                 color: BugColor::from_rgb(0, 0, 0),
+                health: Health::new(3),
             },
             &mut events,
         );
@@ -2453,6 +2470,7 @@ mod tests {
             Command::SpawnBug {
                 spawner: CellCoord::new(0, 0),
                 color: BugColor::from_rgb(0x2f, 0x95, 0x32),
+                health: Health::new(3),
             },
             &mut events,
         );

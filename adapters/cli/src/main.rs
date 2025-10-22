@@ -741,7 +741,7 @@ impl Simulation {
 mod tests {
     use super::*;
     use glam::Vec2;
-    use maze_defence_core::BugColor;
+    use maze_defence_core::{BugColor, Health};
 
     fn new_simulation() -> Simulation {
         Simulation::new(
@@ -1138,6 +1138,7 @@ mod tests {
         simulation.queued_commands.push(Command::SpawnBug {
             spawner,
             color: BugColor::from_rgb(255, 0, 0),
+            health: Health::new(3),
         });
         simulation.advance(Duration::ZERO);
 
@@ -1189,6 +1190,7 @@ mod tests {
         simulation.queued_commands.push(Command::SpawnBug {
             spawner,
             color: BugColor::from_rgb(255, 0, 0),
+            health: Health::new(3),
         });
         simulation.advance(Duration::ZERO);
 
@@ -1256,10 +1258,12 @@ mod tests {
         simulation.queued_commands.push(Command::SpawnBug {
             spawner: first_spawner,
             color: BugColor::from_rgb(255, 0, 0),
+            health: Health::new(3),
         });
         simulation.queued_commands.push(Command::SpawnBug {
             spawner: second_spawner,
             color: BugColor::from_rgb(0, 255, 0),
+            health: Health::new(3),
         });
         simulation.advance(Duration::ZERO);
 

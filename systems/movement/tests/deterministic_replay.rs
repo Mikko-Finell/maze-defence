@@ -4,7 +4,9 @@ use std::{
     time::Duration,
 };
 
-use maze_defence_core::{BugColor, BugSnapshot, CellCoord, Command, Event, PlayMode, TileCoord};
+use maze_defence_core::{
+    BugColor, BugSnapshot, CellCoord, Command, Event, Health, PlayMode, TileCoord,
+};
 use maze_defence_system_movement::Movement;
 use maze_defence_world::{self as world, query, World};
 
@@ -99,6 +101,7 @@ fn scripted_commands() -> Vec<Command> {
         Command::SpawnBug {
             spawner: CellCoord::new(0, 0),
             color: BugColor::from_rgb(0x2f, 0x95, 0x32),
+            health: Health::new(3),
         },
         Command::Tick {
             dt: Duration::from_millis(500),
@@ -129,6 +132,7 @@ fn movement_pauses_in_builder_mode() {
         Command::SpawnBug {
             spawner: CellCoord::new(0, 0),
             color: BugColor::from_rgb(0x2f, 0x95, 0x32),
+            health: Health::new(3),
         },
         &mut events,
     );
@@ -248,6 +252,7 @@ enum EventRecord {
         bug_id: maze_defence_core::BugId,
         cell: CellCoord,
         color: (u8, u8, u8),
+        health: Health,
     },
 }
 
@@ -271,10 +276,12 @@ impl From<&Event> for EventRecord {
                 bug_id,
                 cell,
                 color,
+                health,
             } => Self::BugSpawned {
                 bug_id: *bug_id,
                 cell: *cell,
                 color: (color.red(), color.green(), color.blue()),
+                health: *health,
             },
             Event::TowerPlaced { .. }
             | Event::TowerRemoved { .. }

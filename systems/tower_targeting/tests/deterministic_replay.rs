@@ -4,7 +4,8 @@ use std::{
 };
 
 use maze_defence_core::{
-    BugColor, BugId, CellCoord, CellRect, Command, Event, PlayMode, TileCoord, TowerId, TowerKind,
+    BugColor, BugId, CellCoord, CellRect, Command, Event, Health, PlayMode, TileCoord, TowerId,
+    TowerKind,
 };
 use maze_defence_system_tower_targeting::{CellPoint, TowerTarget, TowerTargeting};
 use maze_defence_world::{self as world, query, World};
@@ -122,10 +123,12 @@ fn scripted_commands() -> Vec<Command> {
     let spawn_first = Command::SpawnBug {
         spawner: first_spawner,
         color: BugColor::from_rgb(0xff, 0, 0),
+        health: Health::new(3),
     };
     let spawn_second = Command::SpawnBug {
         spawner: second_spawner,
         color: BugColor::from_rgb(0, 0xff, 0),
+        health: Health::new(3),
     };
     let exit_to_builder = Command::SetPlayMode {
         mode: PlayMode::Builder,
@@ -270,6 +273,7 @@ enum EventRecord {
         bug: BugId,
         cell: CellCoord,
         color: BugColor,
+        health: Health,
     },
 }
 
@@ -290,10 +294,12 @@ impl From<Event> for EventRecord {
                 bug_id,
                 cell,
                 color,
+                health,
             } => Self::BugSpawned {
                 bug: bug_id,
                 cell,
                 color,
+                health,
             },
             other => panic!("unexpected event during targeting replay: {other:?}"),
         }

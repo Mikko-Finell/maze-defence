@@ -11,7 +11,7 @@
 
 use std::time::Duration;
 
-use maze_defence_core::{BugColor, CellCoord, Command, Event, PlayMode};
+use maze_defence_core::{BugColor, CellCoord, Command, Event, Health, PlayMode};
 
 const RNG_MULTIPLIER: u64 = 6_364_136_223_846_793_005;
 const RNG_INCREMENT: u64 = 1;
@@ -21,6 +21,7 @@ const SPAWN_COLORS: [BugColor; 4] = [
     BugColor::from_rgb(0xff, 0xc1, 0x07),
     BugColor::from_rgb(0x58, 0x47, 0xff),
 ];
+const DEFAULT_BUG_HEALTH: Health = Health::new(3);
 
 /// Configuration parameters required to construct the spawning system.
 #[derive(Clone, Copy, Debug)]
@@ -95,7 +96,11 @@ impl Spawning {
         for _ in 0..spawn_attempts {
             let spawner = self.select_spawner(spawners);
             let color = self.next_color();
-            out.push(Command::SpawnBug { spawner, color });
+            out.push(Command::SpawnBug {
+                spawner,
+                color,
+                health: DEFAULT_BUG_HEALTH,
+            });
         }
     }
 
