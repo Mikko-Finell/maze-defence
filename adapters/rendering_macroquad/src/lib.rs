@@ -21,13 +21,15 @@ use glam::Vec2;
 use macroquad::{
     color::BLACK,
     input::{is_key_pressed, is_mouse_button_pressed, mouse_position, KeyCode, MouseButton},
+    math::Vec2 as MacroquadVec2,
 };
-use maze_defence_core::{CellRect, PlayMode, TowerKind};
+use maze_defence_core::{CellRect, PlayMode, TowerId, TowerKind};
 use maze_defence_rendering::{
     BugPresentation, Color, FrameInput, FrameSimulationBreakdown, Presentation, RenderingBackend,
     Scene, SceneProjectile, SceneTower, SceneWall, TileGridPresentation, TowerPreview,
     TowerTargetLine,
 };
+use std::f32::consts::FRAC_PI_2;
 use std::{
     collections::VecDeque,
     time::{Duration, Instant},
@@ -255,7 +257,7 @@ impl RenderingBackend for MacroquadBackend {
                     );
                 }
 
-                draw_towers(&scene.towers, &metrics);
+                draw_towers(&scene.towers, &scene.tower_targets, &metrics);
 
                 if let Some(preview) = builder_preview {
                     draw_tower_preview(preview, &metrics);
@@ -659,13 +661,17 @@ fn projectile_points(projectiles: &[SceneProjectile], metrics: &SceneMetrics) ->
     )
 }
 
-fn draw_towers(towers: &[SceneTower], metrics: &SceneMetrics) {
+const DEFAULT_TURRET_HEADING: f32 = -FRAC_PI_2;
+
+fn draw_towers(towers: &[SceneTower], tower_targets: &[TowerTargetLine], metrics: &SceneMetrics) {
     if metrics.cell_step <= f32::EPSILON {
         return;
     }
 
     let base_color = Color::from_rgb_u8(78, 52, 128);
     let outline_color = base_color.lighten(0.35);
+    let turret_fill_color = base_color.lighten(0.55);
+    let turret_outline_color = base_color.lighten(0.75);
     let fill = to_macroquad_color(Color::new(
         base_color.red,
         base_color.green,
@@ -679,8 +685,11 @@ fn draw_towers(towers: &[SceneTower], metrics: &SceneMetrics) {
         1.0,
     ));
     let outline_thickness = (metrics.cell_step * 0.12).max(1.0);
+    let turret_fill = to_macroquad_color(turret_fill_color);
+    let turret_outline = to_macroquad_color(turret_outline_color);
+    let turret_outline_thickness = (metrics.cell_step * 0.05).max(1.0);
 
-    for SceneTower { region, .. } in towers {
+    for SceneTower { id, region, .. } in towers {
         let size = region.size();
         if size.width() == 0 || size.height() == 0 {
             continue;
@@ -693,7 +702,119 @@ fn draw_towers(towers: &[SceneTower], metrics: &SceneMetrics) {
         let height = size.height() as f32 * metrics.cell_step;
 
         macroquad::shapes::draw_rectangle(x, y, width, height, fill);
+        let heading = turret_heading_for_tower(*id, tower_targets);
+        if let Some(corners) = tower_turret_polygon(*region, metrics, heading) {
+            draw_turret(
+                corners,
+                turret_fill,
+                turret_outline,
+                turret_outline_thickness,
+            );
+        }
         macroquad::shapes::draw_rectangle_lines(x, y, width, height, outline_thickness, outline);
+    }
+}
+
+fn turret_heading_for_tower(tower: TowerId, tower_targets: &[TowerTargetLine]) -> f32 {
+    tower_targets
+        .iter()
+        .find(|line| line.tower == tower)
+        .and_then(|line| {
+            let delta = line.to - line.from;
+            if delta.length_squared() <= f32::EPSILON {
+                None
+            } else {
+                Some(delta.y.atan2(delta.x))
+            }
+        })
+        .unwrap_or(DEFAULT_TURRET_HEADING)
+}
+
+fn tower_turret_polygon(
+    region: CellRect,
+    metrics: &SceneMetrics,
+    heading: f32,
+) -> Option<[Vec2; 4]> {
+    if metrics.cell_step <= f32::EPSILON {
+        return None;
+    }
+
+    let size = region.size();
+    if size.width() == 0 || size.height() == 0 {
+        return None;
+    }
+
+    let center = tower_region_center(region)?;
+    let center_screen = Vec2::new(
+        metrics.offset_x + center.x * metrics.cell_step,
+        metrics.offset_y + center.y * metrics.cell_step,
+    );
+
+    let width_units = size.width() as f32 * metrics.cell_step;
+    let height_units = size.height() as f32 * metrics.cell_step;
+    let tower_half_length = 0.5 * width_units.max(height_units);
+    let turret_length = tower_half_length + metrics.cell_step;
+    if turret_length <= f32::EPSILON {
+        return None;
+    }
+
+    let turret_width = metrics.cell_step * 0.5;
+    if turret_width <= f32::EPSILON {
+        return None;
+    }
+
+    let direction = Vec2::new(heading.cos(), heading.sin());
+    if direction.length_squared() <= f32::EPSILON {
+        return None;
+    }
+    let direction = direction.normalize();
+
+    let back_offset = turret_width * 0.5;
+    let forward_length = turret_length - back_offset;
+    if forward_length <= f32::EPSILON {
+        return None;
+    }
+
+    let start = center_screen - direction * back_offset;
+    let end = center_screen + direction * forward_length;
+    let half_width = turret_width * 0.5;
+    let perpendicular = Vec2::new(-direction.y, direction.x) * half_width;
+
+    let p1 = start + perpendicular;
+    let p2 = end + perpendicular;
+    let p3 = end - perpendicular;
+    let p4 = start - perpendicular;
+
+    Some([p1, p2, p3, p4])
+}
+
+fn draw_turret(
+    corners: [Vec2; 4],
+    fill: macroquad::color::Color,
+    outline: macroquad::color::Color,
+    outline_thickness: f32,
+) {
+    macroquad::shapes::draw_triangle(
+        MacroquadVec2::new(corners[0].x, corners[0].y),
+        MacroquadVec2::new(corners[1].x, corners[1].y),
+        MacroquadVec2::new(corners[2].x, corners[2].y),
+        fill,
+    );
+    macroquad::shapes::draw_triangle(
+        MacroquadVec2::new(corners[0].x, corners[0].y),
+        MacroquadVec2::new(corners[2].x, corners[2].y),
+        MacroquadVec2::new(corners[3].x, corners[3].y),
+        fill,
+    );
+
+    if outline_thickness <= f32::EPSILON {
+        return;
+    }
+
+    for index in 0..corners.len() {
+        let start = corners[index];
+        let end = corners[(index + 1) % corners.len()];
+        macroquad::shapes::draw_line(start.x, start.y, end.x, end.y, outline_thickness, outline);
     }
 }
 
@@ -1136,5 +1257,77 @@ mod tests {
                 assert!(metrics.is_none());
             }
         }
+    }
+
+    #[test]
+    fn turret_heading_defaults_to_north_when_no_target() {
+        let heading = turret_heading_for_tower(TowerId::new(7), &[]);
+
+        assert_f32_approx_eq(heading, DEFAULT_TURRET_HEADING, 1e-6);
+    }
+
+    #[test]
+    fn turret_heading_tracks_target_line() {
+        let tower = TowerId::new(3);
+        let line = TowerTargetLine::new(
+            tower,
+            BugId::new(5),
+            Vec2::new(2.0, 2.0),
+            Vec2::new(5.0, 2.0),
+        );
+
+        let heading = turret_heading_for_tower(tower, &[line]);
+
+        assert_f32_approx_eq(heading, 0.0, 1e-6);
+    }
+
+    #[test]
+    fn turret_polygon_aligns_with_heading() {
+        let mut scene = base_scene(PlayMode::Attack, None);
+        let region = CellRect::from_origin_and_size(CellCoord::new(2, 2), CellRectSize::new(4, 4));
+        scene
+            .towers
+            .push(SceneTower::new(TowerId::new(9), TowerKind::Basic, region));
+        let metrics = SceneMetrics::from_scene(&scene, 960.0, 960.0);
+        let heading = 0.0;
+        let corners = tower_turret_polygon(region, &metrics, heading)
+            .expect("turret polygon should be computed");
+
+        let start = (corners[0] + corners[3]) * 0.5;
+        let end = (corners[1] + corners[2]) * 0.5;
+        let width = (corners[0] - corners[3]).length();
+        let length = (end - start).length();
+        let center_cells = tower_region_center(region).expect("region must have a centre");
+        let center_screen = Vec2::new(
+            metrics.offset_x + center_cells.x * metrics.cell_step,
+            metrics.offset_y + center_cells.y * metrics.cell_step,
+        );
+
+        assert!(
+            end.x > start.x,
+            "turret should extend towards positive X when heading east"
+        );
+        assert_f32_approx_eq(end.y, start.y, 1e-4);
+
+        let expected_half = 0.5
+            * (region.size().width() as f32 * metrics.cell_step)
+                .max(region.size().height() as f32 * metrics.cell_step);
+        let expected_length = expected_half + metrics.cell_step;
+        let expected_width = metrics.cell_step * 0.5;
+        let expected_back_offset = expected_width * 0.5;
+        let direction = Vec2::new(heading.cos(), heading.sin());
+        let back_offset = (center_screen - start).dot(direction);
+
+        assert_f32_approx_eq(width, expected_width, 1e-4);
+        assert_f32_approx_eq(length, expected_length, 1e-4);
+        assert_f32_approx_eq(back_offset, expected_back_offset, 1e-4);
+    }
+
+    fn assert_f32_approx_eq(actual: f32, expected: f32, tolerance: f32) {
+        let delta = (actual - expected).abs();
+        assert!(
+            delta <= tolerance,
+            "expected {expected}, got {actual} (delta {delta})",
+        );
     }
 }
