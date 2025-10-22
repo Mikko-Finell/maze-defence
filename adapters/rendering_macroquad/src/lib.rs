@@ -774,6 +774,68 @@ mod tests {
     }
 
     #[test]
+    fn scene_metrics_bottom_border_scales_with_cells_per_tile() {
+        let tile_length = 48.0;
+        let tile_color = Color::from_rgb_u8(32, 32, 32);
+        let wall_color = Color::from_rgb_u8(64, 64, 64);
+        let screen_width = 800.0;
+        let screen_height = 600.0;
+
+        let tolerance = 1e-4;
+
+        for cells_per_tile in [1, 2, 3, 4] {
+            let tile_grid =
+                TileGridPresentation::new(6, 4, tile_length, cells_per_tile, tile_color)
+                    .expect("cells_per_tile must be positive");
+            let scene = Scene::new(
+                tile_grid,
+                wall_color,
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                PlayMode::Attack,
+                None,
+                None,
+                None,
+            );
+            let metrics = SceneMetrics::from_scene(&scene, screen_width, screen_height);
+
+            let total_border_height_scaled =
+                metrics.bordered_grid_height_scaled - metrics.grid_height_scaled;
+            let expected_border_height_scaled = tile_grid.cell_length()
+                * (TileGridPresentation::TOP_BORDER_CELL_LAYERS
+                    + TileGridPresentation::BOTTOM_BORDER_CELL_LAYERS) as f32
+                * metrics.scale;
+            let total_delta = (total_border_height_scaled - expected_border_height_scaled).abs();
+            assert!(
+                total_delta <= tolerance,
+                "bordered height mismatch for cells_per_tile {cells_per_tile}: {total_delta}"
+            );
+
+            let bottom_border_scaled = (metrics.offset_y + metrics.bordered_grid_height_scaled)
+                - (metrics.grid_offset_y + metrics.grid_height_scaled);
+            let expected_bottom_scaled = tile_grid.cell_length()
+                * TileGridPresentation::BOTTOM_BORDER_CELL_LAYERS as f32
+                * metrics.scale;
+            let bottom_delta = (bottom_border_scaled - expected_bottom_scaled).abs();
+            assert!(
+                bottom_delta <= tolerance,
+                "bottom border mismatch for cells_per_tile {cells_per_tile}: {bottom_delta}"
+            );
+
+            let layers = bottom_border_scaled / metrics.cell_step;
+            let layer_delta =
+                (layers - TileGridPresentation::BOTTOM_BORDER_CELL_LAYERS as f32).abs();
+            assert!(
+                layer_delta <= tolerance,
+                "bottom border should span {} layer(s); measured {layers} (delta {layer_delta})",
+                TileGridPresentation::BOTTOM_BORDER_CELL_LAYERS
+            );
+        }
+    }
+
+    #[test]
     fn tower_target_segments_empty_when_no_targets() {
         let mut scene = base_scene(PlayMode::Attack, None);
         let metrics = SceneMetrics::from_scene(&scene, 960.0, 960.0);

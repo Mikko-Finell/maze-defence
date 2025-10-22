@@ -674,6 +674,42 @@ mod tests {
     }
 
     #[test]
+    fn tile_grid_bottom_border_scales_with_cells_per_tile() {
+        let columns = 4;
+        let rows = 3;
+        let tile_length = 48.0;
+        let color = Color::from_rgb_u8(0, 0, 0);
+
+        for cells_per_tile in [1, 2, 3, 4] {
+            let presentation =
+                TileGridPresentation::new(columns, rows, tile_length, cells_per_tile, color)
+                    .expect("cells_per_tile must be positive");
+
+            let total_border_height = presentation.bordered_height() - presentation.height();
+            let top_border_height =
+                presentation.cell_length() * TileGridPresentation::TOP_BORDER_CELL_LAYERS as f32;
+            let bottom_border_height = total_border_height - top_border_height;
+            let expected_bottom_border =
+                presentation.cell_length() * TileGridPresentation::BOTTOM_BORDER_CELL_LAYERS as f32;
+
+            assert!(
+                (bottom_border_height - expected_bottom_border).abs() <= f32::EPSILON,
+                "bottom border must span {} cell layer(s) for cells_per_tile {}",
+                TileGridPresentation::BOTTOM_BORDER_CELL_LAYERS,
+                cells_per_tile
+            );
+
+            let measured_layers = bottom_border_height / presentation.cell_length();
+            assert!(
+                (measured_layers - TileGridPresentation::BOTTOM_BORDER_CELL_LAYERS as f32).abs()
+                    <= f32::EPSILON,
+                "bottom border must measure {} layer(s), found {measured_layers}",
+                TileGridPresentation::BOTTOM_BORDER_CELL_LAYERS
+            );
+        }
+    }
+
+    #[test]
     fn clamp_world_position_limits_coordinates_to_grid_bounds() {
         let presentation = TileGridPresentation::new(5, 4, 32.0, 4, Color::from_rgb_u8(0, 0, 0))
             .expect("valid grid");
