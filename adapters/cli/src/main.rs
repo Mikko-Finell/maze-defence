@@ -24,7 +24,8 @@ use maze_defence_core::{
 use maze_defence_rendering::{
     BugPresentation, Color, FrameInput, FrameSimulationBreakdown, Presentation, RenderingBackend,
     Scene, SceneTower, TargetCellPresentation, TargetPresentation, TileGridPresentation,
-    TileSpacePosition, TowerInteractionFeedback, TowerPreview, TowerTargetLine, WallPresentation,
+    TileSpacePosition, TowerInteractionFeedback, TowerPreview, TowerTargetLine,
+    WallCellPresentation, WallPresentation,
 };
 use maze_defence_rendering_macroquad::MacroquadBackend;
 use maze_defence_system_bootstrap::Bootstrap;
@@ -222,6 +223,7 @@ fn main() -> Result<()> {
         Vec::new(),
         Vec::new(),
         Vec::new(),
+        Vec::new(),
         query::play_mode(simulation.world()),
         None,
         None,
@@ -402,6 +404,14 @@ impl Simulation {
     }
 
     fn populate_scene(&self, scene: &mut Scene) {
+        let walls = query::walls(&self.world);
+        scene.walls.clear();
+        scene.walls.extend(
+            walls
+                .into_iter()
+                .map(|wall| WallCellPresentation::new(wall.column(), wall.row())),
+        );
+
         let bug_view = query::bug_view(&self.world);
         scene.bugs.clear();
         scene.bugs.extend(bug_view.iter().map(|bug| {
@@ -772,6 +782,7 @@ mod tests {
         Scene::new(
             tile_grid,
             wall,
+            Vec::new(),
             Vec::new(),
             Vec::new(),
             Vec::new(),

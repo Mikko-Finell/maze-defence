@@ -596,6 +596,40 @@ impl TargetCell {
     }
 }
 
+/// Permanent wall segment occupying a single navigation cell.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct WallCell {
+    cell: CellCoord,
+}
+
+impl WallCell {
+    /// Creates a new wall segment anchored to the provided cell.
+    #[must_use]
+    pub const fn new(column: u32, row: u32) -> Self {
+        Self {
+            cell: CellCoord::new(column, row),
+        }
+    }
+
+    /// Zero-based column index of the wall segment.
+    #[must_use]
+    pub const fn column(&self) -> u32 {
+        self.cell.column()
+    }
+
+    /// Zero-based row index of the wall segment.
+    #[must_use]
+    pub const fn row(&self) -> u32 {
+        self.cell.row()
+    }
+
+    /// Returns the full coordinate occupied by the wall segment.
+    #[must_use]
+    pub const fn cell(&self) -> CellCoord {
+        self.cell
+    }
+}
+
 /// Immutable representation of a single bug's state used for queries.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BugSnapshot {

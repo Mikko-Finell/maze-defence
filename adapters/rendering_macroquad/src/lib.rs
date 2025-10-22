@@ -230,6 +230,7 @@ impl RenderingBackend for MacroquadBackend {
 
                 let render_start = Instant::now();
                 draw_subgrid(&metrics, &tile_grid, subgrid_color);
+                draw_maze_walls(&metrics, &scene.walls, wall.color);
                 draw_tile_grid(&metrics, &tile_grid, grid_color);
 
                 draw_towers(&scene.towers, &metrics);
@@ -606,6 +607,24 @@ fn draw_wall(
     }
 }
 
+fn draw_maze_walls(
+    metrics: &SceneMetrics,
+    walls: &[maze_defence_rendering::WallCellPresentation],
+    wall_color: maze_defence_rendering::Color,
+) {
+    if walls.is_empty() || metrics.cell_step <= f32::EPSILON {
+        return;
+    }
+
+    let fill = to_macroquad_color(wall_color);
+
+    for wall in walls {
+        let left = metrics.grid_offset_x + wall.column as f32 * metrics.cell_step;
+        let top = metrics.grid_offset_y + wall.row as f32 * metrics.cell_step;
+        macroquad::shapes::draw_rectangle(left, top, metrics.cell_step, metrics.cell_step, fill);
+    }
+}
+
 fn normalize_target_columns(columns: &[u32]) -> Vec<u32> {
     let margin = TileGridPresentation::SIDE_BORDER_CELL_LAYERS;
     columns
@@ -765,6 +784,7 @@ mod tests {
         Scene::new(
             grid,
             wall,
+            Vec::new(),
             Vec::new(),
             Vec::new(),
             Vec::new(),

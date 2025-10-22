@@ -46,6 +46,7 @@ pub struct World {
     tile_grid: TileGrid,
     cells_per_tile: u32,
     wall: Wall,
+    walls: MazeWalls,
     targets: Vec<CellCoord>,
     bugs: Vec<Bug>,
     bug_positions: HashMap<BugId, usize>,
@@ -69,6 +70,7 @@ impl World {
         let tile_grid = TileGrid::new(DEFAULT_GRID_COLUMNS, DEFAULT_GRID_ROWS, DEFAULT_TILE_LENGTH);
         let cells_per_tile = DEFAULT_CELLS_PER_TILE;
         let wall = build_wall(tile_grid.columns(), tile_grid.rows(), cells_per_tile);
+        let walls = build_maze_walls(tile_grid.columns(), tile_grid.rows(), cells_per_tile);
         let targets = target_cells_from_wall(&wall);
         let total_columns = total_cell_columns(tile_grid.columns(), cells_per_tile);
         let total_rows = total_cell_rows(tile_grid.rows(), cells_per_tile);
@@ -88,6 +90,7 @@ impl World {
             tower_occupancy,
             reservations: ReservationFrame::new(),
             wall,
+            walls,
             targets,
             tile_grid,
             cells_per_tile,
@@ -126,6 +129,31 @@ impl World {
         }
     }
 
+    fn cell_walkable(&self, cell: CellCoord) -> bool {
+        if self.occupancy.index(cell).is_none() {
+            return false;
+        }
+
+        if self.walls.contains(cell) {
+            return false;
+        }
+
+        self.occupancy.can_enter(cell)
+    }
+
+    fn cell_blocked(&self, cell: CellCoord) -> bool {
+        if !self.cell_walkable(cell) {
+            return true;
+        }
+
+        #[cfg(any(test, feature = "tower_scaffolding"))]
+        if self.tower_occupancy.contains(cell) {
+            return true;
+        }
+
+        false
+    }
+
     fn spawn_from_spawner(
         &mut self,
         cell: CellCoord,
@@ -137,7 +165,7 @@ impl World {
             return;
         }
 
-        if self.occupancy.index(cell).is_none() || !self.occupancy.can_enter(cell) {
+        if !self.cell_walkable(cell) {
             return;
         }
 
@@ -174,21 +202,26 @@ impl World {
                 continue;
             };
 
-            let (before, after) = self.bugs.split_at_mut(index);
-            let bug = &mut after[0];
-            let from = bug.cell;
+            let (from, next_cell) = {
+                let bug = &self.bugs[index];
+                if bug.accumulator < self.step_quantum {
+                    continue;
+                }
 
-            if bug.accumulator < self.step_quantum {
-                continue;
-            }
+                let from = bug.cell;
+                let Some(next_cell) = advance_cell(from, request.direction, columns, rows) else {
+                    continue;
+                };
 
-            let Some(next_cell) = advance_cell(from, request.direction, columns, rows) else {
-                continue;
+                if !self.cell_walkable(next_cell) {
+                    continue;
+                }
+
+                (from, next_cell)
             };
 
-            if !self.occupancy.can_enter(next_cell) {
-                continue;
-            }
+            let (before, after) = self.bugs.split_at_mut(index);
+            let bug = &mut after[0];
 
             self.occupancy.vacate(from);
             self.occupancy.occupy(bug.id, next_cell);
@@ -245,6 +278,7 @@ pub fn apply(world: &mut World, command: Command, out_events: &mut Vec<Event>) {
             let normalized_cells = cells_per_tile.max(1);
             world.cells_per_tile = normalized_cells;
             world.wall = build_wall(columns, rows, normalized_cells);
+            world.walls = build_maze_walls(columns, rows, normalized_cells);
             world.targets = target_cells_from_wall(&world.wall);
             let total_columns = total_cell_columns(columns, normalized_cells);
             let total_rows = total_cell_rows(rows, normalized_cells);
@@ -494,7 +528,7 @@ impl World {
                 if self.tower_occupancy.contains(cell) {
                     return true;
                 }
-                if !self.occupancy.can_enter(cell) {
+                if !self.cell_walkable(cell) {
                     return true;
                 }
             }
@@ -534,6 +568,7 @@ pub mod query {
     use super::World;
     use maze_defence_core::{
         BugSnapshot, BugView, CellCoord, Goal, OccupancyView, PlayMode, Target, TileGrid, Wall,
+        WallCell,
     };
 
     #[cfg(any(test, feature = "tower_scaffolding"))]
@@ -649,16 +684,7 @@ pub mod query {
     /// Reports whether the provided cell is blocked by the world state.
     #[must_use]
     pub fn is_cell_blocked(world: &World, cell: CellCoord) -> bool {
-        if world.occupancy.index(cell).is_none() || !world.occupancy.can_enter(cell) {
-            return true;
-        }
-
-        #[cfg(any(test, feature = "tower_scaffolding"))]
-        if world.tower_occupancy.contains(cell) {
-            return true;
-        }
-
-        false
+        world.cell_blocked(cell)
     }
 
     /// Identifies the tower occupying the provided cell, if any.
@@ -686,6 +712,16 @@ pub mod query {
     #[must_use]
     pub fn bug_spawners(world: &World) -> Vec<CellCoord> {
         world.bug_spawners.iter().collect()
+    }
+
+    /// Enumerates the permanent maze walls occupying navigation cells.
+    #[must_use]
+    pub fn walls(world: &World) -> Vec<WallCell> {
+        world
+            .walls
+            .iter()
+            .map(|cell| WallCell::new(cell.column(), cell.row()))
+            .collect()
     }
 
     #[cfg(any(test, feature = "tower_scaffolding"))]
@@ -730,6 +766,32 @@ impl Bug {
 
     fn ready_for_step(&self, step_quantum: Duration) -> bool {
         self.accumulator >= step_quantum
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+struct MazeWalls {
+    cells: BTreeSet<CellCoord>,
+}
+
+impl MazeWalls {
+    fn new() -> Self {
+        Self {
+            cells: BTreeSet::new(),
+        }
+    }
+
+    fn contains(&self, cell: CellCoord) -> bool {
+        self.cells.contains(&cell)
+    }
+
+    #[cfg(test)]
+    fn insert(&mut self, cell: CellCoord) {
+        let _ = self.cells.insert(cell);
+    }
+
+    fn iter(&self) -> impl Iterator<Item = CellCoord> + '_ {
+        self.cells.iter().copied()
     }
 }
 
@@ -1014,6 +1076,10 @@ fn exit_columns_for_tile_grid(columns: TileCoord, cells_per_tile: u32) -> Vec<u3
         .collect()
 }
 
+fn build_maze_walls(_columns: TileCoord, _rows: TileCoord, _cells_per_tile: u32) -> MazeWalls {
+    MazeWalls::new()
+}
+
 fn build_wall(columns: TileCoord, rows: TileCoord, cells_per_tile: u32) -> Wall {
     Wall::new(target_for_grid(columns, rows, cells_per_tile))
 }
@@ -1080,7 +1146,7 @@ fn target_cells_from_wall(wall: &Wall) -> Vec<CellCoord> {
 mod tests {
     use super::*;
     use maze_defence_core::{BugColor, BugId, Direction, Goal, Health, PlayMode};
-  
+
     use std::{
         collections::hash_map::DefaultHasher,
         hash::{Hash, Hasher},
@@ -1185,10 +1251,28 @@ mod tests {
         for column in 0..columns {
             for row in 0..rows {
                 let cell = CellCoord::new(column, row);
+                if world.walls.contains(cell) {
+                    assert!(query::is_cell_blocked(&world, cell));
+                    continue;
+                }
+
                 let expected = !occupancy.is_free(cell);
                 assert_eq!(query::is_cell_blocked(&world, cell), expected);
             }
         }
+    }
+
+    #[test]
+    fn walls_are_reported_and_block_cells() {
+        let mut world = World::new();
+        let wall_cell = CellCoord::new(2, 3);
+        world.walls.insert(wall_cell);
+
+        assert!(query::is_cell_blocked(&world, wall_cell));
+        assert!(world.cell_blocked(wall_cell));
+
+        let reported = query::walls(&world);
+        assert_eq!(reported, vec![maze_defence_core::WallCell::new(2, 3)]);
     }
 
     #[test]
@@ -2215,6 +2299,7 @@ mod tests {
             Command::SpawnBug {
                 spawner: spawn_cell,
                 color: BugColor::from_rgb(0x2f, 0x95, 0x32),
+                health: Health::new(1),
             },
             &mut events,
         );
