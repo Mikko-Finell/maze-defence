@@ -13,7 +13,7 @@ Bugs currently compute a full path to the exit each time they are ready to move.
 We replace the "path-to-exit or nothing" search with a two-tier crowd flow:
 1. **Static flow field** – pre-compute the Manhattan-shortest distance from every traversable cell to the exit ignoring dynamic occupancy. This gives each bug a gradient to follow.
 2. **Dynamic congestion map** – on each tick, measure how many bugs intend to occupy each cell in the near future to bias decisions away from crowded lanes.
-3. **Local progress planner** – when a bug is ready, pick the best neighbour according to the gradient and congestion, falling back to a bounded detour search when the obvious step is blocked. The planner only requires a path to a *progress cell* (a cell with a strictly lower static distance), not to the final exit.
+3. **Local progress planner** – when a bug is ready, pick the best neighbour according to the gradient with congestion as a deterministic tie-breaker, falling back to a bounded detour search when the obvious step is blocked. The planner only requires a path to a *progress cell* (a cell with a strictly lower static distance), not to the final exit.
 
 This flow guarantees that if there is an open neighbour that reduces distance (or keeps it steady while reducing congestion) the bug moves. Bugs only wait when the immediate ring of cells is all occupied or walled.
 
@@ -33,21 +33,30 @@ The field lets us compare any two neighbouring cells and know which one is close
 - This approximates the queue length that waits ahead of every cell.
 - Keep the data in-system; it is transient scratch state and never stored in `world`.
 
-Congestion penalties will steer bugs into alternative corridors when the straight lane is saturated, producing organic lane formation.
+Congestion counts act purely as a tie-breaker, nudging bugs into alternative corridors when multiple neighbours offer the same progress.
 
 ## Local Progress Planner
 The planner runs for each bug that accumulated enough time to step:
 
-1. **Gather candidates.** Enumerate the four orthogonal neighbours that are inside the grid or the exit row. For each neighbour compute:
+### Lexicographic neighbour ranking
+
+The planner compares candidate neighbours using a lexicographic tuple of `(distance, congestion, cell order)`:
+
+1. Prefer the option with the strictly smaller `navigation` distance; this guarantees we never choose a longer route just because it is empty.
+2. If the distance matches, pick the cell with lower congestion to slide into the freer lane.
+3. When still tied, fall back to the stable lexical ordering we already use for determinism.
+
+This arrangement keeps the crowd moving monotonically toward the exit while leaving congestion as the secondary heuristic—no magic weights or tuning knobs required.
+
+1. **Gather candidates.** Enumerate the four orthogonal neighbours that are inside the grid or the exit row. For each neighbour determine:
    - `distance_delta = navigation[neighbour] as i32 - navigation[current] as i32`.
-   - `congestion_penalty = congestion[neighbour] * CONGESTION_WEIGHT`.
-   - `wall_penalty = ∞` if the tile is a static wall.
-   - Skip neighbours that are currently occupied (except by the moving bug itself).
-2. **Immediate choice.** If at least one neighbour has `distance_delta < 0`, pick the one with the minimal `(navigation + congestion_penalty)` score. Deterministic tie-breaker: lower distance, then lower congestion, then lexical cell order.
-3. **Side-step relief.** If no decreasing neighbour is free but there is a neighbour with `distance_delta == 0` and low congestion, allow taking it only when it satisfies the anti-oscillation rule: `congestion[neighbour] < congestion[current_cell]` **and** the neighbour differs from `last_cell` tracked via a two-tick ring buffer. Explicitly: *Flat side-steps (`distance_delta == 0`) are only allowed if `(congestion < current_cell)` **and** cell ≠ `last_cell` (ring buffer 2 ticks).* This keeps lanes flowing sideways around clumps without ping-ponging between tiles.
+   - `candidate_distance = navigation[neighbour]` and `candidate_congestion = congestion[neighbour]`.
+   - Skip neighbours that are static walls or currently occupied (except by the moving bug itself).
+2. **Immediate choice.** If at least one neighbour has `distance_delta < 0`, pick the lexicographically smallest `(candidate_distance, candidate_congestion, cell order)` tuple. This enforces strict progress while letting congestion break distance ties.
+3. **Side-step relief.** If no decreasing neighbour is free but there is a neighbour with `distance_delta == 0` and low congestion, allow taking it only when it satisfies the anti-oscillation rule: its congestion must be lower than the current cell's count **and** the neighbour must differ from `last_cell` tracked via a two-tick ring buffer. Explicitly: *Flat side-steps (`distance_delta == 0`) are only allowed if `congestion[neighbour] < congestion[current_cell]` **and** cell ≠ `last_cell` (ring buffer 2 ticks).* This keeps lanes flowing sideways around clumps without ping-ponging between tiles.
 4. **Detour search.** When neither of the above yields a move, run a bounded breadth-first search rooted at the current cell:
    - Depth limit: `DET0UR_RADIUS` (e.g., 6). Nodes deeper than the limit are pruned.
-   - Success condition: reach any free cell whose `navigation` value is strictly lower than the start's or, if none exist within the radius, the free cell with minimal `(navigation + congestion)` score.
+   - Success condition: reach any free cell whose `navigation` value is strictly lower than the start's or, if none exist within the radius, the free cell with the best lexicographic `(distance, congestion, cell order)` tuple.
    - The BFS treats occupied cells as walls *except* it allows the target cell to be the current occupant's cell when that occupant is already scheduled to vacate during the current tick according to the reservation ledger — using the reservation ledger only, **not** BugId ordering.
    - Reconstruct the first hop of the discovered path and emit `StepBug` toward that neighbour.
 5. **Stall fallback.** Only if the BFS fails to find any free cell within the radius (i.e., the bug is boxed in) do we let the bug stay still this tick. Record a `stalled_for` counter so once a space opens the bug immediately re-enters the planner rather than waiting multiple ticks.
@@ -84,4 +93,4 @@ This planner ensures forward progress whenever a local route exists and explores
 2. Extend the movement system with congestion tracking and the new planner.
 3. Write unit tests for navigation and detour logic.
 4. Update replay tests to cover dense-crowd behaviour and detours.
-5. Profile on large maps and adjust constants (`CONGESTION_LOOKAHEAD`, `DET0UR_RADIUS`, penalty weights) if needed.
+5. Profile on large maps and adjust constants (`CONGESTION_LOOKAHEAD`, `DET0UR_RADIUS`) if needed.

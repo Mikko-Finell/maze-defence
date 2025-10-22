@@ -117,13 +117,15 @@ moves without oscillation.
 
 * Build the transient congestion `Vec<u8>` each tick by following the gradient
   up to `CONGESTION_LOOKAHEAD` cells per bug, skipping their current cell.
-* Incorporate `CONGESTION_WEIGHT` into the neighbour scoring so ties prefer
-  lower congestion after comparing distance.
+* Fold the congestion data into the neighbour ranking with the lexicographic
+  distance-first, congestion-second comparator described in the spec.
 * Implement the flat side-step rule: allow `distance_delta == 0` moves only when
   the neighbour’s congestion is lower than the current cell and it differs from
   the two-tick `last_cell` ring buffer entry.
 * Add deterministic tests that demonstrate lane-formation behaviour and verify
   the anti-oscillation guard.
+* Replace the previous weight-based score with the lexicographic comparator so
+  the planner drops `CONGESTION_WEIGHT` before the remaining `[TODO]` stages.
 
 **Exit checks:** System tests confirm congestion-influenced routing, and
 profiling/logging shows congestion buffers are reused between ticks.
@@ -136,8 +138,8 @@ existing reservations.
 **Deliverables:**
 
 * Implement the depth-limited BFS (radius `DETOUR_RADIUS`) that searches for any
-  free cell with a lower navigation score, falling back to the lowest
-  `(distance + congestion)` cell when none exist.
+  free cell with a lower navigation score, falling back to the best
+  lexicographic `(distance, congestion, cell order)` candidate when none exist.
 * Respect reservation data: treat cells claimed by lower `BugId` moves as
   occupied, but allow targeting a cell currently occupied when the ledger shows
   that occupant vacating this tick.
@@ -162,8 +164,8 @@ guidance.
   regression.
 * Document the new planner in `movement.md` (or adjacent docs), cross-linking to
   `path-spec.md` and explaining each constant plus the reservation interplay.
-* Capture tuning guidance in the docs so future adjustments to lookahead/weights
-  rerun the same replay scenarios.
+* Capture tuning guidance in the docs so future adjustments to lookahead or
+  detour radii rerun the same replay scenarios.
 * Run the full guard set (`cargo fmt --check`, `cargo clippy --deny warnings`,
   `cargo test`, `cargo hack check --each-feature`, `cargo +nightly udeps`) to
   record a clean baseline after the overhaul.
