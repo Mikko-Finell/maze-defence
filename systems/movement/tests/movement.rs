@@ -91,6 +91,100 @@ fn emits_step_commands_toward_target() {
 }
 
 #[test]
+fn followers_progress_when_lane_ahead_is_occupied() {
+    let mut world = World::new();
+    let mut movement = Movement::default();
+    let mut events = Vec::new();
+
+    world::apply(
+        &mut world,
+        Command::ConfigureTileGrid {
+            columns: TileCoord::new(3),
+            rows: TileCoord::new(3),
+            tile_length: 1.0,
+            cells_per_tile: 1,
+        },
+        &mut events,
+    );
+    world::apply(
+        &mut world,
+        Command::SpawnBug {
+            spawner: CellCoord::new(0, 0),
+            color: BugColor::from_rgb(0x2f, 0x95, 0x32),
+            health: Health::new(3),
+        },
+        &mut events,
+    );
+
+    pump_system(&mut world, &mut movement, events);
+
+    for _ in 0..2 {
+        let mut tick_events = Vec::new();
+        world::apply(
+            &mut world,
+            Command::Tick {
+                dt: Duration::from_millis(250),
+            },
+            &mut tick_events,
+        );
+        pump_system(&mut world, &mut movement, tick_events);
+    }
+
+    let mut spawn_events = Vec::new();
+    world::apply(
+        &mut world,
+        Command::SpawnBug {
+            spawner: CellCoord::new(0, 0),
+            color: BugColor::from_rgb(0x2f, 0x95, 0x32),
+            health: Health::new(3),
+        },
+        &mut spawn_events,
+    );
+    pump_system(&mut world, &mut movement, spawn_events);
+
+    let mut tick_events = Vec::new();
+    world::apply(
+        &mut world,
+        Command::Tick {
+            dt: Duration::from_millis(250),
+        },
+        &mut tick_events,
+    );
+
+    let bug_view = query::bug_view(&world);
+    let occupancy_view = query::occupancy_view(&world);
+    let target_cells = query::target_cells(&world);
+    let navigation_view = query::navigation_field(&world);
+    let reservation_ledger = query::reservation_ledger(&world);
+    let mut commands = Vec::new();
+    movement.handle(
+        &tick_events,
+        &bug_view,
+        occupancy_view,
+        navigation_view,
+        reservation_ledger,
+        &target_cells,
+        |cell| query::is_cell_blocked(&world, cell),
+        &mut commands,
+    );
+
+    let mut bug_ids: Vec<_> = bug_view.iter().map(|bug| bug.id).collect();
+    bug_ids.sort_by_key(|bug_id| bug_id.get());
+    assert!(
+        bug_ids.len() >= 2,
+        "expected at least two bugs for the scenario"
+    );
+    let follower_id = bug_ids[1];
+
+    let follower_direction = commands.iter().find_map(|command| match command {
+        Command::StepBug { bug_id, direction } if *bug_id == follower_id => Some(*direction),
+        _ => None,
+    });
+
+    assert_eq!(follower_direction, Some(Direction::South));
+}
+
+#[test]
 fn step_commands_target_free_cells() {
     let mut world = World::new();
     let mut events = Vec::new();
