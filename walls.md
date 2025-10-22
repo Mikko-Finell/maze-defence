@@ -55,7 +55,7 @@
 3. Simplify `SceneMetrics::from_scene(...)` – `world_height` should now be `scene.tile_grid.bordered_height()`.
 4. Refresh adapter tests to reflect the new scene structure (no `WallPresentation`, new height calculation, etc.).
 
-## 4. Documentation & CLI messaging
+## 4. Documentation & CLI messaging [DONE]
 1. Rewrite the wall section in `README.md` to describe the cell-based wall and remove references to `--wall-thickness`.
 2. Update `tile_cell.md` (and any other docs mentioning the perimeter wall) to illustrate the new triple-row layout (playable walkway, visible wall row, hidden exit row).
 3. Ensure help output (`--help`) no longer advertises wall thickness.

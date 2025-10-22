@@ -2,41 +2,48 @@
 
 ## Data model difference
 The world still describes its coarse layout in whole tiles via `TileGrid`, but the grid
-configuration command now also carries a `cells_per_tile` factor. The world remembers
-that value and expands every tile into `cells_per_tile × cells_per_tile` navigation cells
-without padding out extra wall cells around the maze. The helper routines in the world
-crate derive the occupancy dimensions `columns * cells_per_tile` by `rows * cells_per_tile`
-and compute the exit row at `rows * cells_per_tile` so the opening sits just outside the
-bottom wall.【F:core/src/lib.rs†L19-L44】【F:world/src/lib.rs†L176-L208】【F:world/src/lib.rs†L632-L680】
+configuration command carries a `cells_per_tile` factor so each tile expands into
+`cells_per_tile × cells_per_tile` navigation cells. Helper routines compute dense occupancy
+dimensions by multiplying the tile counts and then appending side borders plus three extra
+southern layers that represent the walkway, the visible wall, and the hidden exit row.【F:world/src/lib.rs†L1049-L1076】
 
-`World::apply` normalises the incoming value (rejecting zero), rebuilds the wall target, and
-resizes the dense occupancy buffer using those derived dimensions before regenerating bugs.
-The bug seeding logic only places bugs inside the interior cells that make up the playable maze.【F:world/src/lib.rs†L289-L312】【F:world/src/lib.rs†L729-L780】
+Those row indices are exposed through dedicated helpers: `exit_row_for_tile_grid(...)` pins the
+hidden row where bugs are culled, `visible_wall_row_for_tile_grid(...)` identifies the rendered
+wall band, and the test-only `walkway_row_for_tile_grid(...)` confirms the playable strip that
+sits immediately above the wall.【F:world/src/lib.rs†L1078-L1116】
+
+`World::apply` normalises incoming grid changes (rejecting zero subdivisions), rebuilds the
+target cells, resizes the dense occupancy buffer using the derived dimensions, recreates the
+wall cells, and refreshes the bug spawner rim so the new triple-row layout is consistent.【F:world/src/lib.rs†L253-L366】
+Bug spawning logic only seeds insects into interior coordinates, keeping them out of the wall
+and exit rows until they march there organically.【F:world/src/lib.rs†L775-L820】
 
 ## What bugs use for movement
-Bugs, targets, and reservations are all stored in `CellCoord`s. The world checks potential
-steps against the expanded occupancy grid and only lets a bug move south out of the maze
-when its column matches one of the exit cells. The movement system consumes the same
-dimensions from `OccupancyView`, adds an extra virtual row for the exit, and enumerates
-neighbours with the same guard so path-finding and authoritative movement agree.【F:world/src/lib.rs†L213-L269】【F:world/src/lib.rs†L682-L717】【F:systems/movement/src/lib.rs†L29-L200】【F:systems/movement/src/lib.rs†L234-L330】
+Bugs, targets, and reservations are all stored in `CellCoord`s. The world checks proposed steps
+against the expanded occupancy grid, filters out moves that collide with the rebuilt wall cells,
+and vacates bugs once they enter the hidden exit coordinates.【F:world/src/lib.rs†L140-L244】【F:world/src/lib.rs†L1118-L1140】
+The movement system consumes the same grid dimensions from `OccupancyView`, prepares workspaces
+that match the world’s rows, and enumerates neighbours with guards that respect the explicit
+exit columns so deterministic path-finding and authoritative movement stay aligned.【F:systems/movement/src/lib.rs†L57-L176】【F:systems/movement/src/lib.rs†L216-L330】
 
 ## How CLI configuration maps to actual cells
-The CLI now forwards the `--cells-per-tile` argument directly into
-`Command::ConfigureTileGrid`, so gameplay and rendering use the same subdivision. With the
-default `--cells-per-tile 4`, running
+The CLI forwards `--cells-per-tile` directly into `Command::ConfigureTileGrid`, ensuring gameplay
+and rendering share the same subdivision. With the default `--cells-per-tile 4`, running
 `cargo run -p maze-defence-cli --bin maze-defence -- --size 21x30` produces:
 
-- **Interior cells:** `21 × 4 = 84` columns and `30 × 4 = 120` rows, which also matches the
-  occupancy buffer dimensions.
-- **Wall opening:** four contiguous exit cells at row index `120` (zero-based) centred on the
-  middle tile.
+- **Interior cells:** `21 × 4 = 84` columns and `30 × 4 = 120` rows.
+- **Walkway row:** the final interior row at index `120`, immediately above the wall.
+- **Visible wall row:** index `121`, filled with wall cells except for the exit gap.
+- **Hidden exit row:** index `122`, where bugs take their last step before being culled.
+- **Exit columns:** four contiguous cells centred on the middle tile.
 
-Those counts come straight from the helper calculations and the multi-cell target builder,
-so every bug path operates on a dense grid aligned to the maze interior with the tile-width opening.【F:adapters/cli/src/main.rs†L108-L198】【F:world/src/lib.rs†L632-L680】【F:world/src/lib.rs†L682-L717】
+Those counts come straight from the helper calculations (`interior_cell_rows`, `total_cell_rows`,
+`walkway_row_for_tile_grid`, `visible_wall_row_for_tile_grid`, and `exit_columns_for_tile_grid`), so every
+bug path operates on a dense grid aligned to the maze interior with the tile-width opening.【F:adapters/cli/src/main.rs†L142-L215】【F:world/src/lib.rs†L1049-L1116】
 
 ## How bugs approach the wall opening
-`Target::aligned_with_grid` constructs `cells_per_tile` contiguous target cells positioned in the
-exit row just outside the bottom wall. Movement queries clone those cells, choose the nearest
-candidate, and the neighbour enumeration allows the final southward step only when the bug is
-aligned with one of those exit columns. The target row is not part of the occupancy grid, so once a bug
-steps into one of those cells it vacates the maze entirely.【F:world/src/lib.rs†L101-L140】【F:world/src/lib.rs†L682-L717】【F:systems/movement/src/lib.rs†L29-L200】【F:systems/movement/src/lib.rs†L234-L330】
+`build_cell_walls(...)` populates the visible wall row while skipping the exit gap reported by
+`exit_columns_for_tile_grid(...)`, and `target_cells(...)` constructs the contiguous target band in the
+hidden exit row. Movement queries clone those targets, choose the nearest candidate, and their
+neighbour enumeration only allows the southward step when the bug is aligned with one of those
+exit columns, ensuring each bug pauses on the walkway row before being removed from the world.【F:world/src/lib.rs†L1118-L1174】【F:systems/movement/src/lib.rs†L96-L176】
