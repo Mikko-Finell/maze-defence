@@ -24,9 +24,10 @@ use maze_defence_core::{
     TowerTarget,
 };
 use maze_defence_rendering::{
-    BugPresentation, Color, FrameInput, FrameSimulationBreakdown, Presentation, RenderingBackend,
-    Scene, SceneProjectile, SceneTower, SceneWall, TileGridPresentation, TileSpacePosition,
-    TowerInteractionFeedback, TowerPreview, TowerTargetLine,
+    BugHealthPresentation, BugPresentation, Color, FrameInput, FrameSimulationBreakdown,
+    Presentation, RenderingBackend, Scene, SceneProjectile, SceneTower, SceneWall,
+    TileGridPresentation, TileSpacePosition, TowerInteractionFeedback, TowerPreview,
+    TowerTargetLine,
 };
 use maze_defence_rendering_macroquad::MacroquadBackend;
 use maze_defence_system_bootstrap::Bootstrap;
@@ -561,6 +562,7 @@ impl Simulation {
             scene.bugs.push(BugPresentation::new(
                 position,
                 Color::from_rgb_u8(color.red(), color.green(), color.blue()),
+                BugHealthPresentation::new(bug.health.get(), bug.max_health.get()),
             ));
         }
 

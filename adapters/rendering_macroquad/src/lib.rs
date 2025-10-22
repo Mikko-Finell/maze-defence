@@ -250,9 +250,15 @@ impl RenderingBackend for MacroquadBackend {
                 draw_projectiles(&scene.projectiles, &metrics);
 
                 let bug_radius = metrics.cell_step * 0.5;
-                for BugPresentation { position, color } in &scene.bugs {
-                    let bug_center_x = metrics.offset_x + (position.x + 0.5) * metrics.cell_step;
-                    let bug_center_y = metrics.offset_y + (position.y + 0.5) * metrics.cell_step;
+                for BugPresentation {
+                    position,
+                    color,
+                    health,
+                } in &scene.bugs
+                {
+                    let bug_center = metrics.bug_center(*position);
+                    let bug_center_x = bug_center.x;
+                    let bug_center_y = bug_center.y;
                     let border_thickness = (bug_radius * 0.2).max(1.0);
                     macroquad::shapes::draw_circle(
                         bug_center_x,
@@ -267,6 +273,29 @@ impl RenderingBackend for MacroquadBackend {
                         border_thickness,
                         BLACK,
                     );
+
+                    if metrics.cell_step > f32::EPSILON {
+                        let bar_margin = metrics.cell_step * 0.1;
+                        let bar_width = metrics.cell_step * 0.6;
+                        let bar_height = (metrics.cell_step * 0.12).max(2.0);
+                        let bar_left = bug_center_x - bar_width * 0.5;
+                        let bar_top = bug_center_y + bug_radius + bar_margin;
+                        macroquad::shapes::draw_rectangle(
+                            bar_left, bar_top, bar_width, bar_height, BLACK,
+                        );
+
+                        if health.maximum > 0 && health.current > 0 {
+                            let ratio =
+                                (health.current as f32 / health.maximum as f32).clamp(0.0, 1.0);
+                            let fill_width = bar_width * ratio;
+                            if fill_width > f32::EPSILON {
+                                let fill_color = macroquad::color::Color::new(0.78, 0.0, 0.0, 1.0);
+                                macroquad::shapes::draw_rectangle(
+                                    bar_left, bar_top, fill_width, bar_height, fill_color,
+                                );
+                            }
+                        }
+                    }
                 }
 
                 let render_duration = render_start.elapsed();
@@ -366,6 +395,13 @@ impl SceneMetrics {
             tile_step,
             cell_step,
         }
+    }
+
+    fn bug_center(&self, position: Vec2) -> Vec2 {
+        Vec2::new(
+            self.offset_x + (position.x + 0.5) * self.cell_step,
+            self.offset_y + (position.y + 0.5) * self.cell_step,
+        )
     }
 }
 

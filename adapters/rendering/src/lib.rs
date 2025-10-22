@@ -473,13 +473,36 @@ pub struct BugPresentation {
     pub position: Vec2,
     /// Fill color of the bug's body.
     pub color: Color,
+    /// Health configuration used to draw the bug's health bar.
+    pub health: BugHealthPresentation,
 }
 
 impl BugPresentation {
     /// Creates a new bug presentation descriptor.
     #[must_use]
-    pub fn new(position: Vec2, color: Color) -> Self {
-        Self { position, color }
+    pub fn new(position: Vec2, color: Color, health: BugHealthPresentation) -> Self {
+        Self {
+            position,
+            color,
+            health,
+        }
+    }
+}
+
+/// Health values required to render a bug's health bar.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BugHealthPresentation {
+    /// Current health remaining for the bug.
+    pub current: u32,
+    /// Maximum health the bug started with.
+    pub maximum: u32,
+}
+
+impl BugHealthPresentation {
+    /// Creates a new bug health descriptor.
+    #[must_use]
+    pub fn new(current: u32, maximum: u32) -> Self {
+        Self { current, maximum }
     }
 }
 
@@ -811,6 +834,7 @@ mod tests {
         let bugs = vec![BugPresentation::new(
             Vec2::new(2.0, 3.0),
             Color::from_rgb_u8(255, 0, 0),
+            BugHealthPresentation::new(3, 3),
         )];
 
         let scene = Scene::new(

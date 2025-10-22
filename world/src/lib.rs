@@ -873,6 +873,7 @@ pub mod query {
                 id: bug.id,
                 cell: bug.cell,
                 color: bug.color,
+                max_health: bug.max_health(),
                 health: bug.health,
                 ready_for_step: bug.ready_for_step(world.step_quantum),
                 accumulated: bug.accumulator,
@@ -1064,6 +1065,7 @@ struct Bug {
     id: BugId,
     cell: CellCoord,
     color: BugColor,
+    max_health: Health,
     health: Health,
     accumulator: Duration,
 }
@@ -1074,6 +1076,7 @@ impl Bug {
             id,
             cell,
             color,
+            max_health: health,
             health,
             accumulator: Duration::ZERO,
         }
@@ -1081,6 +1084,10 @@ impl Bug {
 
     fn health(&self) -> Health {
         self.health
+    }
+
+    fn max_health(&self) -> Health {
+        self.max_health
     }
 
     #[allow(dead_code)]
@@ -4487,6 +4494,7 @@ mod tests {
         id: BugId,
         cell: CellCoord,
         color: (u8, u8, u8),
+        max_health: Health,
         health: Health,
         ready_for_step: bool,
         accumulated_micros: u128,
@@ -4502,6 +4510,7 @@ mod tests {
                     snapshot.color.green(),
                     snapshot.color.blue(),
                 ),
+                max_health: snapshot.max_health,
                 health: snapshot.health,
                 ready_for_step: snapshot.ready_for_step,
                 accumulated_micros: snapshot.accumulated.as_micros(),

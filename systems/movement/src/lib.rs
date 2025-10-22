@@ -532,6 +532,7 @@ mod tests {
             id: BugId::new(1),
             cell,
             color: BugColor::from_rgb(0, 0, 0),
+            max_health: Health::new(3),
             health: Health::new(3),
             ready_for_step: true,
             accumulated: Duration::default(),
