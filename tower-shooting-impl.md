@@ -64,7 +64,7 @@ The sequence below layers combat from contracts → world authority → pure sys
 
 **Exit checks:** Query unit tests verify stable ordering (BTree iteration), correct values, and that snapshots remain integer-based for determinism.
 
-# 6) Deterministic replay guard — TODO
+# 6) Deterministic replay guard — DONE
 
 **Goal:** Lock in world-side determinism before layering systems.
 
@@ -72,10 +72,11 @@ The sequence below layers combat from contracts → world authority → pure sys
 
 * Extend the replay harness to spawn bugs with health, issue scripted `FireProjectile` commands/ticks, and assert identical world state + event log hashes across runs.
 * Cover cases where a bug dies before impact to ensure `ProjectileExpired` ordering stays deterministic.
+* Added a world-level combat replay test that fires two projectiles at the same bug, asserting a hit followed by an expiration produces identical fingerprints across runs.
 
 **Exit checks:** New replay test passes repeatedly and is wired into CI.
 
-# 7) Tower combat system (`systems/tower_combat`) — TODO
+# 7) Tower combat system (`systems/tower_combat`) — DONE
 
 **Goal:** Emit `FireProjectile` commands from pure data using the new queries.
 
@@ -84,10 +85,11 @@ The sequence below layers combat from contracts → world authority → pure sys
 * Create the new system struct with scratch buffers, implement `handle` that early-outs unless `PlayMode::Attack`.
 * Iterate the targeting DTOs in stable order, consult cooldown view (map or binary search) to confirm `ready_in == 0`, and push `Command::FireProjectile { tower, target }`.
 * Unit tests verify readiness gating, deterministic ordering, and builder-mode silence.
+* Implemented `TowerCombat` using a scratch command buffer and binary-search cooldown lookup, plus unit tests covering builder mode, cooldown gating, and missing tower entries.
 
 **Exit checks:** System crate compiles, clippy/test suite passes with the new coverage.
 
-# 8) Simulation wiring — TODO
+# 8) Simulation wiring — DONE
 
 **Goal:** Drive the new system each tick and queue commands to the world without violating layering.
 
@@ -96,6 +98,7 @@ The sequence below layers combat from contracts → world authority → pure sys
 * Extend the CLI simulation (and shared sim harness) to fetch `tower_cooldowns` & `projectiles` queries, hold reusable caches, and call `tower_combat.handle` after targeting.
 * Ensure commands flow through the existing queueing mechanism before the next tick; no direct world mutation.
 * Keep builder mode short-circuit consistent with targeting system (clear caches when play mode changes).
+* Wired the CLI simulation to cache cooldown/projectile snapshots, invoke tower combat after targeting, queue fire commands through the existing buffer, and cover builder/cooldown gating with new tests.
 
 **Exit checks:** Headless simulation tests cover attack/builder transitions, confirm commands emit only when cooldown-ready, and ensure projectile snapshots are cached.
 

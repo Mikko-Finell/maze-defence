@@ -18,8 +18,9 @@ use anyhow::Result;
 use clap::{Parser, ValueEnum};
 use glam::Vec2;
 use maze_defence_core::{
-    CellCoord, CellRect, CellRectSize, Command, Event, PlacementError, PlayMode, RemovalError,
-    TileCoord, TowerId, TowerKind,
+    CellCoord, CellRect, CellRectSize, Command, Event, PlacementError, PlayMode,
+    ProjectileSnapshot, RemovalError, TileCoord, TowerCooldownView, TowerId, TowerKind,
+    TowerTarget,
 };
 use maze_defence_rendering::{
     BugPresentation, Color, FrameInput, FrameSimulationBreakdown, Presentation, RenderingBackend,
@@ -34,7 +35,8 @@ use maze_defence_system_builder::{
 };
 use maze_defence_system_movement::Movement;
 use maze_defence_system_spawning::{Config as SpawningConfig, Spawning};
-use maze_defence_system_tower_targeting::{TowerTarget, TowerTargeting};
+use maze_defence_system_tower_combat::TowerCombat;
+use maze_defence_system_tower_targeting::TowerTargeting;
 use maze_defence_world::{self as world, query, World};
 
 const DEFAULT_GRID_COLUMNS: u32 = 10;
@@ -63,10 +65,13 @@ pub fn push_tower_targets(scene: &mut Scene, targets: &[TowerTarget]) {
     scene.tower_targets.reserve(targets.len());
     for target in targets {
         let from = Vec2::new(
-            target.tower_center_cells.column,
-            target.tower_center_cells.row,
+            target.tower_center_cells.column(),
+            target.tower_center_cells.row(),
         );
-        let to = Vec2::new(target.bug_center_cells.column, target.bug_center_cells.row);
+        let to = Vec2::new(
+            target.bug_center_cells.column(),
+            target.bug_center_cells.row(),
+        );
         scene
             .tower_targets
             .push(TowerTargetLine::new(target.tower, target.bug, from, to));
@@ -247,6 +252,9 @@ struct Simulation {
     movement: Movement,
     spawning: Spawning,
     tower_targeting: TowerTargeting,
+    tower_combat: TowerCombat,
+    tower_cooldowns: TowerCooldownView,
+    projectiles: Vec<ProjectileSnapshot>,
     current_targets: Vec<TowerTarget>,
     pending_events: Vec<Event>,
     scratch_commands: Vec<Command>,
@@ -320,6 +328,9 @@ impl Simulation {
             movement: Movement::default(),
             spawning: Spawning::new(SpawningConfig::new(bug_spawn_interval, SPAWN_RNG_SEED)),
             tower_targeting: TowerTargeting::new(),
+            tower_combat: TowerCombat::new(),
+            tower_cooldowns: TowerCooldownView::default(),
+            projectiles: Vec::new(),
             current_targets: Vec::new(),
             pending_events,
             scratch_commands: Vec::new(),
@@ -595,8 +606,16 @@ impl Simulation {
             if !self.current_targets.is_empty() {
                 self.current_targets.clear();
             }
+            self.tower_cooldowns = TowerCooldownView::default();
+            if !self.projectiles.is_empty() {
+                self.projectiles.clear();
+            }
             return;
         }
+
+        self.tower_cooldowns = query::tower_cooldowns(&self.world);
+        self.projectiles.clear();
+        self.projectiles.extend(query::projectiles(&self.world));
 
         let towers = query::towers(&self.world);
         let bugs = query::bug_view(&self.world);
@@ -607,6 +626,17 @@ impl Simulation {
             &bugs,
             cells_per_tile,
             &mut self.current_targets,
+        );
+
+        if self.current_targets.is_empty() {
+            return;
+        }
+
+        self.tower_combat.handle(
+            play_mode,
+            self.tower_cooldowns.clone(),
+            &self.current_targets,
+            &mut self.queued_commands,
         );
     }
 
@@ -720,6 +750,21 @@ impl Simulation {
     #[cfg(test)]
     fn current_targets(&self) -> &[TowerTarget] {
         &self.current_targets
+    }
+
+    #[cfg(test)]
+    fn tower_cooldowns(&self) -> &TowerCooldownView {
+        &self.tower_cooldowns
+    }
+
+    #[cfg(test)]
+    fn projectiles(&self) -> &[ProjectileSnapshot] {
+        &self.projectiles
+    }
+
+    #[cfg(test)]
+    fn queued_commands(&self) -> &[Command] {
+        &self.queued_commands
     }
 
     fn flush_queued_commands(&mut self) {
@@ -1152,15 +1197,15 @@ mod tests {
         assert_eq!(
             beam.from,
             Vec2::new(
-                initial_target.tower_center_cells.column,
-                initial_target.tower_center_cells.row,
+                initial_target.tower_center_cells.column(),
+                initial_target.tower_center_cells.row(),
             )
         );
         assert_eq!(
             beam.to,
             Vec2::new(
-                initial_target.bug_center_cells.column,
-                initial_target.bug_center_cells.row,
+                initial_target.bug_center_cells.column(),
+                initial_target.bug_center_cells.row(),
             )
         );
 
@@ -1289,6 +1334,127 @@ mod tests {
             assert_eq!(scene.tower_targets.len(), 1);
             assert_eq!(scene.tower_targets[0].bug, expected_bug);
         }
+    }
+
+    #[test]
+    fn tower_combat_queues_fire_command_when_ready() {
+        let mut simulation = new_simulation();
+        let spawner = query::bug_spawners(simulation.world())
+            .into_iter()
+            .next()
+            .expect("at least one bug spawner is configured");
+
+        simulation.queued_commands.push(Command::SetPlayMode {
+            mode: PlayMode::Builder,
+        });
+        simulation.advance(Duration::ZERO);
+
+        let placement_tile = TileSpacePosition::from_indices(1, 1);
+        let origin = simulation.tile_position_to_cell(placement_tile);
+        simulation.queued_commands.push(Command::PlaceTower {
+            kind: TowerKind::Basic,
+            origin,
+        });
+        simulation.advance(Duration::ZERO);
+
+        simulation.queued_commands.push(Command::SetPlayMode {
+            mode: PlayMode::Attack,
+        });
+        simulation.advance(Duration::ZERO);
+
+        simulation.queued_commands.push(Command::SpawnBug {
+            spawner,
+            color: BugColor::from_rgb(200, 120, 80),
+            health: Health::new(3),
+        });
+        simulation.advance(Duration::ZERO);
+
+        assert!(
+            simulation
+                .queued_commands()
+                .iter()
+                .any(|command| matches!(command, Command::FireProjectile { .. })),
+            "tower combat should queue a firing command when a target is ready",
+        );
+    }
+
+    #[test]
+    fn tower_combat_respects_cooldown_and_caches_projectiles() {
+        let mut simulation = new_simulation();
+        let spawner = query::bug_spawners(simulation.world())
+            .into_iter()
+            .next()
+            .expect("at least one bug spawner is configured");
+
+        simulation.queued_commands.push(Command::SetPlayMode {
+            mode: PlayMode::Builder,
+        });
+        simulation.advance(Duration::ZERO);
+
+        let placement_tile = TileSpacePosition::from_indices(1, 1);
+        let origin = simulation.tile_position_to_cell(placement_tile);
+        simulation.queued_commands.push(Command::PlaceTower {
+            kind: TowerKind::Basic,
+            origin,
+        });
+        simulation.advance(Duration::ZERO);
+
+        simulation.queued_commands.push(Command::SetPlayMode {
+            mode: PlayMode::Attack,
+        });
+        simulation.advance(Duration::ZERO);
+
+        simulation.queued_commands.push(Command::SpawnBug {
+            spawner,
+            color: BugColor::from_rgb(210, 160, 90),
+            health: Health::new(3),
+        });
+        simulation.advance(Duration::ZERO);
+
+        assert!(
+            simulation
+                .queued_commands()
+                .iter()
+                .any(|command| matches!(command, Command::FireProjectile { .. })),
+            "initial firing command should be queued",
+        );
+
+        simulation.advance(Duration::ZERO);
+
+        assert!(
+            !simulation
+                .queued_commands()
+                .iter()
+                .any(|command| matches!(command, Command::FireProjectile { .. })),
+            "cooldown should prevent immediate refire",
+        );
+
+        let snapshot = simulation
+            .tower_cooldowns()
+            .iter()
+            .next()
+            .copied()
+            .expect("cooldown snapshot should exist after firing");
+        assert!(!snapshot.ready_in.is_zero());
+        assert_eq!(simulation.tower_cooldowns().iter().count(), 1);
+
+        assert!(
+            !simulation.projectiles().is_empty(),
+            "projectile snapshots should be cached after firing",
+        );
+
+        simulation.queued_commands.push(Command::SetPlayMode {
+            mode: PlayMode::Builder,
+        });
+        simulation.advance(Duration::ZERO);
+
+        assert!(simulation.projectiles().is_empty());
+        assert_eq!(simulation.tower_cooldowns().iter().count(), 0);
+        let no_pending_fire = simulation
+            .queued_commands()
+            .iter()
+            .all(|command| !matches!(command, Command::FireProjectile { .. }));
+        assert!(no_pending_fire);
     }
 
     #[test]

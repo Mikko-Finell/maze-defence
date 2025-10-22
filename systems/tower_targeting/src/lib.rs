@@ -9,7 +9,9 @@
 
 //! Pure system that computes deterministic tower targets from world snapshots.
 
-use maze_defence_core::{BugId, BugView, PlayMode, TowerId, TowerKind, TowerView};
+use maze_defence_core::{
+    BugId, BugView, CellPoint, PlayMode, TowerId, TowerKind, TowerTarget, TowerView,
+};
 
 /// Tower targeting system that reuses scratch buffers to avoid repeated allocations.
 #[derive(Debug, Default)]
@@ -150,28 +152,6 @@ impl TowerTargeting {
     }
 }
 
-/// Target assignment describing a tower aiming at a specific bug.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct TowerTarget {
-    /// Identifier of the tower emitting the targeting beam.
-    pub tower: TowerId,
-    /// Identifier of the bug selected as the target.
-    pub bug: BugId,
-    /// Centre of the tower footprint expressed in cell coordinates.
-    pub tower_center_cells: CellPoint,
-    /// Centre of the targeted bug expressed in cell coordinates.
-    pub bug_center_cells: CellPoint,
-}
-
-/// Point in cell space expressed using floating point coordinates.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct CellPoint {
-    /// Column coordinate measured in cell units.
-    pub column: f32,
-    /// Row coordinate measured in cell units.
-    pub row: f32,
-}
-
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct TowerWorkspace {
     id: TowerId,
@@ -195,10 +175,7 @@ struct HalfCellPoint {
 
 impl HalfCellPoint {
     fn to_cell_point(self) -> CellPoint {
-        CellPoint {
-            column: self.column as f32 / 2.0,
-            row: self.row as f32 / 2.0,
-        }
+        CellPoint::new(self.column as f32 / 2.0, self.row as f32 / 2.0)
     }
 }
 
@@ -281,20 +258,8 @@ mod tests {
         let target = out[0];
         assert_eq!(target.tower, TowerId::new(1));
         assert_eq!(target.bug, BugId::new(2));
-        assert_eq!(
-            target.tower_center_cells,
-            CellPoint {
-                column: 5.0,
-                row: 5.0
-            }
-        );
-        assert_eq!(
-            target.bug_center_cells,
-            CellPoint {
-                column: 7.5,
-                row: 5.5
-            }
-        );
+        assert_eq!(target.tower_center_cells, CellPoint::new(5.0, 5.0));
+        assert_eq!(target.bug_center_cells, CellPoint::new(7.5, 5.5));
     }
 
     #[test]
@@ -332,13 +297,7 @@ mod tests {
         system.handle(PlayMode::Attack, &towers, &bugs, 4, &mut out);
 
         assert_eq!(out.len(), 1);
-        assert_eq!(
-            out[0].bug_center_cells,
-            CellPoint {
-                column: 4.5,
-                row: 5.5,
-            }
-        );
+        assert_eq!(out[0].bug_center_cells, CellPoint::new(4.5, 5.5));
     }
 
     #[test]
@@ -351,13 +310,7 @@ mod tests {
         system.handle(PlayMode::Attack, &towers, &bugs, 4, &mut out);
 
         assert_eq!(out.len(), 1);
-        assert_eq!(
-            out[0].bug_center_cells,
-            CellPoint {
-                column: 5.5,
-                row: 4.5,
-            }
-        );
+        assert_eq!(out[0].bug_center_cells, CellPoint::new(5.5, 4.5));
     }
 
     #[test]
@@ -381,14 +334,8 @@ mod tests {
         let mut out = vec![TowerTarget {
             tower: TowerId::new(99),
             bug: BugId::new(99),
-            tower_center_cells: CellPoint {
-                column: 0.0,
-                row: 0.0,
-            },
-            bug_center_cells: CellPoint {
-                column: 0.0,
-                row: 0.0,
-            },
+            tower_center_cells: CellPoint::new(0.0, 0.0),
+            bug_center_cells: CellPoint::new(0.0, 0.0),
         }];
 
         system.handle(PlayMode::Builder, &towers, &bugs, 2, &mut out);

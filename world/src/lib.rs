@@ -22,8 +22,11 @@ use towers::{footprint_for, TowerRegistry, TowerState};
 
 use maze_defence_core::{
     BugColor, BugId, CellCoord, CellPointHalf, Command, Damage, Direction, Event, Health, PlayMode,
-    ProjectileId, ProjectileRejection, Target, TargetCell, TileCoord, TileGrid, WELCOME_BANNER,
+    ProjectileId, Target, TargetCell, TileCoord, TileGrid, WELCOME_BANNER,
 };
+
+#[cfg(any(test, feature = "tower_scaffolding"))]
+use maze_defence_core::ProjectileRejection;
 
 use maze_defence_core::structures::Wall as CellWall;
 
@@ -57,6 +60,7 @@ pub struct World {
     bug_spawners: BugSpawnerRegistry,
     next_bug_id: u32,
     projectiles: BTreeMap<ProjectileId, ProjectileState>,
+    #[cfg_attr(not(any(test, feature = "tower_scaffolding")), allow(dead_code))]
     next_projectile_id: ProjectileId,
     occupancy: OccupancyGrid,
     walls: MazeWalls,
@@ -183,6 +187,7 @@ impl World {
         bug_id
     }
 
+    #[cfg_attr(not(any(test, feature = "tower_scaffolding")), allow(dead_code))]
     fn next_projectile_identifier(&mut self) -> ProjectileId {
         let id = self.next_projectile_id;
         let next = self.next_projectile_id.get().saturating_add(1);
@@ -1494,7 +1499,8 @@ fn advance_cell(
 mod tests {
     use super::*;
     use maze_defence_core::{
-        BugColor, BugId, Direction, Goal, Health, PlayMode, ProjectileId, TowerId,
+        BugColor, BugId, BugSnapshot, Direction, Goal, Health, PlayMode, ProjectileId,
+        ProjectileSnapshot, TowerCooldownSnapshot, TowerId, TowerKind,
     };
 
     use std::{
@@ -4033,6 +4039,453 @@ mod tests {
 
         let bug_view = query::bug_view(&world);
         assert!(bug_view.iter().any(|bug| bug.ready_for_step));
+    }
+
+    #[test]
+    fn projectile_replay_is_deterministic() {
+        let script = scripted_combat_commands();
+        let first = replay_combat_script(script.clone());
+        let second = replay_combat_script(script);
+
+        assert_eq!(first, second, "combat replay diverged between runs");
+
+        let fingerprint = first.fingerprint();
+        let expected = 0xbf2b_751d_14c6_1a79;
+        assert_eq!(
+            fingerprint, expected,
+            "combat replay fingerprint mismatch: {fingerprint:#x}"
+        );
+    }
+
+    fn replay_combat_script(commands: Vec<Command>) -> CombatReplayOutcome {
+        let mut world = World::new();
+        let mut log = Vec::new();
+
+        for command in commands {
+            let mut events = Vec::new();
+            apply(&mut world, command, &mut events);
+            log.extend(events.into_iter().map(CombatEventRecord::from));
+        }
+
+        let towers = query::towers(&world)
+            .into_vec()
+            .into_iter()
+            .map(TowerRecord::from)
+            .collect();
+
+        let cooldowns = query::tower_cooldowns(&world)
+            .into_vec()
+            .into_iter()
+            .map(TowerCooldownRecord::from)
+            .collect();
+
+        let bugs = query::bug_view(&world)
+            .into_vec()
+            .into_iter()
+            .map(BugRecord::from)
+            .collect();
+
+        let projectiles = query::projectiles(&world)
+            .map(ProjectileRecord::from)
+            .collect();
+
+        CombatReplayOutcome {
+            towers,
+            cooldowns,
+            bugs,
+            projectiles,
+            next_bug_id: world.next_bug_id,
+            next_projectile_id: world.next_projectile_id,
+            events: log,
+        }
+    }
+
+    fn scripted_combat_commands() -> Vec<Command> {
+        let mut world = World::new();
+        let mut commands = Vec::new();
+        let mut events = Vec::new();
+
+        let enter_builder = Command::SetPlayMode {
+            mode: PlayMode::Builder,
+        };
+        commands.push(enter_builder.clone());
+        apply(&mut world, enter_builder, &mut events);
+        assert_eq!(
+            events,
+            vec![Event::PlayModeChanged {
+                mode: PlayMode::Builder,
+            }]
+        );
+        events.clear();
+
+        let near_origin = CellCoord::new(2, 2);
+        let place_near = Command::PlaceTower {
+            kind: TowerKind::Basic,
+            origin: near_origin,
+        };
+        commands.push(place_near.clone());
+        apply(&mut world, place_near, &mut events);
+        let near_tower = match events.as_slice() {
+            [Event::TowerPlaced { tower, .. }] => *tower,
+            other => panic!("unexpected events when placing near tower: {other:?}"),
+        };
+        events.clear();
+
+        let far_origin = CellCoord::new(6, 6);
+        let place_far = Command::PlaceTower {
+            kind: TowerKind::Basic,
+            origin: far_origin,
+        };
+        commands.push(place_far.clone());
+        apply(&mut world, place_far, &mut events);
+        let far_tower = match events.as_slice() {
+            [Event::TowerPlaced { tower, .. }] => *tower,
+            other => panic!("unexpected events when placing far tower: {other:?}"),
+        };
+        events.clear();
+
+        let enter_attack = Command::SetPlayMode {
+            mode: PlayMode::Attack,
+        };
+        commands.push(enter_attack.clone());
+        apply(&mut world, enter_attack, &mut events);
+        assert_eq!(
+            events,
+            vec![Event::PlayModeChanged {
+                mode: PlayMode::Attack,
+            }]
+        );
+        events.clear();
+
+        let spawner = query::bug_spawners(&world)
+            .into_iter()
+            .next()
+            .expect("expected at least one spawner");
+        let spawn_bug = Command::SpawnBug {
+            spawner,
+            color: BugColor::from_rgb(0xaa, 0x44, 0x22),
+            health: Health::new(1),
+        };
+        commands.push(spawn_bug.clone());
+        apply(&mut world, spawn_bug, &mut events);
+        let bug_id = match events.as_slice() {
+            [Event::BugSpawned { bug_id, .. }] => *bug_id,
+            other => panic!("unexpected events when spawning bug: {other:?}"),
+        };
+        events.clear();
+
+        let fire_near = Command::FireProjectile {
+            tower: near_tower,
+            target: bug_id,
+        };
+        commands.push(fire_near.clone());
+        apply(&mut world, fire_near, &mut events);
+        let near_projectile = match events.as_slice() {
+            [Event::ProjectileFired { projectile, .. }] => *projectile,
+            other => panic!("unexpected events when firing projectile from near tower: {other:?}"),
+        };
+        events.clear();
+
+        let fire_far = Command::FireProjectile {
+            tower: far_tower,
+            target: bug_id,
+        };
+        commands.push(fire_far.clone());
+        apply(&mut world, fire_far, &mut events);
+        let far_projectile = match events.as_slice() {
+            [Event::ProjectileFired { projectile, .. }] => *projectile,
+            other => panic!("unexpected events when firing projectile from far tower: {other:?}"),
+        };
+        events.clear();
+
+        let mut projectile_states: Vec<ProjectileState> =
+            world.projectiles.values().cloned().collect();
+        assert_eq!(
+            projectile_states.len(),
+            2,
+            "expected two active projectiles"
+        );
+        projectile_states.sort_by_key(|state| state.distance_half);
+
+        let first = &projectile_states[0];
+        let second = &projectile_states[1];
+        let first_time = travel_time_millis(first);
+        let second_time = travel_time_millis(second);
+        assert!(
+            first_time < second_time,
+            "expected first projectile to arrive before second"
+        );
+        let first_id = first.id;
+        let second_id = second.id;
+        let first_damage = first.damage;
+
+        let first_dt = Duration::from_millis(
+            u64::try_from(first_time).expect("projectile travel time fits in u64"),
+        );
+        let resolve_first = Command::Tick { dt: first_dt };
+        commands.push(resolve_first.clone());
+        apply(&mut world, resolve_first, &mut events);
+        match events.as_slice() {
+            [Event::TimeAdvanced { dt }, Event::BugDamaged { bug, remaining }, Event::BugDied { bug: died_bug }, Event::ProjectileHit {
+                projectile,
+                target,
+                damage,
+            }] if *dt == first_dt
+                && *bug == bug_id
+                && *remaining == Health::ZERO
+                && *died_bug == bug_id
+                && *projectile == first_id
+                && *target == bug_id
+                && *damage == first_damage => {}
+            other => panic!("unexpected events when resolving first projectile tick: {other:?}"),
+        }
+        events.clear();
+
+        let remaining_time = second_time - first_time;
+        assert!(
+            remaining_time > 0,
+            "expected second projectile to require extra time"
+        );
+        let remaining_dt = Duration::from_millis(
+            u64::try_from(remaining_time).expect("remaining travel time fits in u64"),
+        );
+        let resolve_second = Command::Tick { dt: remaining_dt };
+        commands.push(resolve_second.clone());
+        apply(&mut world, resolve_second, &mut events);
+        match events.as_slice() {
+            [Event::TimeAdvanced { dt }, Event::ProjectileExpired { projectile }]
+                if *dt == remaining_dt && *projectile == second_id => {}
+            other => panic!("unexpected events when resolving second projectile tick: {other:?}"),
+        }
+        events.clear();
+
+        assert_eq!(
+            [near_projectile, far_projectile]
+                .iter()
+                .copied()
+                .collect::<BTreeSet<_>>(),
+            [first_id, second_id]
+                .iter()
+                .copied()
+                .collect::<BTreeSet<_>>(),
+            "projectile identifiers changed unexpectedly",
+        );
+        assert!(
+            world.projectiles.is_empty(),
+            "expected no remaining projectiles"
+        );
+        assert!(
+            world.bugs.is_empty(),
+            "expected bug to be removed after death"
+        );
+
+        commands
+    }
+
+    fn travel_time_millis(projectile: &ProjectileState) -> u128 {
+        let speed = u128::from(projectile.speed_half_per_ms);
+        if speed == 0 {
+            return 0;
+        }
+        (projectile.distance_half + speed - 1) / speed
+    }
+
+    #[derive(Clone, Debug, PartialEq, Eq, Hash)]
+    struct CombatReplayOutcome {
+        towers: Vec<TowerRecord>,
+        cooldowns: Vec<TowerCooldownRecord>,
+        bugs: Vec<BugRecord>,
+        projectiles: Vec<ProjectileRecord>,
+        next_bug_id: u32,
+        next_projectile_id: ProjectileId,
+        events: Vec<CombatEventRecord>,
+    }
+
+    impl CombatReplayOutcome {
+        fn fingerprint(&self) -> u64 {
+            let mut hasher = DefaultHasher::new();
+            self.hash(&mut hasher);
+            hasher.finish()
+        }
+    }
+
+    #[derive(Clone, Debug, PartialEq, Eq, Hash)]
+    struct TowerCooldownRecord {
+        tower: TowerId,
+        kind: TowerKind,
+        ready_in_micros: u128,
+    }
+
+    impl From<TowerCooldownSnapshot> for TowerCooldownRecord {
+        fn from(snapshot: TowerCooldownSnapshot) -> Self {
+            Self {
+                tower: snapshot.tower,
+                kind: snapshot.kind,
+                ready_in_micros: snapshot.ready_in.as_micros(),
+            }
+        }
+    }
+
+    #[derive(Clone, Debug, PartialEq, Eq, Hash)]
+    struct BugRecord {
+        id: BugId,
+        cell: CellCoord,
+        color: (u8, u8, u8),
+        health: Health,
+        ready_for_step: bool,
+        accumulated_micros: u128,
+    }
+
+    impl From<BugSnapshot> for BugRecord {
+        fn from(snapshot: BugSnapshot) -> Self {
+            Self {
+                id: snapshot.id,
+                cell: snapshot.cell,
+                color: (
+                    snapshot.color.red(),
+                    snapshot.color.green(),
+                    snapshot.color.blue(),
+                ),
+                health: snapshot.health,
+                ready_for_step: snapshot.ready_for_step,
+                accumulated_micros: snapshot.accumulated.as_micros(),
+            }
+        }
+    }
+
+    #[derive(Clone, Debug, PartialEq, Eq, Hash)]
+    struct ProjectileRecord {
+        projectile: ProjectileId,
+        tower: TowerId,
+        target: BugId,
+        origin_half: CellPointHalf,
+        dest_half: CellPointHalf,
+        distance_half: u128,
+        travelled_half: u128,
+        speed_half_per_ms: u32,
+    }
+
+    impl From<ProjectileSnapshot> for ProjectileRecord {
+        fn from(snapshot: ProjectileSnapshot) -> Self {
+            Self {
+                projectile: snapshot.projectile,
+                tower: snapshot.tower,
+                target: snapshot.target,
+                origin_half: snapshot.origin_half,
+                dest_half: snapshot.dest_half,
+                distance_half: snapshot.distance_half,
+                travelled_half: snapshot.travelled_half,
+                speed_half_per_ms: snapshot.speed_half_per_ms,
+            }
+        }
+    }
+
+    #[derive(Clone, Debug, PartialEq, Eq, Hash)]
+    enum CombatEventRecord {
+        PlayModeChanged {
+            mode: PlayMode,
+        },
+        TowerPlaced {
+            tower: TowerId,
+            kind: TowerKind,
+            region: CellRect,
+        },
+        BugSpawned {
+            bug: BugId,
+            cell: CellCoord,
+            color: (u8, u8, u8),
+            health: Health,
+        },
+        ProjectileFired {
+            projectile: ProjectileId,
+            tower: TowerId,
+            target: BugId,
+        },
+        ProjectileHit {
+            projectile: ProjectileId,
+            target: BugId,
+            damage: Damage,
+        },
+        ProjectileExpired {
+            projectile: ProjectileId,
+        },
+        ProjectileRejected {
+            tower: TowerId,
+            target: BugId,
+            reason: ProjectileRejection,
+        },
+        BugDamaged {
+            bug: BugId,
+            remaining: Health,
+        },
+        BugDied {
+            bug: BugId,
+        },
+        TimeAdvanced {
+            dt_micros: u128,
+        },
+    }
+
+    impl From<Event> for CombatEventRecord {
+        fn from(event: Event) -> Self {
+            match event {
+                Event::PlayModeChanged { mode } => Self::PlayModeChanged { mode },
+                Event::TowerPlaced {
+                    tower,
+                    kind,
+                    region,
+                } => Self::TowerPlaced {
+                    tower,
+                    kind,
+                    region,
+                },
+                Event::BugSpawned {
+                    bug_id,
+                    cell,
+                    color,
+                    health,
+                } => Self::BugSpawned {
+                    bug: bug_id,
+                    cell,
+                    color: (color.red(), color.green(), color.blue()),
+                    health,
+                },
+                Event::ProjectileFired {
+                    projectile,
+                    tower,
+                    target,
+                } => Self::ProjectileFired {
+                    projectile,
+                    tower,
+                    target,
+                },
+                Event::ProjectileHit {
+                    projectile,
+                    target,
+                    damage,
+                } => Self::ProjectileHit {
+                    projectile,
+                    target,
+                    damage,
+                },
+                Event::ProjectileExpired { projectile } => Self::ProjectileExpired { projectile },
+                Event::ProjectileRejected {
+                    tower,
+                    target,
+                    reason,
+                } => Self::ProjectileRejected {
+                    tower,
+                    target,
+                    reason,
+                },
+                Event::BugDamaged { bug, remaining } => Self::BugDamaged { bug, remaining },
+                Event::BugDied { bug } => Self::BugDied { bug },
+                Event::TimeAdvanced { dt } => Self::TimeAdvanced {
+                    dt_micros: dt.as_micros(),
+                },
+                other => panic!("unexpected event emitted during combat replay: {other:?}"),
+            }
+        }
     }
 
     #[test]
