@@ -162,6 +162,146 @@ fn step_commands_target_free_cells() {
 }
 
 #[test]
+fn followers_advance_when_ahead_cells_are_occupied_later() {
+    let mut world = World::new();
+    let mut setup_events = Vec::new();
+    world::apply(
+        &mut world,
+        Command::ConfigureTileGrid {
+            columns: TileCoord::new(3),
+            rows: TileCoord::new(5),
+            tile_length: 1.0,
+            cells_per_tile: 1,
+        },
+        &mut setup_events,
+    );
+
+    let mut movement = Movement::default();
+    pump_system(&mut world, &mut movement, setup_events);
+
+    let target_cells = query::target_cells(&world);
+    let main_target = target_cells
+        .first()
+        .copied()
+        .expect("expected at least one target cell");
+    let spawn = CellCoord::new(main_target.column(), 0);
+
+    let mut spawn_events = Vec::new();
+    world::apply(
+        &mut world,
+        Command::SpawnBug {
+            spawner: spawn,
+            color: BugColor::from_rgb(0x2f, 0x95, 0x32),
+            health: Health::new(3),
+        },
+        &mut spawn_events,
+    );
+    pump_system(&mut world, &mut movement, spawn_events);
+
+    let initial_leader_cell = query::bug_view(&world)
+        .into_vec()
+        .into_iter()
+        .next()
+        .expect("leader spawn snapshot available")
+        .cell;
+    let spawn_column = initial_leader_cell.column();
+    let spawn_row = initial_leader_cell.row();
+
+    let step = Duration::from_millis(250);
+    for _ in 0..2 {
+        let mut tick_events = Vec::new();
+        world::apply(&mut world, Command::Tick { dt: step }, &mut tick_events);
+        pump_system(&mut world, &mut movement, tick_events);
+    }
+
+    let leader_snapshot = query::bug_view(&world)
+        .into_vec()
+        .into_iter()
+        .next()
+        .expect("leader should remain in the world");
+    assert_eq!(leader_snapshot.cell.column(), spawn_column);
+    assert_eq!(
+        leader_snapshot.cell.row(),
+        spawn_row + 2,
+        "leader should advance two cells before the follower spawns",
+    );
+    let leader_id = leader_snapshot.id;
+
+    let mut follower_events = Vec::new();
+    world::apply(
+        &mut world,
+        Command::SpawnBug {
+            spawner: spawn,
+            color: BugColor::from_rgb(0x2f, 0x95, 0x32),
+            health: Health::new(3),
+        },
+        &mut follower_events,
+    );
+    pump_system(&mut world, &mut movement, follower_events);
+
+    let bug_view = query::bug_view(&world);
+    assert_eq!(bug_view.iter().count(), 2, "both bugs must be present");
+    let follower_snapshot = bug_view
+        .iter()
+        .max_by_key(|snapshot| snapshot.id)
+        .expect("expected follower snapshot");
+    assert_eq!(
+        follower_snapshot.cell,
+        CellCoord::new(spawn_column, spawn_row),
+        "follower should spawn in the same cell as the leader",
+    );
+    let follower_id = follower_snapshot.id;
+
+    let occupancy_view = query::occupancy_view(&world);
+    let follower_front = CellCoord::new(spawn_column, spawn_row + 1);
+    let leader_cell = CellCoord::new(spawn_column, spawn_row + 2);
+    assert!(occupancy_view.is_free(follower_front));
+    assert_eq!(occupancy_view.occupant(leader_cell), Some(leader_id));
+
+    let mut tick_events = Vec::new();
+    world::apply(&mut world, Command::Tick { dt: step }, &mut tick_events);
+
+    let bug_view = query::bug_view(&world);
+    let occupancy_view = query::occupancy_view(&world);
+    let target_cells = query::target_cells(&world);
+    let navigation_view = query::navigation_field(&world);
+    let reservation_ledger = query::reservation_ledger(&world);
+    let mut commands = Vec::new();
+    movement.handle(
+        &tick_events,
+        &bug_view,
+        occupancy_view,
+        navigation_view,
+        reservation_ledger,
+        &target_cells,
+        |cell| query::is_cell_blocked(&world, cell),
+        &mut commands,
+    );
+
+    let follower_step = commands.iter().find_map(|command| match command {
+        Command::StepBug { bug_id, direction } if *bug_id == follower_id => Some(*direction),
+        _ => None,
+    });
+
+    let direction = follower_step.expect("follower should receive a step command");
+    let destination = advance_cell(follower_snapshot.cell, direction);
+    assert_eq!(destination.column(), spawn_column);
+    assert_eq!(destination.row(), spawn_row + 1);
+
+    let navigation_view = query::navigation_field(&world);
+    let before = navigation_view
+        .distance(follower_snapshot.cell)
+        .expect("navigation distance available for follower");
+    let after = navigation_view
+        .distance(destination)
+        .expect("navigation distance available for destination");
+    assert!(
+        after < before,
+        "movement must reduce the navigation distance"
+    );
+}
+
+#[test]
 fn emits_step_commands_in_bug_id_order() {
     let mut world = World::new();
     let mut events = Vec::new();
