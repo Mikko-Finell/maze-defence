@@ -459,6 +459,27 @@ pub enum ProjectileRejection {
     MissingTarget,
 }
 
+/// Immutable representation of a projectile maintained by the world.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ProjectileSnapshot {
+    /// Identifier allocated to the projectile by the world.
+    pub projectile: ProjectileId,
+    /// Tower that fired the projectile.
+    pub tower: TowerId,
+    /// Intended bug target recorded at launch time.
+    pub target: BugId,
+    /// Starting point of the projectile expressed in half-cell units.
+    pub origin_half: CellPointHalf,
+    /// Destination point of the projectile expressed in half-cell units.
+    pub dest_half: CellPointHalf,
+    /// Total distance the projectile must travel measured in half-cell units.
+    pub distance_half: u128,
+    /// Distance already travelled by the projectile measured in half-cell units.
+    pub travelled_half: u128,
+    /// Projectile speed expressed in half-cell units advanced per millisecond.
+    pub speed_half_per_ms: u32,
+}
+
 /// Unique identifier assigned to a tower.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct TowerId(u32);
@@ -508,6 +529,75 @@ impl CellCoord {
     pub fn manhattan_distance(self, other: CellCoord) -> u32 {
         self.column().abs_diff(other.column()) + self.row().abs_diff(other.row())
     }
+}
+
+/// Coordinate anchored to the centre of a cell measured in half-cell units.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct CellPointHalf {
+    column_half: i64,
+    row_half: i64,
+}
+
+impl CellPointHalf {
+    /// Creates a new half-cell point using the provided integer coordinates.
+    #[must_use]
+    pub const fn new(column_half: i64, row_half: i64) -> Self {
+        Self {
+            column_half,
+            row_half,
+        }
+    }
+
+    /// Half-cell column coordinate represented as a signed integer.
+    #[must_use]
+    pub const fn column_half(&self) -> i64 {
+        self.column_half
+    }
+
+    /// Half-cell row coordinate represented as a signed integer.
+    #[must_use]
+    pub const fn row_half(&self) -> i64 {
+        self.row_half
+    }
+
+    /// Computes the rounded Euclidean distance to another point in half-cell units.
+    #[must_use]
+    pub fn distance_to(self, other: Self) -> u128 {
+        let dx = i128::from(other.column_half).saturating_sub(i128::from(self.column_half));
+        let dy = i128::from(other.row_half).saturating_sub(i128::from(self.row_half));
+        let squared = dx.saturating_mul(dx).saturating_add(dy.saturating_mul(dy)) as u128;
+        let mut distance = integer_sqrt(squared);
+        if distance.saturating_mul(distance) < squared {
+            distance = distance.saturating_add(1);
+        }
+        distance
+    }
+}
+
+fn integer_sqrt(value: u128) -> u128 {
+    if value < 2 {
+        return value;
+    }
+
+    let mut op = value;
+    let mut result = 0_u128;
+    let mut bit = 1_u128 << 126;
+
+    while bit > op {
+        bit >>= 2;
+    }
+
+    while bit != 0 {
+        if op >= result + bit {
+            op -= result + bit;
+            result = (result >> 1) + bit;
+        } else {
+            result >>= 1;
+        }
+        bit >>= 2;
+    }
+
+    result
 }
 
 /// Axis-aligned rectangle expressed in cell coordinates.
@@ -677,6 +767,8 @@ pub struct BugSnapshot {
     pub cell: CellCoord,
     /// Appearance assigned to the bug.
     pub color: BugColor,
+    /// Remaining health stored for the bug.
+    pub health: Health,
     /// Indicates whether the bug accrued enough time to advance.
     pub ready_for_step: bool,
     /// Duration accumulated toward the next step.
@@ -802,6 +894,44 @@ pub struct TowerSnapshot {
     pub kind: TowerKind,
     /// Region of cells occupied by the tower.
     pub region: CellRect,
+}
+
+/// Immutable representation of a tower's firing cooldown state.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TowerCooldownSnapshot {
+    /// Identifier allocated to the tower by the world.
+    pub tower: TowerId,
+    /// Kind of tower that owns the cooldown.
+    pub kind: TowerKind,
+    /// Duration remaining before the tower may fire again.
+    pub ready_in: Duration,
+}
+
+/// Read-only snapshot describing tower cooldown progress.
+#[derive(Clone, Debug, Default)]
+pub struct TowerCooldownView {
+    snapshots: Vec<TowerCooldownSnapshot>,
+}
+
+impl TowerCooldownView {
+    /// Creates a new view from the provided cooldown snapshots.
+    #[must_use]
+    pub fn from_snapshots(mut snapshots: Vec<TowerCooldownSnapshot>) -> Self {
+        snapshots.sort_by_key(|snapshot| snapshot.tower);
+        Self { snapshots }
+    }
+
+    /// Iterator over cooldown snapshots in deterministic order.
+    #[must_use = "iterators are lazy and do nothing unless consumed"]
+    pub fn iter(&self) -> impl Iterator<Item = &TowerCooldownSnapshot> {
+        self.snapshots.iter()
+    }
+
+    /// Consumes the view, yielding the underlying cooldown snapshots.
+    #[must_use]
+    pub fn into_vec(self) -> Vec<TowerCooldownSnapshot> {
+        self.snapshots
+    }
 }
 
 /// Types of towers that can be constructed in the maze.

@@ -408,7 +408,7 @@ fn index(columns: u32, rows: u32, cell: CellCoord) -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use maze_defence_core::BugColor;
+    use maze_defence_core::{BugColor, Health};
     use std::time::Duration;
 
     #[test]
@@ -532,6 +532,7 @@ mod tests {
             id: BugId::new(1),
             cell,
             color: BugColor::from_rgb(0, 0, 0),
+            health: Health::new(3),
             ready_for_step: true,
             accumulated: Duration::default(),
         }

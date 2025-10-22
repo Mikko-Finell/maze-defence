@@ -1,6 +1,6 @@
 //! Authoritative tower state management utilities.
 
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, time::Duration};
 
 use maze_defence_core::{CellRect, CellRectSize, TowerId, TowerKind};
 
@@ -13,6 +13,9 @@ pub(crate) struct TowerState {
     pub(crate) kind: TowerKind,
     /// Region of cells occupied by the tower.
     pub(crate) region: CellRect,
+    /// Remaining cooldown before the tower may fire again.
+    #[allow(dead_code)]
+    pub(crate) cooldown_remaining: Duration,
 }
 
 /// Registry that stores towers and manages identifier allocation.
@@ -48,6 +51,11 @@ impl TowerRegistry {
     /// Retrieves the tower state associated with the identifier, if present.
     pub(crate) fn get(&self, id: TowerId) -> Option<&TowerState> {
         self.entries.get(&id)
+    }
+
+    /// Retrieves a mutable reference to the tower state for the identifier.
+    pub(crate) fn get_mut(&mut self, id: TowerId) -> Option<&mut TowerState> {
+        self.entries.get_mut(&id)
     }
 
     /// Removes the tower associated with the identifier, returning its state.
@@ -112,6 +120,7 @@ mod tests {
             id,
             kind: TowerKind::Basic,
             region,
+            cooldown_remaining: Duration::ZERO,
         });
 
         let retrieved = registry.get(id).expect("tower present");
@@ -130,10 +139,12 @@ mod tests {
             id: TowerId::new(7),
             kind: TowerKind::Basic,
             region,
+            cooldown_remaining: Duration::ZERO,
         };
 
         assert_eq!(state.id, TowerId::new(7));
         assert_eq!(state.kind, TowerKind::Basic);
         assert_eq!(state.region, region);
+        assert_eq!(state.cooldown_remaining, Duration::ZERO);
     }
 }

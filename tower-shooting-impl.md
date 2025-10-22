@@ -14,7 +14,7 @@ The sequence below layers combat from contracts → world authority → pure sys
 
 **Exit checks:** `core` compiles, serialization/serde (if present) covers the new types, and unit tests prove the constant values/constructors.
 
-# 2) World data scaffolding (`world`) — TODO
+# 2) World data scaffolding (`world`) — DONE
 
 **Goal:** Prepare authoritative storage for cooldowns, health, and projectiles without altering behaviour yet.
 
@@ -27,7 +27,7 @@ The sequence below layers combat from contracts → world authority → pure sys
 
 **Exit checks:** World crate compiles, state constructors/tests updated, and existing behaviour is unchanged when no projectiles exist.
 
-# 3) World command handling — TODO
+# 3) World command handling — DONE
 
 **Goal:** Make the world authoritatively accept or reject `FireProjectile` requests.
 
@@ -39,7 +39,7 @@ The sequence below layers combat from contracts → world authority → pure sys
 
 **Exit checks:** Focused world unit tests cover each rejection reason and the success path, ensuring state mutations/events match expectations.
 
-# 4) Tick integration & bug death — TODO
+# 4) Tick integration & bug death — DONE
 
 **Goal:** Advance cooldowns/projectiles during attack ticks and resolve damage deterministically.
 
@@ -52,7 +52,7 @@ The sequence below layers combat from contracts → world authority → pure sys
 
 **Exit checks:** World tests cover cooldown pausing/resuming, projectile travel with varied `dt`, damage/death ordering, and expiration when bugs die early.
 
-# 5) World queries & views — TODO
+# 5) World queries & views — DONE
 
 **Goal:** Expose read-only projections for systems/adapters without leaking internals.
 
