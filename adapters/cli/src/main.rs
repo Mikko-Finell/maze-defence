@@ -599,10 +599,14 @@ impl Simulation {
             None
         };
         scene.hovered_tower = if scene.play_mode == PlayMode::Attack {
-            self.pending_input
-                .cursor_tile_space
-                .map(|tile| self.tile_position_to_cell(tile))
-                .and_then(|cell| query::tower_at(&self.world, cell))
+            if self.pending_input.cursor_tile_space.is_some() {
+                self.pending_input
+                    .cursor_world_space
+                    .and_then(|world| self.world_position_to_cell(world))
+                    .and_then(|cell| query::tower_at(&self.world, cell))
+            } else {
+                None
+            }
         } else {
             None
         };
@@ -819,10 +823,13 @@ impl Simulation {
     }
 
     fn prepare_builder_input(&mut self) -> TowerBuilderInput {
-        let cursor_cell = self
-            .pending_input
-            .cursor_tile_space
-            .map(|tile| self.tile_position_to_cell(tile));
+        let cursor_cell = if self.pending_input.cursor_tile_space.is_some() {
+            self.pending_input
+                .cursor_world_space
+                .and_then(|world| self.world_position_to_cell(world))
+        } else {
+            None
+        };
         let input = TowerBuilderInput::new(
             self.pending_input.confirm_action,
             self.pending_input.remove_action,
@@ -875,6 +882,44 @@ impl Simulation {
             footprint.width() as f32 / self.cells_per_tile as f32,
             footprint.height() as f32 / self.cells_per_tile as f32,
         )
+    }
+
+    fn world_position_to_cell(&self, position: Vec2) -> Option<CellCoord> {
+        if !position.x.is_finite() || !position.y.is_finite() {
+            return None;
+        }
+
+        let tile_grid = query::tile_grid(&self.world);
+        let tile_length = tile_grid.tile_length();
+        if tile_length <= f32::EPSILON {
+            return None;
+        }
+
+        let cells_per_tile = self.cells_per_tile.max(1);
+
+        let cell_length = tile_length / cells_per_tile as f32;
+        if cell_length <= f32::EPSILON {
+            return None;
+        }
+
+        let total_columns = tile_grid.columns().get().saturating_mul(cells_per_tile);
+        let total_rows = tile_grid.rows().get().saturating_mul(cells_per_tile);
+        if total_columns == 0 || total_rows == 0 {
+            return None;
+        }
+
+        let max_column = (total_columns - 1) as f32;
+        let max_row = (total_rows - 1) as f32;
+        let column = (position.x / cell_length).floor().clamp(0.0, max_column);
+        let row = (position.y / cell_length).floor().clamp(0.0, max_row);
+
+        let column_cells = column as u32;
+        let row_cells = row as u32;
+
+        Some(CellCoord::new(
+            TileGridPresentation::SIDE_BORDER_CELL_LAYERS.saturating_add(column_cells),
+            TileGridPresentation::TOP_BORDER_CELL_LAYERS.saturating_add(row_cells),
+        ))
     }
 
     fn tile_position_to_cell(&self, position: TileSpacePosition) -> CellCoord {
@@ -1006,6 +1051,20 @@ mod tests {
             None,
             None,
             None,
+        )
+    }
+
+    fn cell_world_position(cell: CellCoord, tile_grid: TileGridPresentation) -> Vec2 {
+        let cell_length = tile_grid.cell_length();
+        let interior_column = cell
+            .column()
+            .saturating_sub(TileGridPresentation::SIDE_BORDER_CELL_LAYERS);
+        let interior_row = cell
+            .row()
+            .saturating_sub(TileGridPresentation::TOP_BORDER_CELL_LAYERS);
+        Vec2::new(
+            (interior_column as f32 + 0.5) * cell_length,
+            (interior_row as f32 + 0.5) * cell_length,
         )
     }
 
@@ -1502,6 +1561,54 @@ mod tests {
 
         assert_eq!(scene.hovered_tower, Some(tower_snapshot.id));
         assert_eq!(scene.play_mode, PlayMode::Attack);
+    }
+
+    #[test]
+    fn populate_scene_marks_hovered_tower_near_region_edge() {
+        let mut simulation = new_simulation();
+        enter_builder_mode(&mut simulation);
+
+        let placement_tile = TileSpacePosition::from_indices(0, 0);
+        let placement_world = Vec2::new(16.0, 16.0);
+
+        simulation.handle_input(FrameInput {
+            cursor_world_space: Some(placement_world),
+            cursor_tile_space: Some(placement_tile),
+            confirm_action: true,
+            ..FrameInput::default()
+        });
+        simulation.advance(Duration::from_millis(16));
+
+        simulation.handle_input(FrameInput {
+            mode_toggle: true,
+            ..FrameInput::default()
+        });
+        simulation.advance(Duration::ZERO);
+        assert_eq!(query::play_mode(simulation.world()), PlayMode::Attack);
+
+        let tower_snapshot = query::towers(simulation.world())
+            .iter()
+            .next()
+            .copied()
+            .expect("tower should be placed");
+        let tile_grid = make_scene().tile_grid;
+        let hover_cell = tower_snapshot.region.origin();
+        let cursor_world = cell_world_position(hover_cell, tile_grid);
+        let cursor_tile = tile_grid
+            .snap_world_to_tile(cursor_world, Vec2::splat(1.0))
+            .expect("cursor should remain within the grid");
+
+        simulation.handle_input(FrameInput {
+            cursor_world_space: Some(cursor_world),
+            cursor_tile_space: Some(cursor_tile),
+            ..FrameInput::default()
+        });
+
+        let mut scene = make_scene();
+        simulation.populate_scene(&mut scene);
+
+        assert_eq!(scene.play_mode, PlayMode::Attack);
+        assert_eq!(scene.hovered_tower, Some(tower_snapshot.id));
     }
 
     #[test]
