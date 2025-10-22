@@ -10,7 +10,7 @@
 //! Authoritative world state management for Maze Defence.
 
 use std::{
-    collections::{BTreeSet, HashMap},
+    collections::{BTreeMap, BTreeSet, HashMap},
     time::Duration,
 };
 
@@ -21,14 +21,16 @@ mod towers;
 use towers::{footprint_for, TowerRegistry, TowerState};
 
 use maze_defence_core::{
-    BugColor, BugId, CellCoord, Command, Direction, Event, Health, PlayMode, Target, TargetCell,
-    TileCoord, TileGrid, WELCOME_BANNER,
+    BugColor, BugId, CellCoord, CellPointHalf, Command, Damage, Direction, Event, Health, PlayMode,
+    ProjectileId, ProjectileRejection, Target, TargetCell, TileCoord, TileGrid, WELCOME_BANNER,
 };
 
 use maze_defence_core::structures::Wall as CellWall;
 
 #[cfg(any(test, feature = "tower_scaffolding"))]
-use maze_defence_core::{CellRect, PlacementError, RemovalError, TowerId, TowerKind};
+use maze_defence_core::{CellRect, PlacementError, RemovalError, TowerKind};
+
+use maze_defence_core::TowerId;
 
 const DEFAULT_GRID_COLUMNS: TileCoord = TileCoord::new(10);
 const DEFAULT_GRID_ROWS: TileCoord = TileCoord::new(10);
@@ -54,6 +56,8 @@ pub struct World {
     bug_positions: HashMap<BugId, usize>,
     bug_spawners: BugSpawnerRegistry,
     next_bug_id: u32,
+    projectiles: BTreeMap<ProjectileId, ProjectileState>,
+    next_projectile_id: ProjectileId,
     occupancy: OccupancyGrid,
     walls: MazeWalls,
     #[cfg(any(test, feature = "tower_scaffolding"))]
@@ -90,6 +94,8 @@ impl World {
             bug_positions: HashMap::new(),
             bug_spawners: BugSpawnerRegistry::new(),
             next_bug_id: 0,
+            projectiles: BTreeMap::new(),
+            next_projectile_id: ProjectileId::new(0),
             occupancy,
             walls,
             #[cfg(any(test, feature = "tower_scaffolding"))]
@@ -156,7 +162,8 @@ impl World {
         }
 
         let bug_id = self.next_bug_identifier();
-        let bug = Bug::new(bug_id, cell, color);
+        let bug = Bug::new(bug_id, cell, color, health);
+        let bug_health = bug.health();
         self.occupancy.occupy(bug_id, cell);
         let index = self.bugs.len();
         self.bugs.push(bug);
@@ -166,7 +173,7 @@ impl World {
             bug_id,
             cell,
             color,
-            health,
+            health: bug_health,
         });
     }
 
@@ -174,6 +181,13 @@ impl World {
         let bug_id = BugId::new(self.next_bug_id);
         self.next_bug_id = self.next_bug_id.saturating_add(1);
         bug_id
+    }
+
+    fn next_projectile_identifier(&mut self) -> ProjectileId {
+        let id = self.next_projectile_id;
+        let next = self.next_projectile_id.get().saturating_add(1);
+        self.next_projectile_id = ProjectileId::new(next);
+        id
     }
 
     fn resolve_pending_steps(&mut self, out_events: &mut Vec<Event>) {
@@ -242,6 +256,20 @@ impl World {
             out_events.push(Event::BugExited { bug_id, cell });
         }
     }
+
+    #[allow(dead_code)]
+    fn cleanup_dead_bugs(&mut self) {
+        let mut index = 0;
+        while index < self.bugs.len() {
+            if self.bugs[index].is_dead() {
+                let cell = self.bugs[index].cell;
+                self.occupancy.vacate(cell);
+                self.remove_bug_at_index(index);
+            } else {
+                index += 1;
+            }
+        }
+    }
 }
 
 impl Default for World {
@@ -287,6 +315,37 @@ pub fn apply(world: &mut World, command: Command, out_events: &mut Vec<Event>) {
             }
             world.tick_index = world.tick_index.saturating_add(1);
             out_events.push(Event::TimeAdvanced { dt });
+
+            #[cfg(any(test, feature = "tower_scaffolding"))]
+            {
+                let tower_ids: Vec<_> = world.towers.iter().map(|state| state.id).collect();
+                for tower_id in tower_ids {
+                    if let Some(state) = world.towers.get_mut(tower_id) {
+                        state.cooldown_remaining = state.cooldown_remaining.saturating_sub(dt);
+                    }
+                }
+            }
+
+            let dt_millis = dt.as_millis();
+            let projectile_ids: Vec<_> = world.projectiles.keys().copied().collect();
+            let mut completed = Vec::new();
+            for projectile_id in projectile_ids {
+                if let Some(projectile) = world.projectiles.get_mut(&projectile_id) {
+                    let advance_half = u128::from(projectile.speed_half_per_ms) * dt_millis;
+                    let travelled = projectile
+                        .travelled_half
+                        .saturating_add(advance_half)
+                        .min(projectile.distance_half);
+                    projectile.travelled_half = travelled;
+                    if travelled >= projectile.distance_half {
+                        completed.push((projectile_id, projectile.target, projectile.damage));
+                    }
+                }
+            }
+
+            for (projectile_id, target, damage) in completed {
+                world.resolve_projectile_completion(projectile_id, target, damage, out_events);
+            }
 
             let step_quantum = world.step_quantum;
             for bug in world.iter_bugs_mut() {
@@ -335,6 +394,12 @@ pub fn apply(world: &mut World, command: Command, out_events: &mut Vec<Event>) {
             world.spawn_from_spawner(spawner, color, health, out_events);
         }
         Command::FireProjectile { tower, target } => {
+            #[cfg(any(test, feature = "tower_scaffolding"))]
+            {
+                world.handle_fire_projectile(tower, target, out_events);
+            }
+
+            #[cfg(not(any(test, feature = "tower_scaffolding")))]
             let _ = (tower, target);
         }
         Command::PlaceTower { kind, origin } => {
@@ -363,6 +428,149 @@ impl World {
         let (columns, rows) = self.occupancy.dimensions();
         self.bug_spawners.assign_outer_rim(columns, rows);
         self.bug_spawners.remove_bottom_row(columns, rows);
+    }
+
+    #[cfg(any(test, feature = "tower_scaffolding"))]
+    fn handle_fire_projectile(
+        &mut self,
+        tower: TowerId,
+        target: BugId,
+        out_events: &mut Vec<Event>,
+    ) {
+        if self.play_mode != PlayMode::Attack {
+            out_events.push(Event::ProjectileRejected {
+                tower,
+                target,
+                reason: ProjectileRejection::InvalidMode,
+            });
+            return;
+        }
+
+        let Some(tower_state) = self.towers.get(tower) else {
+            out_events.push(Event::ProjectileRejected {
+                tower,
+                target,
+                reason: ProjectileRejection::MissingTower,
+            });
+            return;
+        };
+
+        if tower_state.cooldown_remaining > Duration::ZERO {
+            out_events.push(Event::ProjectileRejected {
+                tower,
+                target,
+                reason: ProjectileRejection::CooldownActive,
+            });
+            return;
+        }
+
+        let tower_region = tower_state.region;
+        let tower_kind = tower_state.kind;
+
+        let Some(bug_index) = self.bug_index(target) else {
+            out_events.push(Event::ProjectileRejected {
+                tower,
+                target,
+                reason: ProjectileRejection::MissingTarget,
+            });
+            return;
+        };
+
+        let bug_cell = {
+            let bug = &self.bugs[bug_index];
+            if bug.health.is_zero() {
+                out_events.push(Event::ProjectileRejected {
+                    tower,
+                    target,
+                    reason: ProjectileRejection::MissingTarget,
+                });
+                return;
+            }
+            bug.cell
+        };
+
+        let projectile_id = self.next_projectile_identifier();
+        let start = tower_center_half(tower_region);
+        let end = bug_center_half(bug_cell);
+        let distance_half = start.distance_to(end);
+        let projectile_state = ProjectileState {
+            id: projectile_id,
+            tower,
+            target,
+            start,
+            end,
+            distance_half,
+            travelled_half: 0,
+            speed_half_per_ms: tower_kind.speed_half_cells_per_ms(),
+            damage: tower_kind.projectile_damage(),
+        };
+        let replaced = self.projectiles.insert(projectile_id, projectile_state);
+        debug_assert!(replaced.is_none());
+
+        if let Some(state) = self.towers.get_mut(tower) {
+            state.cooldown_remaining =
+                Duration::from_millis(u64::from(tower_kind.fire_cooldown_ms()));
+        }
+
+        out_events.push(Event::ProjectileFired {
+            projectile: projectile_id,
+            tower,
+            target,
+        });
+    }
+
+    fn resolve_projectile_completion(
+        &mut self,
+        projectile_id: ProjectileId,
+        target: BugId,
+        damage: Damage,
+        out_events: &mut Vec<Event>,
+    ) {
+        let removed = self.projectiles.remove(&projectile_id);
+        debug_assert!(removed.is_some());
+
+        let Some(index) = self.bug_index(target) else {
+            out_events.push(Event::ProjectileExpired {
+                projectile: projectile_id,
+            });
+            return;
+        };
+
+        if self.bugs[index].health.is_zero() {
+            out_events.push(Event::ProjectileExpired {
+                projectile: projectile_id,
+            });
+            return;
+        }
+
+        let (remaining, death_cell) = {
+            let bug = &mut self.bugs[index];
+            let updated = bug.health.saturating_sub(damage);
+            let death_cell = if updated.is_zero() {
+                Some(bug.cell)
+            } else {
+                None
+            };
+            bug.health = updated;
+            (updated, death_cell)
+        };
+
+        out_events.push(Event::BugDamaged {
+            bug: target,
+            remaining,
+        });
+
+        if let Some(cell) = death_cell {
+            self.occupancy.vacate(cell);
+            self.remove_bug_at_index(index);
+            out_events.push(Event::BugDied { bug: target });
+        }
+
+        out_events.push(Event::ProjectileHit {
+            projectile: projectile_id,
+            target,
+            damage,
+        });
     }
 
     #[cfg(any(test, feature = "tower_scaffolding"))]
@@ -432,7 +640,12 @@ impl World {
 
         let id = self.towers.allocate();
         self.mark_tower_region(region, true);
-        self.towers.insert(TowerState { id, kind, region });
+        self.towers.insert(TowerState {
+            id,
+            kind,
+            region,
+            cooldown_remaining: Duration::ZERO,
+        });
         debug_assert!(self.towers.get(id).is_some());
         out_events.push(Event::TowerPlaced {
             tower: id,
@@ -560,13 +773,16 @@ impl World {
 pub mod query {
     use super::World;
     use maze_defence_core::{
-        BugSnapshot, BugView, CellCoord, Goal, OccupancyView, PlayMode, Target, TileGrid,
+        BugSnapshot, BugView, CellCoord, Goal, OccupancyView, PlayMode, ProjectileSnapshot, Target,
+        TileGrid,
     };
 
     use maze_defence_core::structures::{Wall as CellWall, WallView as CellWallView};
 
     #[cfg(any(test, feature = "tower_scaffolding"))]
-    use maze_defence_core::{CellRect, TowerId, TowerSnapshot, TowerView};
+    use maze_defence_core::{
+        CellRect, TowerCooldownSnapshot, TowerCooldownView, TowerId, TowerSnapshot, TowerView,
+    };
 
     /// Reports the active play mode for the world.
     #[must_use]
@@ -631,10 +847,12 @@ pub mod query {
         let snapshots: Vec<BugSnapshot> = world
             .bugs
             .iter()
+            .filter(|bug| !bug.health.is_zero())
             .map(|bug| BugSnapshot {
                 id: bug.id,
                 cell: bug.cell,
                 color: bug.color,
+                health: bug.health,
                 ready_for_step: bug.ready_for_step(world.step_quantum),
                 accumulated: bug.accumulator,
             })
@@ -710,6 +928,22 @@ pub mod query {
             .map(|tower| tower.id)
     }
 
+    /// Captures a read-only snapshot of tower cooldown progress.
+    #[cfg(any(test, feature = "tower_scaffolding"))]
+    #[must_use]
+    pub fn tower_cooldowns(world: &World) -> TowerCooldownView {
+        let snapshots: Vec<TowerCooldownSnapshot> = world
+            .towers
+            .iter()
+            .map(|tower| TowerCooldownSnapshot {
+                tower: tower.id,
+                kind: tower.kind,
+                ready_in: tower.cooldown_remaining,
+            })
+            .collect();
+        TowerCooldownView::from_snapshots(snapshots)
+    }
+
     /// Enumerates the wall target cells bugs should attempt to reach.
     #[must_use]
     pub fn target_cells(world: &World) -> Vec<CellCoord> {
@@ -720,6 +954,24 @@ pub mod query {
     #[must_use]
     pub fn bug_spawners(world: &World) -> Vec<CellCoord> {
         world.bug_spawners.iter().collect()
+    }
+
+    /// Iterates over the projectile states stored within the world.
+    #[must_use = "iterators are lazy and do nothing unless consumed"]
+    pub fn projectiles(world: &World) -> impl Iterator<Item = ProjectileSnapshot> + '_ {
+        world
+            .projectiles
+            .values()
+            .map(|projectile| ProjectileSnapshot {
+                projectile: projectile.id,
+                tower: projectile.tower,
+                target: projectile.target,
+                origin_half: projectile.start,
+                dest_half: projectile.end,
+                distance_half: projectile.distance_half,
+                travelled_half: projectile.travelled_half,
+                speed_half_per_ms: projectile.speed_half_per_ms,
+            })
     }
 
     #[cfg(any(test, feature = "tower_scaffolding"))]
@@ -740,22 +992,65 @@ pub mod query {
     }
 }
 
+#[cfg(any(test, feature = "tower_scaffolding"))]
+fn tower_center_half(region: CellRect) -> CellPointHalf {
+    let origin = region.origin();
+    let size = region.size();
+    CellPointHalf::new(
+        i64::from(origin.column()) * 2 + i64::from(size.width()),
+        i64::from(origin.row()) * 2 + i64::from(size.height()),
+    )
+}
+
+#[cfg(any(test, feature = "tower_scaffolding"))]
+fn bug_center_half(cell: CellCoord) -> CellPointHalf {
+    CellPointHalf::new(
+        i64::from(cell.column()) * 2 + 1,
+        i64::from(cell.row()) * 2 + 1,
+    )
+}
+
+#[allow(dead_code)]
+#[derive(Clone, Debug)]
+struct ProjectileState {
+    id: ProjectileId,
+    tower: TowerId,
+    target: BugId,
+    start: CellPointHalf,
+    end: CellPointHalf,
+    distance_half: u128,
+    travelled_half: u128,
+    speed_half_per_ms: u32,
+    damage: Damage,
+}
+
 #[derive(Clone, Debug)]
 struct Bug {
     id: BugId,
     cell: CellCoord,
     color: BugColor,
+    health: Health,
     accumulator: Duration,
 }
 
 impl Bug {
-    fn new(id: BugId, cell: CellCoord, color: BugColor) -> Self {
+    fn new(id: BugId, cell: CellCoord, color: BugColor, health: Health) -> Self {
         Self {
             id,
             cell,
             color,
+            health,
             accumulator: Duration::ZERO,
         }
+    }
+
+    fn health(&self) -> Health {
+        self.health
+    }
+
+    #[allow(dead_code)]
+    fn is_dead(&self) -> bool {
+        self.health.is_zero()
     }
 
     fn advance(&mut self, destination: CellCoord) {
@@ -1198,10 +1493,13 @@ fn advance_cell(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use maze_defence_core::{BugColor, BugId, Direction, Goal, Health, PlayMode};
+    use maze_defence_core::{
+        BugColor, BugId, Direction, Goal, Health, PlayMode, ProjectileId, TowerId,
+    };
 
     use std::{
         collections::hash_map::DefaultHasher,
+        convert::TryFrom,
         hash::{Hash, Hasher},
         time::Duration,
     };
@@ -1293,6 +1591,56 @@ mod tests {
     }
 
     #[test]
+    fn world_starts_without_projectiles() {
+        let world = World::new();
+
+        assert!(world.projectiles.is_empty());
+        assert_eq!(world.next_projectile_id, ProjectileId::new(0));
+    }
+
+    #[test]
+    fn bug_view_reports_health_and_filters_dead_bugs() {
+        let mut world = World::new();
+        let mut events = Vec::new();
+
+        let spawner = query::bug_spawners(&world)
+            .into_iter()
+            .next()
+            .expect("expected bug spawner");
+        apply(
+            &mut world,
+            Command::SpawnBug {
+                spawner,
+                color: BugColor::from_rgb(0xaa, 0xbb, 0xcc),
+                health: Health::new(5),
+            },
+            &mut events,
+        );
+        events.clear();
+
+        let snapshots = query::bug_view(&world).into_vec();
+        assert_eq!(snapshots.len(), 1);
+        let snapshot = &snapshots[0];
+        assert_eq!(snapshot.health, Health::new(5));
+
+        world.bugs[0].health = Health::ZERO;
+        let filtered = query::bug_view(&world).into_vec();
+        assert!(filtered.is_empty());
+    }
+
+    #[test]
+    fn projectile_identifiers_increment_monotonically() {
+        let mut world = World::new();
+
+        let first = world.next_projectile_identifier();
+        let second = world.next_projectile_identifier();
+
+        assert_eq!(first, ProjectileId::new(0));
+        assert_eq!(second, ProjectileId::new(1));
+        assert_eq!(world.next_projectile_id, ProjectileId::new(2));
+    }
+
+    #[test]
     fn default_cells_per_tile_is_one() {
         let world = World::new();
 
@@ -1370,6 +1718,971 @@ mod tests {
         let view = query::walls(&world);
         let cells: Vec<CellCoord> = view.iter().map(|wall| wall.cell()).collect();
         assert_eq!(cells, vec![CellCoord::new(1, 1)]);
+    }
+
+    #[test]
+    fn cleanup_dead_bugs_reclaims_occupancy() {
+        let mut world = World::new();
+        let spawner = query::bug_spawners(&world)
+            .into_iter()
+            .next()
+            .expect("expected at least one spawner");
+        let mut events = Vec::new();
+
+        apply(
+            &mut world,
+            Command::SpawnBug {
+                spawner,
+                color: BugColor::from_rgb(0, 255, 0),
+                health: Health::new(1),
+            },
+            &mut events,
+        );
+
+        assert_eq!(world.bugs.len(), 1);
+        world.bugs[0].health = Health::ZERO;
+
+        world.cleanup_dead_bugs();
+
+        assert!(world.bugs.is_empty());
+        assert!(world.bug_positions.is_empty());
+        assert!(world.occupancy.can_enter(spawner));
+    }
+
+    #[test]
+    fn fire_projectile_rejects_in_builder_mode() {
+        let mut world = World::new();
+        let mut events = Vec::new();
+
+        apply(
+            &mut world,
+            Command::SetPlayMode {
+                mode: PlayMode::Builder,
+            },
+            &mut events,
+        );
+        events.clear();
+
+        let tower = TowerId::new(3);
+        let target = BugId::new(2);
+        apply(
+            &mut world,
+            Command::FireProjectile { tower, target },
+            &mut events,
+        );
+
+        assert_eq!(
+            events,
+            vec![Event::ProjectileRejected {
+                tower,
+                target,
+                reason: ProjectileRejection::InvalidMode,
+            }]
+        );
+        assert!(world.projectiles.is_empty());
+    }
+
+    #[test]
+    fn fire_projectile_rejects_when_tower_missing() {
+        let mut world = World::new();
+        let mut events = Vec::new();
+
+        let tower = TowerId::new(9);
+        let target = BugId::new(4);
+        apply(
+            &mut world,
+            Command::FireProjectile { tower, target },
+            &mut events,
+        );
+
+        assert_eq!(
+            events,
+            vec![Event::ProjectileRejected {
+                tower,
+                target,
+                reason: ProjectileRejection::MissingTower,
+            }]
+        );
+        assert!(world.projectiles.is_empty());
+    }
+
+    #[test]
+    fn fire_projectile_rejects_when_cooldown_active() {
+        let mut world = World::new();
+        let mut events = Vec::new();
+
+        apply(
+            &mut world,
+            Command::SetPlayMode {
+                mode: PlayMode::Builder,
+            },
+            &mut events,
+        );
+        events.clear();
+
+        let origin = CellCoord::new(2, 2);
+        apply(
+            &mut world,
+            Command::PlaceTower {
+                kind: TowerKind::Basic,
+                origin,
+            },
+            &mut events,
+        );
+        events.clear();
+
+        apply(
+            &mut world,
+            Command::SetPlayMode {
+                mode: PlayMode::Attack,
+            },
+            &mut events,
+        );
+        events.clear();
+
+        let tower = TowerId::new(0);
+        let cooldown = Duration::from_millis(125);
+        world
+            .towers
+            .get_mut(tower)
+            .expect("tower present")
+            .cooldown_remaining = cooldown;
+
+        let target = BugId::new(6);
+        apply(
+            &mut world,
+            Command::FireProjectile { tower, target },
+            &mut events,
+        );
+
+        assert_eq!(
+            events,
+            vec![Event::ProjectileRejected {
+                tower,
+                target,
+                reason: ProjectileRejection::CooldownActive,
+            }]
+        );
+        assert!(world.projectiles.is_empty());
+        assert_eq!(
+            world
+                .towers
+                .get(tower)
+                .expect("tower present")
+                .cooldown_remaining,
+            cooldown
+        );
+    }
+
+    #[test]
+    fn fire_projectile_rejects_when_target_missing() {
+        let mut world = World::new();
+        let mut events = Vec::new();
+
+        apply(
+            &mut world,
+            Command::SetPlayMode {
+                mode: PlayMode::Builder,
+            },
+            &mut events,
+        );
+        events.clear();
+
+        let origin = CellCoord::new(4, 4);
+        apply(
+            &mut world,
+            Command::PlaceTower {
+                kind: TowerKind::Basic,
+                origin,
+            },
+            &mut events,
+        );
+        events.clear();
+
+        apply(
+            &mut world,
+            Command::SetPlayMode {
+                mode: PlayMode::Attack,
+            },
+            &mut events,
+        );
+        events.clear();
+
+        let tower = TowerId::new(0);
+        let target = BugId::new(42);
+        apply(
+            &mut world,
+            Command::FireProjectile { tower, target },
+            &mut events,
+        );
+
+        assert_eq!(
+            events,
+            vec![Event::ProjectileRejected {
+                tower,
+                target,
+                reason: ProjectileRejection::MissingTarget,
+            }]
+        );
+        assert!(world.projectiles.is_empty());
+    }
+
+    #[test]
+    fn fire_projectile_rejects_when_bug_is_dead() {
+        let mut world = World::new();
+        let mut events = Vec::new();
+
+        apply(
+            &mut world,
+            Command::SetPlayMode {
+                mode: PlayMode::Builder,
+            },
+            &mut events,
+        );
+        events.clear();
+
+        let origin = CellCoord::new(2, 4);
+        apply(
+            &mut world,
+            Command::PlaceTower {
+                kind: TowerKind::Basic,
+                origin,
+            },
+            &mut events,
+        );
+        events.clear();
+
+        apply(
+            &mut world,
+            Command::SetPlayMode {
+                mode: PlayMode::Attack,
+            },
+            &mut events,
+        );
+        events.clear();
+
+        let spawner = query::bug_spawners(&world)
+            .into_iter()
+            .next()
+            .expect("expected spawner");
+        apply(
+            &mut world,
+            Command::SpawnBug {
+                spawner,
+                color: BugColor::from_rgb(0x44, 0x44, 0x44),
+                health: Health::new(1),
+            },
+            &mut events,
+        );
+        events.clear();
+
+        let bug_id = world.bugs[0].id;
+        world.bugs[0].health = Health::ZERO;
+
+        let tower = TowerId::new(0);
+        apply(
+            &mut world,
+            Command::FireProjectile {
+                tower,
+                target: bug_id,
+            },
+            &mut events,
+        );
+
+        assert_eq!(
+            events,
+            vec![Event::ProjectileRejected {
+                tower,
+                target: bug_id,
+                reason: ProjectileRejection::MissingTarget,
+            }]
+        );
+        assert!(world.projectiles.is_empty());
+    }
+
+    #[test]
+    fn fire_projectile_spawns_projectile_and_resets_cooldown() {
+        let mut world = World::new();
+        let mut events = Vec::new();
+
+        apply(
+            &mut world,
+            Command::SetPlayMode {
+                mode: PlayMode::Builder,
+            },
+            &mut events,
+        );
+        events.clear();
+
+        let origin = CellCoord::new(3, 3);
+        apply(
+            &mut world,
+            Command::PlaceTower {
+                kind: TowerKind::Basic,
+                origin,
+            },
+            &mut events,
+        );
+        events.clear();
+
+        apply(
+            &mut world,
+            Command::SetPlayMode {
+                mode: PlayMode::Attack,
+            },
+            &mut events,
+        );
+        events.clear();
+
+        let spawner = query::bug_spawners(&world)
+            .into_iter()
+            .next()
+            .expect("expected spawner");
+        apply(
+            &mut world,
+            Command::SpawnBug {
+                spawner,
+                color: BugColor::from_rgb(0xaa, 0xbb, 0xcc),
+                health: Health::new(3),
+            },
+            &mut events,
+        );
+        events.clear();
+
+        let tower = TowerId::new(0);
+        let bug_id = world.bugs[0].id;
+        apply(
+            &mut world,
+            Command::FireProjectile {
+                tower,
+                target: bug_id,
+            },
+            &mut events,
+        );
+
+        let projectile = ProjectileId::new(0);
+        assert_eq!(
+            events,
+            vec![Event::ProjectileFired {
+                projectile,
+                tower,
+                target: bug_id,
+            }]
+        );
+        assert_eq!(world.projectiles.len(), 1);
+        let state = world
+            .projectiles
+            .get(&projectile)
+            .expect("projectile stored");
+
+        let tower_region = world.towers.get(tower).expect("tower present").region;
+        let expected_start = super::tower_center_half(tower_region);
+        let bug_cell = world.bugs[0].cell;
+        let expected_end = super::bug_center_half(bug_cell);
+        let expected_distance = expected_start.distance_to(expected_end);
+
+        assert_eq!(state.id, projectile);
+        assert_eq!(state.tower, tower);
+        assert_eq!(state.target, bug_id);
+        assert_eq!(state.start, expected_start);
+        assert_eq!(state.end, expected_end);
+        assert_eq!(state.distance_half, expected_distance);
+        assert_eq!(state.travelled_half, 0);
+        assert_eq!(
+            state.speed_half_per_ms,
+            TowerKind::Basic.speed_half_cells_per_ms(),
+        );
+        assert_eq!(state.damage, TowerKind::Basic.projectile_damage());
+
+        let cooldown = Duration::from_millis(u64::from(TowerKind::Basic.fire_cooldown_ms()));
+        assert_eq!(
+            world
+                .towers
+                .get(tower)
+                .expect("tower present")
+                .cooldown_remaining,
+            cooldown
+        );
+        assert_eq!(world.next_projectile_id, ProjectileId::new(1));
+    }
+
+    #[test]
+    fn tower_cooldown_query_reflects_remaining_duration() {
+        let mut world = World::new();
+        let mut events = Vec::new();
+
+        apply(
+            &mut world,
+            Command::SetPlayMode {
+                mode: PlayMode::Builder,
+            },
+            &mut events,
+        );
+        events.clear();
+
+        apply(
+            &mut world,
+            Command::PlaceTower {
+                kind: TowerKind::Basic,
+                origin: CellCoord::new(2, 2),
+            },
+            &mut events,
+        );
+        apply(
+            &mut world,
+            Command::PlaceTower {
+                kind: TowerKind::Basic,
+                origin: CellCoord::new(6, 2),
+            },
+            &mut events,
+        );
+        events.clear();
+
+        let first = TowerId::new(0);
+        let second = TowerId::new(1);
+        world
+            .towers
+            .get_mut(first)
+            .expect("first tower present")
+            .cooldown_remaining = Duration::from_millis(750);
+        world
+            .towers
+            .get_mut(second)
+            .expect("second tower present")
+            .cooldown_remaining = Duration::from_millis(250);
+
+        let view = query::tower_cooldowns(&world);
+        let snapshots = view.into_vec();
+
+        assert_eq!(snapshots.len(), 2);
+        assert_eq!(snapshots[0].tower, first);
+        assert_eq!(snapshots[0].kind, TowerKind::Basic);
+        assert_eq!(snapshots[0].ready_in, Duration::from_millis(750));
+        assert_eq!(snapshots[1].tower, second);
+        assert_eq!(snapshots[1].kind, TowerKind::Basic);
+        assert_eq!(snapshots[1].ready_in, Duration::from_millis(250));
+    }
+
+    #[test]
+    fn projectile_query_reports_snapshots_in_id_order() {
+        let mut world = World::new();
+        let mut events = Vec::new();
+
+        apply(
+            &mut world,
+            Command::SetPlayMode {
+                mode: PlayMode::Builder,
+            },
+            &mut events,
+        );
+        events.clear();
+
+        apply(
+            &mut world,
+            Command::PlaceTower {
+                kind: TowerKind::Basic,
+                origin: CellCoord::new(2, 2),
+            },
+            &mut events,
+        );
+        apply(
+            &mut world,
+            Command::PlaceTower {
+                kind: TowerKind::Basic,
+                origin: CellCoord::new(6, 2),
+            },
+            &mut events,
+        );
+        events.clear();
+
+        apply(
+            &mut world,
+            Command::SetPlayMode {
+                mode: PlayMode::Attack,
+            },
+            &mut events,
+        );
+        events.clear();
+
+        let spawner = query::bug_spawners(&world)
+            .into_iter()
+            .next()
+            .expect("expected spawner");
+        apply(
+            &mut world,
+            Command::SpawnBug {
+                spawner,
+                color: BugColor::from_rgb(0x11, 0x22, 0x33),
+                health: Health::new(6),
+            },
+            &mut events,
+        );
+        events.clear();
+
+        let bug_id = world.bugs[0].id;
+        let original_cell = world.bugs[0].cell;
+        world.occupancy.vacate(original_cell);
+        let target_cell = CellCoord::new(8, 4);
+        world.bugs[0].cell = target_cell;
+        world.occupancy.occupy(bug_id, target_cell);
+
+        apply(
+            &mut world,
+            Command::FireProjectile {
+                tower: TowerId::new(0),
+                target: bug_id,
+            },
+            &mut events,
+        );
+        events.clear();
+
+        apply(
+            &mut world,
+            Command::FireProjectile {
+                tower: TowerId::new(1),
+                target: bug_id,
+            },
+            &mut events,
+        );
+        events.clear();
+
+        let snapshots: Vec<_> = query::projectiles(&world).collect();
+        assert_eq!(snapshots.len(), 2);
+
+        let bug_end = super::bug_center_half(target_cell);
+
+        let first_region = world
+            .towers
+            .get(TowerId::new(0))
+            .expect("first tower present")
+            .region;
+        let second_region = world
+            .towers
+            .get(TowerId::new(1))
+            .expect("second tower present")
+            .region;
+        let first_start = super::tower_center_half(first_region);
+        let second_start = super::tower_center_half(second_region);
+
+        assert_eq!(snapshots[0].projectile, ProjectileId::new(0));
+        assert_eq!(snapshots[0].tower, TowerId::new(0));
+        assert_eq!(snapshots[0].target, bug_id);
+        assert_eq!(snapshots[0].origin_half, first_start);
+        assert_eq!(snapshots[0].dest_half, bug_end);
+        assert_eq!(snapshots[0].travelled_half, 0);
+        assert_eq!(snapshots[0].distance_half, first_start.distance_to(bug_end),);
+        assert_eq!(
+            snapshots[0].speed_half_per_ms,
+            TowerKind::Basic.speed_half_cells_per_ms(),
+        );
+
+        assert_eq!(snapshots[1].projectile, ProjectileId::new(1));
+        assert_eq!(snapshots[1].tower, TowerId::new(1));
+        assert_eq!(snapshots[1].target, bug_id);
+        assert_eq!(snapshots[1].origin_half, second_start);
+        assert_eq!(snapshots[1].dest_half, bug_end);
+        assert_eq!(snapshots[1].travelled_half, 0);
+        assert_eq!(
+            snapshots[1].distance_half,
+            second_start.distance_to(bug_end),
+        );
+        assert_eq!(
+            snapshots[1].speed_half_per_ms,
+            TowerKind::Basic.speed_half_cells_per_ms(),
+        );
+    }
+
+    #[test]
+    fn tick_updates_tower_cooldowns_only_in_attack_mode() {
+        let mut world = World::new();
+        let mut events = Vec::new();
+
+        apply(
+            &mut world,
+            Command::SetPlayMode {
+                mode: PlayMode::Builder,
+            },
+            &mut events,
+        );
+        events.clear();
+
+        let origin = CellCoord::new(2, 2);
+        apply(
+            &mut world,
+            Command::PlaceTower {
+                kind: TowerKind::Basic,
+                origin,
+            },
+            &mut events,
+        );
+        events.clear();
+
+        apply(
+            &mut world,
+            Command::SetPlayMode {
+                mode: PlayMode::Attack,
+            },
+            &mut events,
+        );
+        events.clear();
+
+        let tower = TowerId::new(0);
+        world
+            .towers
+            .get_mut(tower)
+            .expect("tower present")
+            .cooldown_remaining = Duration::from_millis(600);
+
+        let attack_dt = Duration::from_millis(250);
+        apply(&mut world, Command::Tick { dt: attack_dt }, &mut events);
+
+        assert_eq!(events, vec![Event::TimeAdvanced { dt: attack_dt }]);
+        assert_eq!(
+            world
+                .towers
+                .get(tower)
+                .expect("tower present")
+                .cooldown_remaining,
+            Duration::from_millis(350),
+        );
+
+        events.clear();
+        apply(
+            &mut world,
+            Command::SetPlayMode {
+                mode: PlayMode::Builder,
+            },
+            &mut events,
+        );
+        events.clear();
+
+        world
+            .towers
+            .get_mut(tower)
+            .expect("tower present")
+            .cooldown_remaining = Duration::from_millis(200);
+
+        apply(
+            &mut world,
+            Command::Tick {
+                dt: Duration::from_millis(150),
+            },
+            &mut events,
+        );
+
+        assert!(events.is_empty());
+        assert_eq!(
+            world
+                .towers
+                .get(tower)
+                .expect("tower present")
+                .cooldown_remaining,
+            Duration::from_millis(200),
+        );
+
+        apply(
+            &mut world,
+            Command::SetPlayMode {
+                mode: PlayMode::Attack,
+            },
+            &mut events,
+        );
+        events.clear();
+
+        let resume_dt = Duration::from_millis(250);
+        apply(&mut world, Command::Tick { dt: resume_dt }, &mut events);
+
+        assert_eq!(events, vec![Event::TimeAdvanced { dt: resume_dt }]);
+        assert_eq!(
+            world
+                .towers
+                .get(tower)
+                .expect("tower present")
+                .cooldown_remaining,
+            Duration::ZERO,
+        );
+    }
+
+    #[test]
+    fn tick_advances_projectiles_and_damages_bugs() {
+        let mut world = World::new();
+        let mut events = Vec::new();
+
+        apply(
+            &mut world,
+            Command::SetPlayMode {
+                mode: PlayMode::Builder,
+            },
+            &mut events,
+        );
+        events.clear();
+
+        let origin = CellCoord::new(3, 3);
+        apply(
+            &mut world,
+            Command::PlaceTower {
+                kind: TowerKind::Basic,
+                origin,
+            },
+            &mut events,
+        );
+        events.clear();
+
+        apply(
+            &mut world,
+            Command::SetPlayMode {
+                mode: PlayMode::Attack,
+            },
+            &mut events,
+        );
+        events.clear();
+
+        let spawner = query::bug_spawners(&world)
+            .into_iter()
+            .next()
+            .expect("expected spawner");
+        apply(
+            &mut world,
+            Command::SpawnBug {
+                spawner,
+                color: BugColor::from_rgb(0x55, 0x66, 0x77),
+                health: Health::new(3),
+            },
+            &mut events,
+        );
+        events.clear();
+
+        let tower = TowerId::new(0);
+        let bug_id = world.bugs[0].id;
+        apply(
+            &mut world,
+            Command::FireProjectile {
+                tower,
+                target: bug_id,
+            },
+            &mut events,
+        );
+        events.clear();
+
+        let projectile_id = *world.projectiles.keys().next().expect("projectile stored");
+        let projectile = world
+            .projectiles
+            .get(&projectile_id)
+            .expect("projectile present");
+
+        let speed = u128::from(projectile.speed_half_per_ms);
+        let distance = projectile.distance_half;
+        let travel_ms = (distance + speed - 1) / speed;
+        let dt = Duration::from_millis(u64::try_from(travel_ms).expect("distance fits in u64"));
+
+        apply(&mut world, Command::Tick { dt }, &mut events);
+
+        let damage = TowerKind::Basic.projectile_damage();
+        assert_eq!(
+            events,
+            vec![
+                Event::TimeAdvanced { dt },
+                Event::BugDamaged {
+                    bug: bug_id,
+                    remaining: Health::new(2),
+                },
+                Event::ProjectileHit {
+                    projectile: projectile_id,
+                    target: bug_id,
+                    damage,
+                },
+            ],
+        );
+        assert!(world.projectiles.is_empty());
+        assert_eq!(world.bugs.len(), 1);
+        assert_eq!(world.bugs[0].health, Health::new(2));
+        assert!(!world.occupancy.can_enter(world.bugs[0].cell));
+    }
+
+    #[test]
+    fn tick_kills_bug_and_removes_projectile_on_hit() {
+        let mut world = World::new();
+        let mut events = Vec::new();
+
+        apply(
+            &mut world,
+            Command::SetPlayMode {
+                mode: PlayMode::Builder,
+            },
+            &mut events,
+        );
+        events.clear();
+
+        let origin = CellCoord::new(4, 4);
+        apply(
+            &mut world,
+            Command::PlaceTower {
+                kind: TowerKind::Basic,
+                origin,
+            },
+            &mut events,
+        );
+        events.clear();
+
+        apply(
+            &mut world,
+            Command::SetPlayMode {
+                mode: PlayMode::Attack,
+            },
+            &mut events,
+        );
+        events.clear();
+
+        let spawner = query::bug_spawners(&world)
+            .into_iter()
+            .next()
+            .expect("expected spawner");
+        apply(
+            &mut world,
+            Command::SpawnBug {
+                spawner,
+                color: BugColor::from_rgb(0x10, 0x20, 0x30),
+                health: Health::new(1),
+            },
+            &mut events,
+        );
+        events.clear();
+
+        let tower = TowerId::new(0);
+        let bug_id = world.bugs[0].id;
+        let bug_cell = world.bugs[0].cell;
+        apply(
+            &mut world,
+            Command::FireProjectile {
+                tower,
+                target: bug_id,
+            },
+            &mut events,
+        );
+        events.clear();
+
+        let projectile_id = *world.projectiles.keys().next().expect("projectile stored");
+        let projectile = world
+            .projectiles
+            .get(&projectile_id)
+            .expect("projectile present");
+        let speed = u128::from(projectile.speed_half_per_ms);
+        let distance = projectile.distance_half;
+        let travel_ms = (distance + speed - 1) / speed;
+        let dt = Duration::from_millis(u64::try_from(travel_ms).expect("distance fits in u64"));
+
+        apply(&mut world, Command::Tick { dt }, &mut events);
+
+        let damage = TowerKind::Basic.projectile_damage();
+        assert_eq!(
+            events,
+            vec![
+                Event::TimeAdvanced { dt },
+                Event::BugDamaged {
+                    bug: bug_id,
+                    remaining: Health::ZERO,
+                },
+                Event::BugDied { bug: bug_id },
+                Event::ProjectileHit {
+                    projectile: projectile_id,
+                    target: bug_id,
+                    damage,
+                },
+            ],
+        );
+        assert!(world.projectiles.is_empty());
+        assert!(world.bugs.is_empty());
+        assert!(world.bug_positions.is_empty());
+        assert!(world.occupancy.can_enter(bug_cell));
+    }
+
+    #[test]
+    fn tick_expires_projectiles_when_target_dead() {
+        let mut world = World::new();
+        let mut events = Vec::new();
+
+        apply(
+            &mut world,
+            Command::SetPlayMode {
+                mode: PlayMode::Builder,
+            },
+            &mut events,
+        );
+        events.clear();
+
+        let origin = CellCoord::new(5, 5);
+        apply(
+            &mut world,
+            Command::PlaceTower {
+                kind: TowerKind::Basic,
+                origin,
+            },
+            &mut events,
+        );
+        events.clear();
+
+        apply(
+            &mut world,
+            Command::SetPlayMode {
+                mode: PlayMode::Attack,
+            },
+            &mut events,
+        );
+        events.clear();
+
+        let spawner = query::bug_spawners(&world)
+            .into_iter()
+            .next()
+            .expect("expected spawner");
+        apply(
+            &mut world,
+            Command::SpawnBug {
+                spawner,
+                color: BugColor::from_rgb(0x40, 0x50, 0x60),
+                health: Health::new(2),
+            },
+            &mut events,
+        );
+        events.clear();
+
+        let tower = TowerId::new(0);
+        let bug_id = world.bugs[0].id;
+        apply(
+            &mut world,
+            Command::FireProjectile {
+                tower,
+                target: bug_id,
+            },
+            &mut events,
+        );
+        events.clear();
+
+        world.bugs[0].health = Health::ZERO;
+
+        let projectile_id = *world.projectiles.keys().next().expect("projectile stored");
+        let projectile = world
+            .projectiles
+            .get(&projectile_id)
+            .expect("projectile present");
+        let speed = u128::from(projectile.speed_half_per_ms);
+        let distance = projectile.distance_half;
+        let travel_ms = (distance + speed - 1) / speed;
+        let dt = Duration::from_millis(u64::try_from(travel_ms).expect("distance fits in u64"));
+
+        apply(&mut world, Command::Tick { dt }, &mut events);
+
+        assert_eq!(
+            events,
+            vec![
+                Event::TimeAdvanced { dt },
+                Event::ProjectileExpired {
+                    projectile: projectile_id,
+                },
+            ],
+        );
+        assert!(world.projectiles.is_empty());
+        assert_eq!(world.bugs.len(), 1);
+        assert_eq!(world.bugs[0].health, Health::ZERO);
     }
 
     #[test]
@@ -2100,6 +3413,7 @@ mod tests {
         assert_eq!(snapshot.id, BugId::new(0));
         assert_eq!(snapshot.cell, CellCoord::new(0, 0));
         assert_eq!(snapshot.color, BugColor::from_rgb(0x12, 0x34, 0x56));
+        assert_eq!(snapshot.health, Health::new(3));
         assert_eq!(
             query::occupancy_view(&world).occupant(CellCoord::new(0, 0)),
             Some(BugId::new(0))

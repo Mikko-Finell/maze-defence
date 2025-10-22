@@ -18,7 +18,7 @@ fn deterministic_replay_produces_expected_snapshot() {
     assert_eq!(first, second, "replay diverged between runs");
 
     let fingerprint = first.fingerprint();
-    let expected = 0xb173_c3e3_42bf_3d8f;
+    let expected = 0x62f3_2e9e_71fc_12a1;
     assert_eq!(
         fingerprint, expected,
         "fingerprint mismatch: {fingerprint:#x}"
@@ -213,6 +213,7 @@ struct BugState {
     ready_for_step: bool,
     accumulated_micros: u128,
     color: (u8, u8, u8),
+    health: Health,
 }
 
 impl From<BugSnapshot> for BugState {
@@ -227,6 +228,7 @@ impl From<BugSnapshot> for BugState {
                 snapshot.color.green(),
                 snapshot.color.blue(),
             ),
+            health: snapshot.health,
         }
     }
 }
