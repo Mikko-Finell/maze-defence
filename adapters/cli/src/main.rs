@@ -10,6 +10,7 @@
 //! Command-line adapter that boots the Maze Defence experience.
 
 use std::{
+    collections::HashMap,
     str::FromStr,
     time::{Duration, Instant},
 };
@@ -18,8 +19,8 @@ use anyhow::Result;
 use clap::{Parser, ValueEnum};
 use glam::Vec2;
 use maze_defence_core::{
-    CellCoord, CellPointHalf, CellRect, CellRectSize, Command, Event, PlacementError, PlayMode,
-    ProjectileSnapshot, RemovalError, TileCoord, TowerCooldownView, TowerId, TowerKind,
+    BugId, CellCoord, CellPointHalf, CellRect, CellRectSize, Command, Event, PlacementError,
+    PlayMode, ProjectileSnapshot, RemovalError, TileCoord, TowerCooldownView, TowerId, TowerKind,
     TowerTarget,
 };
 use maze_defence_rendering::{
@@ -307,6 +308,8 @@ struct Simulation {
     tower_feedback: Option<TowerInteractionFeedback>,
     last_placement_rejection: Option<PlacementRejection>,
     last_removal_rejection: Option<RemovalRejection>,
+    bug_step_duration: Duration,
+    bug_motions: HashMap<BugId, BugMotion>,
     cells_per_tile: u32,
     last_advance_profile: AdvanceProfile,
     #[cfg(test)]
@@ -333,6 +336,48 @@ struct ProcessEventsProfile {
 impl ProcessEventsProfile {
     fn add_pathfinding(&mut self, duration: Duration) {
         self.pathfinding = self.pathfinding.saturating_add(duration);
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct BugMotion {
+    from: CellCoord,
+    to: CellCoord,
+    elapsed: Duration,
+}
+
+impl BugMotion {
+    fn new(from: CellCoord, to: CellCoord) -> Self {
+        Self {
+            from,
+            to,
+            elapsed: Duration::ZERO,
+        }
+    }
+
+    fn advance(&mut self, dt: Duration, step_duration: Duration) {
+        if dt.is_zero() {
+            return;
+        }
+
+        self.elapsed = self.elapsed.saturating_add(dt);
+        if !step_duration.is_zero() {
+            self.elapsed = self.elapsed.min(step_duration);
+        }
+    }
+
+    fn progress(&self, step_duration: Duration) -> f32 {
+        if step_duration.is_zero() {
+            return 1.0;
+        }
+
+        let numerator = self.elapsed.as_secs_f32();
+        let denominator = step_duration.as_secs_f32();
+        if denominator <= f32::EPSILON {
+            1.0
+        } else {
+            (numerator / denominator).clamp(0.0, 1.0)
+        }
     }
 }
 
@@ -383,6 +428,8 @@ impl Simulation {
             tower_feedback: None,
             last_placement_rejection: None,
             last_removal_rejection: None,
+            bug_step_duration: bug_step,
+            bug_motions: HashMap::new(),
             cells_per_tile,
             last_advance_profile: AdvanceProfile::default(),
             #[cfg(test)]
@@ -425,6 +472,7 @@ impl Simulation {
         self.pending_events.clear();
         self.flush_queued_commands();
 
+        self.advance_bug_motions(dt);
         if !dt.is_zero() {
             world::apply(
                 &mut self.world,
@@ -437,6 +485,17 @@ impl Simulation {
         self.builder_preview = self.compute_builder_preview();
         self.last_advance_profile =
             AdvanceProfile::new(frame_start.elapsed(), events_profile.pathfinding);
+    }
+
+    fn advance_bug_motions(&mut self, dt: Duration) {
+        if dt.is_zero() || self.bug_motions.is_empty() {
+            return;
+        }
+
+        let step_duration = self.bug_step_duration;
+        for motion in self.bug_motions.values_mut() {
+            motion.advance(dt, step_duration);
+        }
     }
 
     fn last_advance_profile(&self) -> AdvanceProfile {
@@ -454,12 +513,22 @@ impl Simulation {
 
         let bug_view = query::bug_view(&self.world);
         scene.bugs.clear();
+        let bug_step_duration = self.bug_step_duration;
         scene.bugs.extend(bug_view.iter().map(|bug| {
-            let cell = bug.cell;
             let color = bug.color;
+            let default_position = Vec2::new(bug.cell.column() as f32, bug.cell.row() as f32);
+            let position = self
+                .bug_motions
+                .get(&bug.id)
+                .map(|motion| {
+                    let from = Vec2::new(motion.from.column() as f32, motion.from.row() as f32);
+                    let to = Vec2::new(motion.to.column() as f32, motion.to.row() as f32);
+                    let progress = motion.progress(bug_step_duration);
+                    from + (to - from) * progress
+                })
+                .unwrap_or(default_position);
             BugPresentation::new(
-                cell.column(),
-                cell.row(),
+                position,
                 Color::from_rgb_u8(color.red(), color.green(), color.blue()),
             )
         }));
@@ -527,6 +596,7 @@ impl Simulation {
                 self.last_frame_events.extend(events.iter().cloned());
             }
 
+            self.handle_bug_motion_events(&events);
             self.record_tower_feedback(&events);
 
             let play_mode = query::play_mode(&self.world);
@@ -589,6 +659,26 @@ impl Simulation {
         }
 
         profile
+    }
+
+    fn handle_bug_motion_events(&mut self, events: &[Event]) {
+        for event in events {
+            match event {
+                Event::BugAdvanced { bug_id, from, to } => {
+                    let _ = self.bug_motions.insert(*bug_id, BugMotion::new(*from, *to));
+                }
+                Event::BugSpawned { bug_id, .. } | Event::BugExited { bug_id, .. } => {
+                    let _ = self.bug_motions.remove(bug_id);
+                }
+                Event::BugDied { bug } => {
+                    let _ = self.bug_motions.remove(bug);
+                }
+                Event::PlayModeChanged { mode } if *mode == PlayMode::Builder => {
+                    self.bug_motions.clear();
+                }
+                _ => {}
+            }
+        }
     }
 
     fn record_tower_feedback(&mut self, events: &[Event]) {
@@ -782,6 +872,11 @@ impl Simulation {
     }
 
     #[cfg(test)]
+    fn bug_step_duration(&self) -> Duration {
+        self.bug_step_duration
+    }
+
+    #[cfg(test)]
     fn last_frame_events(&self) -> &[Event] {
         &self.last_frame_events
     }
@@ -817,6 +912,10 @@ impl Simulation {
         }
 
         for command in self.queued_commands.drain(..) {
+            if let Command::ConfigureBugStep { step_duration } = &command {
+                self.bug_step_duration = *step_duration;
+                self.bug_motions.clear();
+            }
             world::apply(&mut self.world, command, &mut self.pending_events);
         }
     }
@@ -888,6 +987,59 @@ mod tests {
         assert_eq!(projectile.to, Vec2::new(7.0, 6.0));
         assert!((projectile.progress - 0.5).abs() <= f32::EPSILON);
         assert_eq!(projectile.position, Vec2::new(5.0, 4.0));
+    }
+
+    #[test]
+    fn populate_scene_interpolates_bug_positions_between_cells() {
+        let mut simulation = new_simulation();
+        let spawner = query::bug_spawners(simulation.world())
+            .into_iter()
+            .next()
+            .expect("bug spawner available");
+
+        simulation.queued_commands.push(Command::SpawnBug {
+            spawner,
+            color: BugColor::from_rgb(255, 0, 0),
+            health: Health::new(5),
+        });
+        simulation.advance(Duration::ZERO);
+
+        let step_duration = simulation.bug_step_duration();
+        simulation.advance(step_duration);
+
+        let (from, to) = simulation
+            .last_frame_events()
+            .iter()
+            .find_map(|event| match event {
+                Event::BugAdvanced { from, to, .. } => Some((*from, *to)),
+                _ => None,
+            })
+            .expect("bug should advance after enough time elapsed");
+
+        assert_ne!(from, to, "bug should move to a new cell");
+
+        let partial_dt = if step_duration.is_zero() {
+            Duration::ZERO
+        } else {
+            step_duration / 2
+        };
+        simulation.advance(partial_dt);
+
+        let mut scene = make_scene();
+        simulation.populate_scene(&mut scene);
+
+        assert_eq!(scene.bugs.len(), 1);
+        let bug = scene.bugs[0];
+        let from_vec = Vec2::new(from.column() as f32, from.row() as f32);
+        let to_vec = Vec2::new(to.column() as f32, to.row() as f32);
+        let expected_progress = if step_duration.is_zero() {
+            1.0
+        } else {
+            (partial_dt.as_secs_f32() / step_duration.as_secs_f32()).clamp(0.0, 1.0)
+        };
+        let expected_position = from_vec + (to_vec - from_vec) * expected_progress;
+
+        assert!((bug.position - expected_position).length() <= f32::EPSILON);
     }
 
     fn enter_builder_mode(simulation: &mut Simulation) {

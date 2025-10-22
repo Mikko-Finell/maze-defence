@@ -243,10 +243,9 @@ impl RenderingBackend for MacroquadBackend {
                 draw_projectiles(&scene.projectiles, &metrics);
 
                 let bug_radius = metrics.cell_step * 0.5;
-                for BugPresentation { column, row, color } in &scene.bugs {
-                    let bug_center_x =
-                        metrics.offset_x + (*column as f32 + 0.5) * metrics.cell_step;
-                    let bug_center_y = metrics.offset_y + (*row as f32 + 0.5) * metrics.cell_step;
+                for BugPresentation { position, color } in &scene.bugs {
+                    let bug_center_x = metrics.offset_x + (position.x + 0.5) * metrics.cell_step;
+                    let bug_center_y = metrics.offset_y + (position.y + 0.5) * metrics.cell_step;
                     let border_thickness = (bug_radius * 0.2).max(1.0);
                     macroquad::shapes::draw_circle(
                         bug_center_x,
