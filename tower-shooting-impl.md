@@ -115,7 +115,7 @@ The sequence below layers combat from contracts → world authority → pure sys
 
 **Exit checks:** Rendering/unit tests cover the new scene data; manual smoke test shows dots travelling along targeting lines.
 
-# 10) Full test suite & docs — TODO
+# 10) Full test suite & docs — DONE
 
 **Goal:** Harden the feature and update documentation.
 
@@ -124,8 +124,9 @@ The sequence below layers combat from contracts → world authority → pure sys
 * Expand world/system tests for edge cases (multiple towers, simultaneous hits, cooldown overlaps) and ensure rejection events stay logged.
 * Update any developer docs referencing tower behaviour to include shooting flow; cross-link `tower-impl.md`, `target-impl.md`, and the new combat steps.
 * Run the full CI guard set (`cargo fmt --check`, `cargo clippy --deny warnings`, `cargo test`, `cargo hack check --each-feature`, `cargo +nightly udeps`) to confirm a clean slate.
+* Added `tick_resolves_simultaneous_projectiles_in_id_order` plus supporting documentation cross-links, then recorded clean guard runs for fmt, clippy, tests, feature checks, and nightly `udeps`.
 
-**Exit checks:** Entire suite passes locally; docs compiled; replay hashes stable across repeated runs.
+**Exit checks:** Entire suite passes locally (fmt, clippy, tests, cargo-hack feature matrix, nightly `udeps`); docs compiled; replay hashes stable across repeated runs.
 
 ---
 

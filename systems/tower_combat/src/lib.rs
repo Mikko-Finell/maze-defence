@@ -65,14 +65,14 @@ impl TowerCombat {
         }
 
         out.reserve(self.scratch.len());
-        out.extend(self.scratch.drain(..));
+        out.append(&mut self.scratch);
     }
 }
 
-fn find_cooldown<'a>(
-    cooldowns: &'a [TowerCooldownSnapshot],
+fn find_cooldown(
+    cooldowns: &[TowerCooldownSnapshot],
     tower: TowerId,
-) -> Option<&'a TowerCooldownSnapshot> {
+) -> Option<&TowerCooldownSnapshot> {
     cooldowns
         .binary_search_by_key(&tower, |snapshot| snapshot.tower)
         .ok()

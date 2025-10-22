@@ -2692,6 +2692,141 @@ mod tests {
     }
 
     #[test]
+    fn tick_resolves_simultaneous_projectiles_in_id_order() {
+        let mut world = World::new();
+        let mut events = Vec::new();
+
+        apply(
+            &mut world,
+            Command::SetPlayMode {
+                mode: PlayMode::Builder,
+            },
+            &mut events,
+        );
+        events.clear();
+
+        let first_origin = CellCoord::new(2, 2);
+        apply(
+            &mut world,
+            Command::PlaceTower {
+                kind: TowerKind::Basic,
+                origin: first_origin,
+            },
+            &mut events,
+        );
+        let first_tower = match events.as_slice() {
+            [Event::TowerPlaced { tower, .. }] => *tower,
+            other => panic!("unexpected events when placing first tower: {other:?}"),
+        };
+        events.clear();
+
+        let second_origin = CellCoord::new(6, 2);
+        apply(
+            &mut world,
+            Command::PlaceTower {
+                kind: TowerKind::Basic,
+                origin: second_origin,
+            },
+            &mut events,
+        );
+        let second_tower = match events.as_slice() {
+            [Event::TowerPlaced { tower, .. }] => *tower,
+            other => panic!("unexpected events when placing second tower: {other:?}"),
+        };
+        events.clear();
+
+        apply(
+            &mut world,
+            Command::SetPlayMode {
+                mode: PlayMode::Attack,
+            },
+            &mut events,
+        );
+        events.clear();
+
+        let spawner = query::bug_spawners(&world)
+            .into_iter()
+            .next()
+            .expect("expected spawner");
+        apply(
+            &mut world,
+            Command::SpawnBug {
+                spawner,
+                color: BugColor::from_rgb(0x55, 0x22, 0x11),
+                health: Health::new(1),
+            },
+            &mut events,
+        );
+        let bug_id = match events.as_slice() {
+            [Event::BugSpawned { bug_id, .. }] => *bug_id,
+            other => panic!("unexpected events when spawning bug: {other:?}"),
+        };
+        events.clear();
+
+        let original_cell = world.bugs[0].cell;
+        let target_cell = CellCoord::new(9, 9);
+        world.bugs[0].cell = target_cell;
+        world.occupancy.vacate(original_cell);
+        world.occupancy.occupy(bug_id, target_cell);
+
+        apply(
+            &mut world,
+            Command::FireProjectile {
+                tower: first_tower,
+                target: bug_id,
+            },
+            &mut events,
+        );
+        let first_projectile = match events.as_slice() {
+            [Event::ProjectileFired { projectile, .. }] => *projectile,
+            other => panic!("unexpected events when firing projectile from first tower: {other:?}"),
+        };
+        events.clear();
+
+        apply(
+            &mut world,
+            Command::FireProjectile {
+                tower: second_tower,
+                target: bug_id,
+            },
+            &mut events,
+        );
+        let second_projectile = match events.as_slice() {
+            [Event::ProjectileFired { projectile, .. }] => *projectile,
+            other => {
+                panic!("unexpected events when firing projectile from second tower: {other:?}")
+            }
+        };
+        events.clear();
+
+        let dt = Duration::from_millis(10_000);
+        apply(&mut world, Command::Tick { dt }, &mut events);
+
+        assert_eq!(
+            events,
+            vec![
+                Event::TimeAdvanced { dt },
+                Event::BugDamaged {
+                    bug: bug_id,
+                    remaining: Health::ZERO,
+                },
+                Event::BugDied { bug: bug_id },
+                Event::ProjectileHit {
+                    projectile: first_projectile,
+                    target: bug_id,
+                    damage: TowerKind::Basic.projectile_damage(),
+                },
+                Event::ProjectileExpired {
+                    projectile: second_projectile,
+                },
+            ],
+        );
+        assert!(world.projectiles.is_empty());
+        assert!(world.bugs.is_empty());
+        assert!(world.occupancy.can_enter(target_cell));
+    }
+
+    #[test]
     fn placing_tower_requires_builder_mode() {
         let mut world = World::new();
         let mut events = Vec::new();

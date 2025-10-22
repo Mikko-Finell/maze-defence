@@ -1,6 +1,6 @@
 Start by reading `target-spec.md` so the behaviour contracts are locked in before you touch any code.
 
-Here’s the leanest sequence to bring tower targeting online without breaking determinism or layering rules. Each step is a mergeable checkpoint with explicit exit criteria.
+Here’s the leanest sequence to bring tower targeting online without breaking determinism or layering rules. Each step is a mergeable checkpoint with explicit exit criteria. Combat hardening for the shooting flow continues in `tower-shooting-impl.md` step 10 so targeting and firing documentation reference the same contracts.
 
 # 1) [DONE] Range contracts (core + world queries)
 
@@ -57,7 +57,7 @@ Here’s the leanest sequence to bring tower targeting online without breaking d
 **Deliverables:**
 
 * Added replay coverage in `systems/tower_targeting/tests/deterministic_replay.rs` that positions two equidistant bugs to assert stable tie-breaking and verifies builder mode yields zero targets.
-* Documented the new targeting flow by cross-linking `tower-impl.md` to the targeting implementation notes.
+* Documented the new targeting flow by cross-linking `tower-impl.md` to the targeting implementation notes and pointing both placement and combat docs (`tower-impl.md`, `tower-shooting-impl.md`) back at these targeting contracts.
 * Audited the CI guard set locally via `cargo fmt --check`, `cargo clippy --all-targets --all-features -- -D warnings`, `cargo +nightly udeps`, `cargo hack check --each-feature`, and `cargo test` to confirm a clean baseline.
 
 **Exit checks:** Deterministic replay test passes repeatedly; CI suite is clean; documentation references the targeting contracts without duplication.
