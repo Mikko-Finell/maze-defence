@@ -46,11 +46,15 @@ fn emits_step_commands_toward_target() {
     let bug_view = query::bug_view(&world);
     let occupancy_view = query::occupancy_view(&world);
     let target_cells = query::target_cells(&world);
+    let navigation_view = query::navigation_field(&world);
+    let reservation_ledger = query::reservation_ledger(&world);
     let mut commands = Vec::new();
     movement.handle(
         &tick_events,
         &bug_view,
         occupancy_view,
+        navigation_view,
+        reservation_ledger,
         &target_cells,
         |cell| query::is_cell_blocked(&world, cell),
         &mut commands,
@@ -126,10 +130,14 @@ fn step_commands_target_free_cells() {
     let occupancy_view = query::occupancy_view(&world);
     let mut commands = Vec::new();
     let target_cells = query::target_cells(&world);
+    let navigation_view = query::navigation_field(&world);
+    let reservation_ledger = query::reservation_ledger(&world);
     movement.handle(
         &tick_events,
         &bug_view,
         occupancy_view,
+        navigation_view,
+        reservation_ledger,
         &target_cells,
         |cell| query::is_cell_blocked(&world, cell),
         &mut commands,
@@ -151,6 +159,82 @@ fn step_commands_target_free_cells() {
         world::apply(&mut world, command, &mut follow_up_events);
     }
     pump_system(&mut world, &mut movement, follow_up_events);
+}
+
+#[test]
+fn emits_step_commands_in_bug_id_order() {
+    let mut world = World::new();
+    let mut events = Vec::new();
+    world::apply(
+        &mut world,
+        Command::ConfigureTileGrid {
+            columns: TileCoord::new(5),
+            rows: TileCoord::new(4),
+            tile_length: 1.0,
+            cells_per_tile: 1,
+        },
+        &mut events,
+    );
+    world::apply(
+        &mut world,
+        Command::SpawnBug {
+            spawner: CellCoord::new(0, 0),
+            color: BugColor::from_rgb(0x2f, 0x95, 0x32),
+            health: Health::new(3),
+        },
+        &mut events,
+    );
+    world::apply(
+        &mut world,
+        Command::SpawnBug {
+            spawner: CellCoord::new(4, 0),
+            color: BugColor::from_rgb(0x2f, 0x95, 0x32),
+            health: Health::new(3),
+        },
+        &mut events,
+    );
+
+    let mut movement = Movement::default();
+    pump_system(&mut world, &mut movement, events);
+
+    let mut tick_events = Vec::new();
+    world::apply(
+        &mut world,
+        Command::Tick {
+            dt: Duration::from_millis(250),
+        },
+        &mut tick_events,
+    );
+
+    let bug_view = query::bug_view(&world);
+    let occupancy_view = query::occupancy_view(&world);
+    let target_cells = query::target_cells(&world);
+    let navigation_view = query::navigation_field(&world);
+    let reservation_ledger = query::reservation_ledger(&world);
+    let mut commands = Vec::new();
+    movement.handle(
+        &tick_events,
+        &bug_view,
+        occupancy_view,
+        navigation_view,
+        reservation_ledger,
+        &target_cells,
+        |cell| query::is_cell_blocked(&world, cell),
+        &mut commands,
+    );
+
+    let mut emitted: Vec<BugId> = commands
+        .iter()
+        .filter_map(|command| match command {
+            Command::StepBug { bug_id, .. } => Some(*bug_id),
+            _ => None,
+        })
+        .collect();
+
+    emitted.dedup();
+    let mut sorted = emitted.clone();
+    sorted.sort_by_key(|bug_id| bug_id.get());
+    assert_eq!(emitted, sorted, "step commands must be ordered by BugId");
 }
 
 #[test]
@@ -211,10 +295,14 @@ fn replans_after_failed_step() {
     let bug_view_after_failure = query::bug_view(&world);
     let occupancy_view = query::occupancy_view(&world);
     let mut commands = Vec::new();
+    let navigation_view = query::navigation_field(&world);
+    let reservation_ledger = query::reservation_ledger(&world);
     movement.handle(
         &tick_events,
         &bug_view_after_failure,
         occupancy_view,
+        navigation_view,
+        reservation_ledger,
         &target_cells,
         |cell| query::is_cell_blocked(&world, cell),
         &mut commands,
@@ -334,11 +422,15 @@ fn bugs_respect_tower_blockers() {
     let bug_view = query::bug_view(&world);
     let occupancy_view = query::occupancy_view(&world);
     let target_cells = query::target_cells(&world);
+    let navigation_view = query::navigation_field(&world);
+    let reservation_ledger = query::reservation_ledger(&world);
     let mut commands = Vec::new();
     movement.handle(
         &frame_events,
         &bug_view,
         occupancy_view,
+        navigation_view,
+        reservation_ledger,
         &target_cells,
         |cell| query::is_cell_blocked(&world, cell),
         &mut commands,
@@ -386,11 +478,15 @@ fn blocked_bugs_do_not_accumulate_extra_step_time() {
             let bug_view = query::bug_view(world_state);
             let occupancy_view = query::occupancy_view(world_state);
             let targets = query::target_cells(world_state);
+            let navigation_view = query::navigation_field(world_state);
+            let reservation_ledger = query::reservation_ledger(world_state);
             let mut commands = Vec::new();
             movement.handle(
                 &pending_events,
                 &bug_view,
                 occupancy_view,
+                navigation_view,
+                reservation_ledger,
                 &targets,
                 |cell| query::is_cell_blocked(world_state, cell),
                 &mut commands,
@@ -514,10 +610,14 @@ fn pump_system(world: &mut World, movement: &mut Movement, mut events: Vec<Event
         let occupancy_view = query::occupancy_view(world);
         let mut commands = Vec::new();
         let target_cells = query::target_cells(world);
+        let navigation_view = query::navigation_field(world);
+        let reservation_ledger = query::reservation_ledger(world);
         movement.handle(
             &events,
             &bug_view,
             occupancy_view,
+            navigation_view,
+            reservation_ledger,
             &target_cells,
             |cell| query::is_cell_blocked(&*world, cell),
             &mut commands,

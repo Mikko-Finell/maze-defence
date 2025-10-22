@@ -368,7 +368,7 @@ impl BugColor {
 }
 
 /// Cardinal movement directions available to bugs.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Direction {
     /// Movement toward decreasing row indices.
     North,
@@ -381,7 +381,7 @@ pub enum Direction {
 }
 
 /// Unique identifier assigned to a bug.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct BugId(u32);
 
 impl BugId {
@@ -942,6 +942,101 @@ impl<'a> NavigationFieldView<'a> {
             width: self.width,
             height: self.height,
             distances: Cow::Owned(self.distances.into_owned()),
+        }
+    }
+}
+
+/// Immutable claim describing a bug's requested destination for the current tick.
+///
+/// The reservation ledger collects these claims before the world applies any
+/// movement. Systems may inspect the data to understand which bugs are already
+/// queued to vacate specific cells and bias their own planning accordingly.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReservationClaim {
+    bug_id: BugId,
+    direction: Direction,
+}
+
+impl ReservationClaim {
+    /// Creates a new reservation claim for the provided bug and direction.
+    #[must_use]
+    pub const fn new(bug_id: BugId, direction: Direction) -> Self {
+        Self { bug_id, direction }
+    }
+
+    /// Identifier of the bug that owns the reservation.
+    #[must_use]
+    pub const fn bug_id(&self) -> BugId {
+        self.bug_id
+    }
+
+    /// Direction the bug intends to travel during this tick.
+    #[must_use]
+    pub const fn direction(&self) -> Direction {
+        self.direction
+    }
+}
+
+/// Read-only snapshot enumerating all pending movement reservations.
+///
+/// The ledger mirrors the world's reservation queue for the active tick. It is
+/// deterministic—claims are sorted by [`BugId`]—so systems may iterate the
+/// entries without additional ordering work.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReservationLedgerView<'a> {
+    #[serde(borrow)]
+    claims: Cow<'a, [ReservationClaim]>,
+}
+
+impl<'a> ReservationLedgerView<'a> {
+    /// Captures a ledger view borrowing the underlying reservation claims.
+    #[must_use]
+    pub fn from_slice(claims: &'a [ReservationClaim]) -> Self {
+        Self {
+            claims: Cow::Borrowed(claims),
+        }
+    }
+
+    /// Captures a ledger view that owns the provided reservation claims outright.
+    #[must_use]
+    pub fn from_owned(claims: Vec<ReservationClaim>) -> ReservationLedgerView<'static> {
+        ReservationLedgerView {
+            claims: Cow::Owned(claims),
+        }
+    }
+
+    /// Number of claims stored in the ledger for the current tick.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.claims.len()
+    }
+
+    /// Reports whether the ledger currently tracks any reservations.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.claims.is_empty()
+    }
+
+    /// Iterator over the captured reservation claims in deterministic order.
+    #[must_use = "iterators are lazy and do nothing unless consumed"]
+    pub fn iter(&'a self) -> impl Iterator<Item = ReservationClaim> + 'a {
+        self.claims.iter().copied()
+    }
+
+    /// Retrieves the reservation registered for the provided bug, if any.
+    #[must_use]
+    pub fn claim_for(&self, bug_id: BugId) -> Option<ReservationClaim> {
+        self.claims
+            .iter()
+            .copied()
+            .find(|claim| claim.bug_id == bug_id)
+    }
+
+    /// Consumes the view, yielding an owned ledger snapshot.
+    #[must_use]
+    pub fn into_owned(self) -> ReservationLedgerView<'static> {
+        ReservationLedgerView {
+            claims: Cow::Owned(self.claims.into_owned()),
         }
     }
 }

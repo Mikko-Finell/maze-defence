@@ -663,12 +663,16 @@ impl Simulation {
                 let bug_view = query::bug_view(&self.world);
                 let occupancy_view = query::occupancy_view(&self.world);
                 let target_cells = query::target_cells(&self.world);
+                let navigation_view = query::navigation_field(&self.world);
+                let reservation_ledger = query::reservation_ledger(&self.world);
                 self.scratch_commands.clear();
                 let pathfinding_start = Instant::now();
                 self.movement.handle(
                     &events,
                     &bug_view,
                     occupancy_view,
+                    navigation_view,
+                    reservation_ledger,
                     &target_cells,
                     |cell| query::is_cell_blocked(&self.world, cell),
                     &mut self.scratch_commands,

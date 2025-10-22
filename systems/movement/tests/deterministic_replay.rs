@@ -71,10 +71,14 @@ fn process_movement(
         let occupancy_view = query::occupancy_view(world);
         let mut commands = Vec::new();
         let target_cells = query::target_cells(world);
+        let navigation_view = query::navigation_field(world);
+        let reservation_ledger = query::reservation_ledger(world);
         movement.handle(
             &events,
             &bug_view,
             occupancy_view,
+            navigation_view,
+            reservation_ledger,
             &target_cells,
             |cell| query::is_cell_blocked(&*world, cell),
             &mut commands,
@@ -163,12 +167,16 @@ fn movement_pauses_in_builder_mode() {
     let target_cells = query::target_cells(&world);
 
     let mut commands = Vec::new();
+    let navigation_view = query::navigation_field(&world);
+    let reservation_ledger = query::reservation_ledger(&world);
     movement.handle(
         &[Event::TimeAdvanced {
             dt: Duration::from_millis(500),
         }],
         &bug_view,
         occupancy_view,
+        navigation_view,
+        reservation_ledger,
         &target_cells,
         |cell| query::is_cell_blocked(&world, cell),
         &mut commands,
@@ -179,6 +187,8 @@ fn movement_pauses_in_builder_mode() {
     );
 
     commands.clear();
+    let navigation_view = query::navigation_field(&world);
+    let reservation_ledger = query::reservation_ledger(&world);
     movement.handle(
         &[
             Event::PlayModeChanged {
@@ -190,6 +200,8 @@ fn movement_pauses_in_builder_mode() {
         ],
         &bug_view,
         occupancy_view,
+        navigation_view,
+        reservation_ledger,
         &target_cells,
         |cell| query::is_cell_blocked(&world, cell),
         &mut commands,
