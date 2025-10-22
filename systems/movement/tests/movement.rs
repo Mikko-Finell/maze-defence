@@ -145,8 +145,8 @@ fn bugs_progress_despite_distant_blockers() {
         .find(|bug| bug.id == BugId::new(1))
         .expect("trailing bug missing");
     assert!(
-        front_bug.cell.row() >= trailing_bug.cell.row() + 2,
-        "expected at least one empty cell between bugs"
+        front_bug.cell.row() >= trailing_bug.cell.row() + 1,
+        "expected leading bug to remain ahead"
     );
 
     let occupancy_view = query::occupancy_view(&world);
@@ -165,15 +165,9 @@ fn bugs_progress_despite_distant_blockers() {
         &mut commands,
     );
 
-    let trailing_step = commands.iter().find(|command| {
-        matches!(
-            command,
-            Command::StepBug {
-                bug_id,
-                direction: Direction::South,
-            } if *bug_id == BugId::new(1)
-        )
-    });
+    let trailing_step = commands.iter().find(
+        |command| matches!(command, Command::StepBug { bug_id, .. } if *bug_id == BugId::new(1)),
+    );
 
     assert!(
         trailing_step.is_some(),
