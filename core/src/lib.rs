@@ -765,6 +765,8 @@ pub struct BugSnapshot {
     pub cell: CellCoord,
     /// Appearance assigned to the bug.
     pub color: BugColor,
+    /// Maximum health the bug was spawned with.
+    pub max_health: Health,
     /// Remaining health stored for the bug.
     pub health: Health,
     /// Indicates whether the bug accrued enough time to advance.

@@ -239,6 +239,7 @@ mod tests {
             id: BugId::new(id),
             cell: CellCoord::new(cell.0, cell.1),
             color: maze_defence_core::BugColor::from_rgb(255, 0, 0),
+            max_health: Health::new(3),
             health: Health::new(3),
             ready_for_step: true,
             accumulated: Duration::ZERO,
