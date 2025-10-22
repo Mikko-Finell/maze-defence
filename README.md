@@ -10,7 +10,7 @@ Use Cargo to start the CLI adapter from the workspace root:
 cargo run --bin maze-defence
 ```
 
-By default the grid measures **10×10 tiles**, the surrounding wall thickness is **40 pixels**, four cell divisions are drawn inside each tile, and bugs attempt a step every **250 milliseconds** while new bugs spawn every **1,000 milliseconds**.
+By default the grid measures **10×10 tiles**, each tile is subdivided into **four cells per edge**, and the world synthesises a dedicated perimeter wall row so bugs march across a walkway before entering a hidden exit row. Bugs attempt a step every **250 milliseconds** while new bugs spawn every **1,000 milliseconds**.
 
 All flags must be passed after the `--` separator so that Cargo forwards them to the game binary.
 
@@ -23,7 +23,6 @@ The CLI exposes the following arguments:
 | `-s`, `--size WIDTHxHEIGHT` | Sets both tile dimensions at once (for example `12x18`). Conflicts with `--width`/`--height`. | `10x10` |
 | `--width COLUMNS` | Overrides the number of tile columns. Requires `--height` so the grid stays rectangular. | `10` |
 | `--height ROWS` | Overrides the number of tile rows. Requires `--width`. | `10` |
-| `--wall-thickness PIXELS` | Controls the thickness of the perimeter wall. | `40` |
 | `--cells-per-tile COUNT` | Chooses how many sub-cells are rendered inside each tile edge. Must be at least `1`. | `4` |
 | `--bug-step-ms MILLISECONDS` | Sets how long each bug waits before taking another step. Accepts values from `1` to `60_000`. | `250` |
 | `--bug-spawn-interval-ms MILLISECONDS` | Controls the interval between automatic spawns while in attack mode. Accepts values from `1` to `60_000`. | `1_000` |
@@ -43,15 +42,11 @@ cargo run --bin maze-defence -- --width 20 --height 15
 
 If no size is supplied the game falls back to the default 10×10 layout. The `--width` and `--height` flags must always be specified together.
 
-## Adjusting the wall thickness
+## Understanding the perimeter wall
 
-The perimeter wall defaults to a 40 pixel thickness. Override it with the `--wall-thickness` flag:
+Maze Defence no longer scales the wall by pixel thickness. The world instead expands its occupancy grid with three extra rows: a playable walkway directly below the interior tiles, a visible wall row, and a hidden exit row that consumes culled bugs. `total_cell_rows(...)` accounts for all three layers, `visible_wall_row_for_tile_grid(...)` selects which row is rendered as walls, and the test-only helper `walkway_row_for_tile_grid(...)` shows that the walkway remains a playable strip just above that wall.【F:world/src/lib.rs†L1048-L1098】【F:world/src/lib.rs†L1099-L1129】
 
-```bash
-cargo run --bin maze-defence -- --wall-thickness 64
-```
-
-Combine this flag with either of the grid size options to customise the scene at launch.
+When the walls are rebuilt, `build_cell_walls(...)` fills every column on the visible row except for the exit gap reported by `exit_columns_for_tile_grid(...)`, ensuring the walkway funnels bugs into the precise opening derived from `cells_per_tile`. Rendering mirrors this layout: `TileGridPresentation::BOTTOM_BORDER_CELL_LAYERS` documents that the bottom border corresponds to the visible wall row so the on-screen height matches the world geometry.【F:world/src/lib.rs†L1118-L1150】【F:adapters/rendering/src/lib.rs†L310-L339】
 
 ## Tuning tile rendering detail
 
