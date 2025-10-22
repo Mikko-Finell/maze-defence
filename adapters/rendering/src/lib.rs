@@ -213,6 +213,23 @@ impl SceneTower {
     }
 }
 
+/// Cell-sized wall rendered inside the maze interior.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct SceneWall {
+    /// Zero-based column index of the cell guarded by the wall.
+    pub column: u32,
+    /// Zero-based row index of the cell guarded by the wall.
+    pub row: u32,
+}
+
+impl SceneWall {
+    /// Creates a new scene wall descriptor.
+    #[must_use]
+    pub const fn new(column: u32, row: u32) -> Self {
+        Self { column, row }
+    }
+}
+
 /// Declarative builder-mode preview emitted by the simulation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct TowerPreview {
@@ -558,6 +575,8 @@ pub struct Scene {
     pub tile_grid: TileGridPresentation,
     /// Wall drawn outside the play area.
     pub wall: WallPresentation,
+    /// Cell-sized walls populating the maze interior.
+    pub walls: Vec<SceneWall>,
     /// Bugs currently visible within the maze, positioned using cell coordinates.
     pub bugs: Vec<BugPresentation>,
     /// Towers currently visible within the maze.
@@ -581,6 +600,7 @@ impl Scene {
     pub fn new(
         tile_grid: TileGridPresentation,
         wall: WallPresentation,
+        walls: Vec<SceneWall>,
         bugs: Vec<BugPresentation>,
         towers: Vec<SceneTower>,
         tower_targets: Vec<TowerTargetLine>,
@@ -592,6 +612,7 @@ impl Scene {
         Self {
             tile_grid,
             wall,
+            walls,
             bugs,
             towers,
             tower_targets,
@@ -772,6 +793,7 @@ mod tests {
         let scene = Scene::new(
             tile_grid,
             wall.clone(),
+            Vec::new(),
             bugs.clone(),
             Vec::new(),
             Vec::new(),
@@ -783,6 +805,7 @@ mod tests {
 
         assert_eq!(scene.tile_grid, tile_grid);
         assert_eq!(scene.wall, wall);
+        assert!(scene.walls.is_empty());
         assert_eq!(scene.bugs, bugs);
         assert_eq!(scene.play_mode, PlayMode::Attack);
         assert!(scene.tower_preview.is_none());
@@ -828,6 +851,7 @@ mod tests {
         let scene = Scene::new(
             tile_grid,
             wall.clone(),
+            Vec::new(),
             vec![],
             vec![SceneTower::new(
                 TowerId::new(1),
@@ -851,6 +875,7 @@ mod tests {
         assert_eq!(scene.towers.len(), 1);
         assert_eq!(scene.tile_grid, tile_grid);
         assert_eq!(scene.wall, wall);
+        assert!(scene.walls.is_empty());
         assert_eq!(
             scene.tower_feedback,
             Some(TowerInteractionFeedback::PlacementRejected {

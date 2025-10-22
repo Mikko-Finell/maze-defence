@@ -18,7 +18,7 @@ fn deterministic_replay_produces_expected_snapshot() {
     assert_eq!(first, second, "replay diverged between runs");
 
     let fingerprint = first.fingerprint();
-    let expected = 0xcefe_88fc_5623_038a;
+    let expected = 0x14e0_27f1_4396_ee45;
     assert_eq!(
         fingerprint, expected,
         "fingerprint mismatch: {fingerprint:#x}"
@@ -286,7 +286,13 @@ impl From<&Event> for EventRecord {
             Event::TowerPlaced { .. }
             | Event::TowerRemoved { .. }
             | Event::TowerPlacementRejected { .. }
-            | Event::TowerRemovalRejected { .. } => {
+            | Event::TowerRemovalRejected { .. }
+            | Event::ProjectileFired { .. }
+            | Event::ProjectileHit { .. }
+            | Event::ProjectileExpired { .. }
+            | Event::ProjectileRejected { .. }
+            | Event::BugDamaged { .. }
+            | Event::BugDied { .. } => {
                 unreachable!("tower events are not expected in movement replay tests")
             }
         }
