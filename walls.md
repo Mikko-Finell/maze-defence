@@ -60,7 +60,7 @@
 2. Update `tile_cell.md` (and any other docs mentioning the perimeter wall) to illustrate the new triple-row layout (playable walkway, visible wall row, hidden exit row).
 3. Ensure help output (`--help`) no longer advertises wall thickness.
 
-## 5. Regression tests & golden runs
+## 5. Regression tests & golden runs [DONE]
 - Update or add world unit tests verifying the new wall row and the exit gap.
 - Run the deterministic replay test suite after adjusting the layout to capture a new golden snapshot (bugs should still exit deterministically).
 - Extend adapter tests to assert that the bottom border renders the expected number of rows when `cells_per_tile` varies (so scaling math stays correct).
