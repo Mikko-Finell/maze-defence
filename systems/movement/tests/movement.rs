@@ -91,6 +91,97 @@ fn emits_step_commands_toward_target() {
 }
 
 #[test]
+fn bugs_progress_despite_distant_blockers() {
+    let mut world = World::new();
+    let mut events = Vec::new();
+    world::apply(
+        &mut world,
+        Command::ConfigureTileGrid {
+            columns: TileCoord::new(1),
+            rows: TileCoord::new(1),
+            tile_length: 1.0,
+            cells_per_tile: 2,
+        },
+        &mut events,
+    );
+
+    let mut movement = Movement::default();
+    pump_system(&mut world, &mut movement, events);
+
+    apply_and_pump(
+        &mut world,
+        &mut movement,
+        Command::SpawnBug {
+            spawner: CellCoord::new(0, 0),
+            color: BugColor::from_rgb(0x2f, 0x95, 0x32),
+            health: Health::new(3),
+        },
+    );
+
+    let step = Duration::from_millis(250);
+    drive_tick_and_collect(&mut world, &mut movement, step);
+    drive_tick_and_collect(&mut world, &mut movement, step);
+
+    apply_and_pump(
+        &mut world,
+        &mut movement,
+        Command::SpawnBug {
+            spawner: CellCoord::new(0, 0),
+            color: BugColor::from_rgb(0x2f, 0x95, 0x32),
+            health: Health::new(3),
+        },
+    );
+
+    let mut tick_events = Vec::new();
+    world::apply(&mut world, Command::Tick { dt: step }, &mut tick_events);
+
+    let bug_view = query::bug_view(&world);
+    let front_bug = bug_view
+        .iter()
+        .find(|bug| bug.id == BugId::new(0))
+        .expect("front bug missing");
+    let trailing_bug = bug_view
+        .iter()
+        .find(|bug| bug.id == BugId::new(1))
+        .expect("trailing bug missing");
+    assert!(
+        front_bug.cell.row() >= trailing_bug.cell.row() + 2,
+        "expected at least one empty cell between bugs"
+    );
+
+    let occupancy_view = query::occupancy_view(&world);
+    let targets = query::target_cells(&world);
+    let navigation_view = query::navigation_field(&world);
+    let reservation_ledger = query::reservation_ledger(&world);
+    let mut commands = Vec::new();
+    movement.handle(
+        &tick_events,
+        &bug_view,
+        occupancy_view,
+        navigation_view,
+        reservation_ledger,
+        &targets,
+        |cell| query::is_cell_blocked(&world, cell),
+        &mut commands,
+    );
+
+    let trailing_step = commands.iter().find(|command| {
+        matches!(
+            command,
+            Command::StepBug {
+                bug_id,
+                direction: Direction::South,
+            } if *bug_id == BugId::new(1)
+        )
+    });
+
+    assert!(
+        trailing_step.is_some(),
+        "expected bug behind the blocker to advance toward the exit"
+    );
+}
+
+#[test]
 fn step_commands_target_free_cells() {
     let mut world = World::new();
     let mut events = Vec::new();
