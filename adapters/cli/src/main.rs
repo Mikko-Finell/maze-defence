@@ -512,12 +512,6 @@ impl Simulation {
         self.last_advance_profile
     }
 
-    /// Returns the current interpolated position of the bug if available,
-    /// otherwise falls back to its integer cell center.
-    fn interpolated_bug_position(&self, id: BugId) -> Vec2 {
-        self.interpolated_bug_position_with_cell(id, None)
-    }
-
     fn interpolated_bug_position_with_cell(&self, id: BugId, cell: Option<CellCoord>) -> Vec2 {
         if let Some(motion) = self.bug_motions.get(&id) {
             let from = Self::cell_center(motion.from);
@@ -1128,7 +1122,7 @@ mod tests {
             .cloned()
             .expect("spawned bug available");
 
-        let position = simulation.interpolated_bug_position(bug.id);
+        let position = simulation.interpolated_bug_position_with_cell(bug.id, Some(bug.cell));
         assert_eq!(position, Simulation::cell_center(bug.cell));
     }
 
