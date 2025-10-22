@@ -89,7 +89,7 @@ crowd planner while keeping legacy behaviour intact for now.
 **Exit checks:** System crate compiles, existing movement tests remain green, and
 profiling shows no unexpected allocations after the refactor.
 
-# 5) [TODO] Gradient-first progress (`systems/movement`)
+# 5) [DONE] Gradient-first progress (`systems/movement`)
 
 **Goal:** Replace the "path to exit or nothing" logic with the static gradient
 walker so bugs always advance when a lower-distance neighbour is free.
