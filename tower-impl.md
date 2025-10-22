@@ -2,7 +2,7 @@ Here’s a tight, low-risk sequence that keeps the tree green at every merge and
 
 Do not start working before you're read `tower-spec.md` so you understand the context of what you're doing.
 
-For tower targeting behaviour and its determinism guard, see the replay harness documented in `target-impl.md` step 5.
+For tower targeting behaviour and its determinism guard, see the replay harness documented in `target-impl.md` step 5. Projectile combat hardening (cooldowns, projectiles, and docs) lands in `tower-shooting-impl.md` step 10 so placement/targeting/shooting stay in sync.
 
 # 1) Contracts first (core)
 
@@ -115,6 +115,7 @@ For tower targeting behaviour and its determinism guard, see the replay harness 
 * Add property tests for footprint/occupancy mapping.
 * Document contract in `CORE.md`/`AGENTS.md` cross-refs (authority, events always on failures, order guarantees).
 * Add “tower place/remove” to the determinism harness suite.
+* Cross-link `tower-shooting-impl.md` step 10 once combat lands so placement docs stay paired with shooting behaviour.
 
 ---
 
