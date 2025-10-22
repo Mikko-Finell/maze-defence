@@ -23,8 +23,8 @@ use maze_defence_core::{
 };
 use maze_defence_rendering::{
     BugPresentation, Color, FrameInput, FrameSimulationBreakdown, Presentation, RenderingBackend,
-    Scene, SceneTower, SceneWall, TargetCellPresentation, TargetPresentation, TileGridPresentation,
-    TileSpacePosition, TowerInteractionFeedback, TowerPreview, TowerTargetLine, WallPresentation,
+    Scene, SceneTower, SceneWall, TileGridPresentation, TileSpacePosition,
+    TowerInteractionFeedback, TowerPreview, TowerTargetLine,
 };
 use maze_defence_rendering_macroquad::MacroquadBackend;
 use maze_defence_system_bootstrap::Bootstrap;
@@ -87,9 +87,6 @@ struct CliArgs {
     /// Number of rows in the tile grid when using explicit dimensions.
     #[arg(long, value_name = "ROWS", requires = "width")]
     height: Option<u32>,
-    /// Thickness of the surrounding wall measured in pixels.
-    #[arg(long, value_name = "PIXELS", default_value_t = 40.0)]
-    wall_thickness: f32,
     /// Number of cells drawn along each tile edge when rendering.
     #[arg(
         long = "cells-per-tile",
@@ -191,11 +188,10 @@ fn main() -> Result<()> {
         bug_spawn_interval,
     );
     let bootstrap = Bootstrap;
-    let (banner, grid_scene, wall_scene) = {
+    let (banner, grid_scene, wall_color) = {
         let world = simulation.world();
         let banner = bootstrap.welcome_banner(world).to_owned();
         let tile_grid = bootstrap.tile_grid(world);
-        let target = bootstrap.target(world);
         let grid_scene = TileGridPresentation::new(
             tile_grid.columns().get(),
             tile_grid.rows().get(),
@@ -203,22 +199,13 @@ fn main() -> Result<()> {
             args.cells_per_tile,
             Color::from_rgb_u8(31, 54, 22),
         )?;
-        let target_cells: Vec<TargetCellPresentation> = target
-            .cells()
-            .iter()
-            .map(|cell| TargetCellPresentation::new(cell.column(), cell.row()))
-            .collect();
-        let wall_scene = WallPresentation::new(
-            args.wall_thickness,
-            Color::from_rgb_u8(68, 45, 15),
-            TargetPresentation::new(target_cells),
-        );
-        (banner, grid_scene, wall_scene)
+        let wall_color = Color::from_rgb_u8(68, 45, 15);
+        (banner, grid_scene, wall_color)
     };
 
     let mut scene = Scene::new(
         grid_scene,
-        wall_scene,
+        wall_color,
         Vec::new(),
         Vec::new(),
         Vec::new(),
@@ -772,15 +759,11 @@ mod tests {
             Color::from_rgb_u8(30, 30, 30),
         )
         .expect("valid grid dimensions");
-        let wall = WallPresentation::new(
-            12.0,
-            Color::from_rgb_u8(60, 45, 30),
-            TargetPresentation::new(Vec::new()),
-        );
+        let wall_color = Color::from_rgb_u8(60, 45, 30);
 
         Scene::new(
             tile_grid,
-            wall,
+            wall_color,
             Vec::new(),
             Vec::new(),
             Vec::new(),
