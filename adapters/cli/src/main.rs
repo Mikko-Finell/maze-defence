@@ -599,10 +599,16 @@ impl Simulation {
             None
         };
         scene.hovered_tower = if scene.play_mode == PlayMode::Attack {
-            self.pending_input
-                .cursor_tile_space
-                .map(|tile| self.tile_position_to_cell(tile))
-                .and_then(|cell| query::tower_at(&self.world, cell))
+            match (
+                self.pending_input.cursor_tile_space,
+                self.pending_input.cursor_world_space,
+            ) {
+                (Some(_), Some(world)) => {
+                    let cell = self.world_position_to_cell(world);
+                    query::tower_at(&self.world, cell)
+                }
+                _ => None,
+            }
         } else {
             None
         };
@@ -884,6 +890,75 @@ impl Simulation {
         let column = TileGridPresentation::SIDE_BORDER_CELL_LAYERS.saturating_add(column_cells);
         let row = TileGridPresentation::TOP_BORDER_CELL_LAYERS.saturating_add(row_cells);
         CellCoord::new(column, row)
+    }
+
+    fn world_position_to_cell(&self, position: Vec2) -> CellCoord {
+        let tile_grid = query::tile_grid(&self.world);
+        let cells_per_tile = self.cells_per_tile.max(1);
+        let tile_length = tile_grid.tile_length();
+        if tile_length <= f32::EPSILON {
+            return CellCoord::new(
+                TileGridPresentation::SIDE_BORDER_CELL_LAYERS,
+                TileGridPresentation::TOP_BORDER_CELL_LAYERS,
+            );
+        }
+
+        let cell_length = tile_length / cells_per_tile as f32;
+        if cell_length <= f32::EPSILON {
+            return CellCoord::new(
+                TileGridPresentation::SIDE_BORDER_CELL_LAYERS,
+                TileGridPresentation::TOP_BORDER_CELL_LAYERS,
+            );
+        }
+
+        let column_cells = Self::world_axis_to_cell_index(
+            position.x,
+            tile_grid.columns().get(),
+            cells_per_tile,
+            cell_length,
+        );
+        let row_cells = Self::world_axis_to_cell_index(
+            position.y,
+            tile_grid.rows().get(),
+            cells_per_tile,
+            cell_length,
+        );
+
+        let column = TileGridPresentation::SIDE_BORDER_CELL_LAYERS.saturating_add(column_cells);
+        let row = TileGridPresentation::TOP_BORDER_CELL_LAYERS.saturating_add(row_cells);
+        CellCoord::new(column, row)
+    }
+
+    fn world_axis_to_cell_index(
+        value: f32,
+        tiles: u32,
+        cells_per_tile: u32,
+        cell_length: f32,
+    ) -> u32 {
+        if tiles == 0 || cells_per_tile == 0 || cell_length <= f32::EPSILON {
+            return 0;
+        }
+
+        let total_cells = tiles.saturating_mul(cells_per_tile);
+        if total_cells == 0 {
+            return 0;
+        }
+
+        let index = (value / cell_length).floor();
+        if !index.is_finite() {
+            return 0;
+        }
+
+        let max_index = (total_cells - 1) as f32;
+        if index < 0.0 {
+            return 0;
+        }
+
+        if index > max_index {
+            return total_cells - 1;
+        }
+
+        index as u32
     }
 
     fn region_is_placeable(&self, region: CellRect) -> bool {
@@ -1502,6 +1577,97 @@ mod tests {
 
         assert_eq!(scene.hovered_tower, Some(tower_snapshot.id));
         assert_eq!(scene.play_mode, PlayMode::Attack);
+    }
+
+    #[test]
+    fn hovered_tower_tracks_cursor_cell_without_offset() {
+        let mut simulation = new_simulation();
+        enter_builder_mode(&mut simulation);
+
+        let placement_tile = TileSpacePosition::from_indices(0, 0);
+        let placement_world = Vec2::new(16.0, 16.0);
+
+        simulation.handle_input(FrameInput {
+            cursor_world_space: Some(placement_world),
+            cursor_tile_space: Some(placement_tile),
+            confirm_action: true,
+            ..FrameInput::default()
+        });
+        simulation.advance(Duration::from_millis(16));
+
+        let tower_view = query::towers(simulation.world());
+        let tower_snapshot = tower_view.iter().next().expect("tower should be placed");
+
+        simulation.handle_input(FrameInput {
+            mode_toggle: true,
+            ..FrameInput::default()
+        });
+        simulation.advance(Duration::ZERO);
+        assert_eq!(query::play_mode(simulation.world()), PlayMode::Attack);
+
+        let tile_grid = query::tile_grid(simulation.world());
+        let cells_per_tile = simulation.cells_per_tile.max(1);
+        let cell_length = tile_grid.tile_length() / cells_per_tile as f32;
+        let tile_extent = tile_grid.tile_length();
+        let grid_presentation = TileGridPresentation::new(
+            tile_grid.columns().get(),
+            tile_grid.rows().get(),
+            tile_grid.tile_length(),
+            cells_per_tile,
+            Color::from_rgb_u8(0, 0, 0),
+        )
+        .expect("valid grid dimensions");
+        let footprint = Vec2::splat(1.0);
+
+        let mut scene = make_scene();
+
+        let inside_positions = [
+            Vec2::new(0.25 * cell_length, 0.25 * cell_length),
+            Vec2::new(tile_extent - 0.25 * cell_length, 0.25 * cell_length),
+            Vec2::new(0.25 * cell_length, tile_extent - 0.25 * cell_length),
+            Vec2::new(
+                tile_extent - 0.25 * cell_length,
+                tile_extent - 0.25 * cell_length,
+            ),
+        ];
+        for position in inside_positions {
+            let tile_position = grid_presentation
+                .snap_world_to_tile(position, footprint)
+                .expect("position inside grid");
+            simulation.handle_input(FrameInput {
+                cursor_world_space: Some(position),
+                cursor_tile_space: Some(tile_position),
+                ..FrameInput::default()
+            });
+            simulation.populate_scene(&mut scene);
+            assert_eq!(scene.hovered_tower, Some(tower_snapshot.id));
+        }
+
+        let outside_positions = [
+            Vec2::new(tile_extent + 0.5 * cell_length, tile_extent * 0.5),
+            Vec2::new(tile_extent * 0.5, tile_extent + 0.5 * cell_length),
+            Vec2::new(tile_extent + cell_length, tile_extent + cell_length),
+        ];
+        for position in outside_positions {
+            let tile_position = grid_presentation
+                .snap_world_to_tile(position, footprint)
+                .expect("position inside grid bounds");
+            simulation.handle_input(FrameInput {
+                cursor_world_space: Some(position),
+                cursor_tile_space: Some(tile_position),
+                ..FrameInput::default()
+            });
+            simulation.populate_scene(&mut scene);
+            assert!(scene.hovered_tower.is_none());
+        }
+
+        simulation.handle_input(FrameInput {
+            cursor_world_space: Some(Vec2::ZERO),
+            cursor_tile_space: None,
+            ..FrameInput::default()
+        });
+        simulation.populate_scene(&mut scene);
+        assert!(scene.hovered_tower.is_none());
     }
 
     #[test]
