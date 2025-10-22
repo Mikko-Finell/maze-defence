@@ -37,6 +37,7 @@ const DEFAULT_STEP_QUANTUM: Duration = Duration::from_millis(250);
 const MIN_STEP_QUANTUM: Duration = Duration::from_micros(1);
 const SIDE_BORDER_CELL_LAYERS: u32 = 1;
 const TOP_BORDER_CELL_LAYERS: u32 = 1;
+const EXIT_CELL_LAYERS: u32 = 1;
 
 /// Represents the authoritative Maze Defence world state.
 #[derive(Debug)]
@@ -167,9 +168,7 @@ impl World {
             return;
         }
 
-        let mut exited_bugs: Vec<BugId> = Vec::new();
         let (columns, rows) = self.occupancy.dimensions();
-        let target_columns: Vec<u32> = self.targets.iter().map(|cell| cell.column()).collect();
         for request in requests {
             let Some(index) = self.bug_index(request.bug_id) else {
                 continue;
@@ -183,17 +182,13 @@ impl World {
                 continue;
             }
 
-            let Some(next_cell) =
-                advance_cell(from, request.direction, columns, rows, &target_columns)
-            else {
+            let Some(next_cell) = advance_cell(from, request.direction, columns, rows) else {
                 continue;
             };
 
             if !self.occupancy.can_enter(next_cell) {
                 continue;
             }
-
-            let reached_target = self.targets.contains(&next_cell);
 
             self.occupancy.vacate(from);
             self.occupancy.occupy(bug.id, next_cell);
@@ -205,19 +200,28 @@ impl World {
                 to: next_cell,
             });
 
-            if reached_target {
-                self.occupancy.vacate(next_cell);
-                exited_bugs.push(bug.id);
-                continue;
-            }
-
             let _ = before;
         }
+    }
 
-        for bug_id in exited_bugs {
+    fn process_exit_cells(&mut self, out_events: &mut Vec<Event>) {
+        if self.targets.is_empty() {
+            return;
+        }
+
+        let mut exited = Vec::new();
+        for bug in &self.bugs {
+            if self.targets.contains(&bug.cell) {
+                exited.push((bug.id, bug.cell));
+            }
+        }
+
+        for (bug_id, cell) in exited {
+            self.occupancy.vacate(cell);
             if let Some(position) = self.bug_index(bug_id) {
                 self.remove_bug_at_index(position);
             }
+            out_events.push(Event::BugExited { bug_id, cell });
         }
     }
 }
@@ -277,6 +281,7 @@ pub fn apply(world: &mut World, command: Command, out_events: &mut Vec<Event>) {
                 .reservations
                 .queue(world.tick_index, StepRequest { bug_id, direction });
             world.resolve_pending_steps(out_events);
+            world.process_exit_cells(out_events);
         }
         Command::SetPlayMode { mode } => {
             if world.play_mode == mode {
@@ -980,12 +985,14 @@ fn total_cell_rows(rows: TileCoord, cells_per_tile: u32) -> u32 {
     if interior == 0 {
         0
     } else {
-        interior.saturating_add(TOP_BORDER_CELL_LAYERS)
+        interior
+            .saturating_add(TOP_BORDER_CELL_LAYERS)
+            .saturating_add(EXIT_CELL_LAYERS)
     }
 }
 
 fn exit_row_for_tile_grid(rows: TileCoord, cells_per_tile: u32) -> u32 {
-    total_cell_rows(rows, cells_per_tile)
+    total_cell_rows(rows, cells_per_tile).saturating_sub(1)
 }
 
 fn exit_columns_for_tile_grid(columns: TileCoord, cells_per_tile: u32) -> Vec<u32> {
@@ -1032,7 +1039,6 @@ fn advance_cell(
     direction: Direction,
     columns: u32,
     rows: u32,
-    target_columns: &[u32],
 ) -> Option<CellCoord> {
     match direction {
         Direction::North => {
@@ -1051,10 +1057,6 @@ fn advance_cell(
             let next_row = from.row().checked_add(1)?;
             if next_row < rows {
                 Some(CellCoord::new(from.column(), next_row))
-            } else if next_row == rows
-                && target_columns.iter().any(|column| *column == from.column())
-            {
-                Some(CellCoord::new(from.column(), rows))
             } else {
                 None
             }
@@ -1077,7 +1079,8 @@ fn target_cells_from_wall(wall: &Wall) -> Vec<CellCoord> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use maze_defence_core::{BugColor, Goal, Health, PlayMode};
+    use maze_defence_core::{BugColor, BugId, Direction, Goal, Health, PlayMode};
+  
     use std::{
         collections::hash_map::DefaultHasher,
         hash::{Hash, Hasher},
@@ -2182,6 +2185,139 @@ mod tests {
     }
 
     #[test]
+    fn bug_emits_exit_event_after_advancing_to_exit_cell() {
+        let mut world = World::new();
+        let mut events = Vec::new();
+
+        apply(
+            &mut world,
+            Command::ConfigureTileGrid {
+                columns: TileCoord::new(3),
+                rows: TileCoord::new(3),
+                tile_length: 1.0,
+                cells_per_tile: 1,
+            },
+            &mut events,
+        );
+        events.clear();
+
+        let exit_cell = query::target_cells(&world)
+            .into_iter()
+            .next()
+            .expect("expected at least one exit cell");
+        let spawn_cell = query::bug_spawners(&world)
+            .into_iter()
+            .find(|cell| cell.column() == exit_cell.column())
+            .expect("expected aligned spawner");
+
+        apply(
+            &mut world,
+            Command::SpawnBug {
+                spawner: spawn_cell,
+                color: BugColor::from_rgb(0x2f, 0x95, 0x32),
+            },
+            &mut events,
+        );
+
+        let bug_id = events
+            .iter()
+            .find_map(|event| {
+                if let Event::BugSpawned { bug_id, .. } = event {
+                    Some(*bug_id)
+                } else {
+                    None
+                }
+            })
+            .expect("spawn should emit bug identifier");
+        events.clear();
+
+        let mut snapshot = query::bug_view(&world)
+            .iter()
+            .find(|bug| bug.id == bug_id)
+            .map(|bug| bug.cell)
+            .expect("bug should exist after spawning");
+
+        while snapshot.column() < exit_cell.column() {
+            let step_events = drive_step(&mut world, bug_id, Direction::East);
+            assert!(step_events
+                .iter()
+                .any(|event| matches!(event, Event::BugAdvanced { .. })));
+            snapshot = query::bug_view(&world)
+                .iter()
+                .find(|bug| bug.id == bug_id)
+                .map(|bug| bug.cell)
+                .expect("bug should remain before exit step");
+        }
+
+        while snapshot.column() > exit_cell.column() {
+            let step_events = drive_step(&mut world, bug_id, Direction::West);
+            assert!(step_events
+                .iter()
+                .any(|event| matches!(event, Event::BugAdvanced { .. })));
+            snapshot = query::bug_view(&world)
+                .iter()
+                .find(|bug| bug.id == bug_id)
+                .map(|bug| bug.cell)
+                .expect("bug should remain before exit step");
+        }
+
+        while snapshot.row().saturating_add(1) < exit_cell.row() {
+            let step_events = drive_step(&mut world, bug_id, Direction::South);
+            assert!(step_events
+                .iter()
+                .any(|event| matches!(event, Event::BugAdvanced { .. })));
+            snapshot = query::bug_view(&world)
+                .iter()
+                .find(|bug| bug.id == bug_id)
+                .map(|bug| bug.cell)
+                .expect("bug should remain before exit step");
+        }
+
+        let final_events = drive_step(&mut world, bug_id, Direction::South);
+        let advanced_index = final_events
+            .iter()
+            .position(|event| matches!(event, Event::BugAdvanced { .. }))
+            .expect("expected bug advancement event");
+        let exit_index = final_events
+            .iter()
+            .position(|event| matches!(event, Event::BugExited { .. }))
+            .expect("expected bug exit event");
+        assert!(
+            advanced_index < exit_index,
+            "bug must advance before exiting"
+        );
+
+        let mut advanced_cell = None;
+        let mut exited_cell = None;
+        for event in final_events {
+            match event {
+                Event::BugAdvanced {
+                    bug_id: event_id,
+                    to,
+                    ..
+                } => {
+                    assert_eq!(event_id, bug_id, "unexpected bug advanced");
+                    advanced_cell = Some(to);
+                }
+                Event::BugExited {
+                    bug_id: event_id,
+                    cell,
+                } => {
+                    assert_eq!(event_id, bug_id, "unexpected bug exit");
+                    exited_cell = Some(cell);
+                }
+                _ => {}
+            }
+        }
+
+        assert_eq!(advanced_cell, Some(exit_cell));
+        assert_eq!(exited_cell, Some(exit_cell));
+        assert!(query::bug_view(&world).iter().all(|bug| bug.id != bug_id));
+        let occupancy = query::occupancy_view(&world);
+        assert!(occupancy.is_free(exit_cell));
+    }
+
+    #[test]
     fn target_aligns_with_center_for_odd_columns() {
         let mut world = World::new();
         let mut events = Vec::new();
@@ -2435,6 +2571,28 @@ mod tests {
                 origin: CellCoord::new(8, 6),
             },
         ]
+    }
+
+    fn drive_step(world: &mut World, bug_id: BugId, direction: Direction) -> Vec<Event> {
+        let mut tick_events = Vec::new();
+        apply(
+            world,
+            Command::Tick {
+                dt: Duration::from_millis(250),
+            },
+            &mut tick_events,
+        );
+        assert!(tick_events
+            .iter()
+            .any(|event| matches!(event, Event::TimeAdvanced { .. })));
+
+        let mut step_events = Vec::new();
+        apply(
+            world,
+            Command::StepBug { bug_id, direction },
+            &mut step_events,
+        );
+        step_events
     }
 
     #[derive(Clone, Debug, PartialEq, Eq, Hash)]

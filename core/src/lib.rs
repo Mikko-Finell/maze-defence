@@ -115,6 +115,13 @@ pub enum Event {
         /// Cell the bug occupies after completing the move. Cells subdivide individual tiles.
         to: CellCoord,
     },
+    /// Indicates that a bug triggered the exit and left the maze.
+    BugExited {
+        /// Identifier of the bug that exited the maze.
+        bug_id: BugId,
+        /// Cell that triggered the exit when the bug entered it.
+        cell: CellCoord,
+    },
     /// Announces that the simulation entered a new play mode.
     PlayModeChanged {
         /// Mode that became active after processing commands.
