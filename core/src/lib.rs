@@ -934,6 +934,46 @@ impl TowerCooldownView {
     }
 }
 
+/// Point in cell space expressed using floating point coordinates.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CellPoint {
+    column: f32,
+    row: f32,
+}
+
+impl CellPoint {
+    /// Creates a point located at the provided column and row coordinates.
+    #[must_use]
+    pub const fn new(column: f32, row: f32) -> Self {
+        Self { column, row }
+    }
+
+    /// Column coordinate measured in cell units.
+    #[must_use]
+    pub const fn column(&self) -> f32 {
+        self.column
+    }
+
+    /// Row coordinate measured in cell units.
+    #[must_use]
+    pub const fn row(&self) -> f32 {
+        self.row
+    }
+}
+
+/// Target assignment describing a tower aiming at a specific bug.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TowerTarget {
+    /// Identifier of the tower emitting the targeting beam.
+    pub tower: TowerId,
+    /// Identifier of the bug selected as the target.
+    pub bug: BugId,
+    /// Centre of the tower footprint expressed in cell coordinates.
+    pub tower_center_cells: CellPoint,
+    /// Centre of the targeted bug expressed in cell coordinates.
+    pub bug_center_cells: CellPoint,
+}
+
 /// Types of towers that can be constructed in the maze.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum TowerKind {

@@ -4,10 +4,10 @@ use std::{
 };
 
 use maze_defence_core::{
-    BugColor, BugId, CellCoord, CellRect, Command, Event, Health, PlayMode, TileCoord, TowerId,
-    TowerKind,
+    BugColor, BugId, CellCoord, CellPoint, CellRect, Command, Event, Health, PlayMode, TileCoord,
+    TowerId, TowerKind, TowerTarget,
 };
-use maze_defence_system_tower_targeting::{CellPoint, TowerTarget, TowerTargeting};
+use maze_defence_system_tower_targeting::TowerTargeting;
 use maze_defence_world::{self as world, query, World};
 
 #[test]
@@ -249,8 +249,8 @@ struct HalfCellCoord {
 impl From<CellPoint> for HalfCellCoord {
     fn from(point: CellPoint) -> Self {
         Self {
-            column_twice: to_half_cell(point.column),
-            row_twice: to_half_cell(point.row),
+            column_twice: to_half_cell(point.column()),
+            row_twice: to_half_cell(point.row()),
         }
     }
 }

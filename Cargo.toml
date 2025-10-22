@@ -7,6 +7,7 @@ members = [
     "systems/movement",
     "systems/spawning",
     "systems/tower_targeting",
+    "systems/tower_combat",
     "adapters/rendering",
     "adapters/rendering_macroquad",
     "adapters/cli",

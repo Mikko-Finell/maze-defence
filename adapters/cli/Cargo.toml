@@ -11,6 +11,7 @@ maze-defence-system-bootstrap = { path = "../../systems/bootstrap" }
 maze-defence-system-builder = { path = "../../systems/builder" }
 maze-defence-system-movement = { path = "../../systems/movement" }
 maze-defence-system-spawning = { path = "../../systems/spawning" }
+maze-defence-system-tower-combat = { path = "../../systems/tower_combat" }
 maze-defence-system-tower-targeting = { path = "../../systems/tower_targeting" }
 maze-defence-world = { path = "../../world", features = ["tower_scaffolding"] }
 maze-defence-rendering = { path = "../rendering" }

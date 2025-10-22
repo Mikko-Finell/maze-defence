@@ -307,6 +307,7 @@ dependencies = [
  "maze-defence-system-builder",
  "maze-defence-system-movement",
  "maze-defence-system-spawning",
+ "maze-defence-system-tower-combat",
  "maze-defence-system-tower-targeting",
  "maze-defence-world",
 ]
@@ -368,6 +369,13 @@ version = "0.1.0"
 dependencies = [
  "maze-defence-core",
  "maze-defence-world",
+]
+
+[[package]]
+name = "maze-defence-system-tower-combat"
+version = "0.1.0"
+dependencies = [
+ "maze-defence-core",
 ]
 
 [[package]]
