@@ -314,7 +314,10 @@ impl TileGridPresentation {
     pub const TOP_BORDER_CELL_LAYERS: u32 = 1;
 
     /// Number of cell layers rendered below the tile grid.
-    pub const BOTTOM_BORDER_CELL_LAYERS: u32 = 0;
+    ///
+    /// The bottom border represents the visible perimeter wall row rendered
+    /// beneath the playable tiles.
+    pub const BOTTOM_BORDER_CELL_LAYERS: u32 = 1;
 
     /// Creates a new tile grid descriptor.
     ///
@@ -459,67 +462,6 @@ fn snap_axis_to_steps(
     Some(clamped_origin.round() as u32)
 }
 
-/// Describes an outer wall that should be rendered near the grid.
-#[derive(Clone, Debug, PartialEq)]
-pub struct WallPresentation {
-    /// Thickness of the wall measured in world units.
-    pub thickness: f32,
-    /// Color used for the wall fill.
-    pub color: Color,
-    /// Target carved into the wall if one exists.
-    pub target: TargetPresentation,
-}
-
-impl WallPresentation {
-    /// Creates a new wall descriptor.
-    #[must_use]
-    pub fn new(thickness: f32, color: Color, target: TargetPresentation) -> Self {
-        Self {
-            thickness,
-            color,
-            target,
-        }
-    }
-}
-
-/// Target carved into the perimeter wall aligned with the grid cells.
-#[derive(Clone, Debug, PartialEq)]
-pub struct TargetPresentation {
-    /// Cells that compose the target region.
-    pub cells: Vec<TargetCellPresentation>,
-}
-
-impl TargetPresentation {
-    /// Creates a new wall target descriptor.
-    #[must_use]
-    pub fn new(cells: Vec<TargetCellPresentation>) -> Self {
-        Self { cells }
-    }
-
-    /// Determines whether the target contains any cells.
-    #[must_use]
-    pub fn is_empty(&self) -> bool {
-        self.cells.is_empty()
-    }
-}
-
-/// Single cell composing part of a wall target.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct TargetCellPresentation {
-    /// Column of the cell aligned with the main grid.
-    pub column: u32,
-    /// Row of the cell relative to the main grid.
-    pub row: u32,
-}
-
-impl TargetCellPresentation {
-    /// Creates a new wall target cell descriptor.
-    #[must_use]
-    pub const fn new(column: u32, row: u32) -> Self {
-        Self { column, row }
-    }
-}
-
 /// In-game bug rendered as a filled circle scaled to a single cell.
 ///
 /// Bug coordinates are expressed in cell units derived from the tile grid's
@@ -568,13 +510,13 @@ impl TowerTargetLine {
     }
 }
 
-/// Scene description combining the tile grid, outer wall and inhabitants.
+/// Scene description combining the tile grid, perimeter wall colour and inhabitants.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Scene {
     /// Tile grid that composes the main play area.
     pub tile_grid: TileGridPresentation,
-    /// Wall drawn outside the play area.
-    pub wall: WallPresentation,
+    /// Color applied to perimeter cell walls.
+    pub wall_color: Color,
     /// Cell-sized walls populating the maze interior.
     pub walls: Vec<SceneWall>,
     /// Bugs currently visible within the maze, positioned using cell coordinates.
@@ -599,7 +541,7 @@ impl Scene {
     #[allow(clippy::too_many_arguments)] // Scene construction intentionally enumerates every channel explicitly.
     pub fn new(
         tile_grid: TileGridPresentation,
-        wall: WallPresentation,
+        wall_color: Color,
         walls: Vec<SceneWall>,
         bugs: Vec<BugPresentation>,
         towers: Vec<SceneTower>,
@@ -611,7 +553,7 @@ impl Scene {
     ) -> Self {
         Self {
             tile_grid,
-            wall,
+            wall_color,
             walls,
             bugs,
             towers,
@@ -626,7 +568,7 @@ impl Scene {
     /// Height of the entire scene including the wall.
     #[must_use]
     pub fn total_height(&self) -> f32 {
-        self.tile_grid.bordered_height() + self.wall.thickness
+        self.tile_grid.bordered_height()
     }
 }
 
@@ -718,6 +660,20 @@ mod tests {
     }
 
     #[test]
+    fn tile_grid_bordered_height_includes_visible_wall_row() {
+        let presentation = TileGridPresentation::new(3, 2, 32.0, 4, Color::from_rgb_u8(0, 0, 0))
+            .expect("valid grid");
+        let expected_border = presentation.cell_length()
+            * (TileGridPresentation::TOP_BORDER_CELL_LAYERS
+                + TileGridPresentation::BOTTOM_BORDER_CELL_LAYERS) as f32;
+
+        assert_eq!(
+            presentation.bordered_height(),
+            presentation.height() + expected_border
+        );
+    }
+
+    #[test]
     fn clamp_world_position_limits_coordinates_to_grid_bounds() {
         let presentation = TileGridPresentation::new(5, 4, 32.0, 4, Color::from_rgb_u8(0, 0, 0))
             .expect("valid grid");
@@ -783,16 +739,12 @@ mod tests {
             Color::from_rgb_u8(64, 64, 64),
         )
         .expect("default cells_per_tile is valid");
-        let wall = WallPresentation::new(
-            8.0,
-            Color::from_rgb_u8(128, 128, 128),
-            TargetPresentation::new(vec![]),
-        );
+        let wall_color = Color::from_rgb_u8(128, 128, 128);
         let bugs = vec![BugPresentation::new(2, 3, Color::from_rgb_u8(255, 0, 0))];
 
         let scene = Scene::new(
             tile_grid,
-            wall.clone(),
+            wall_color,
             Vec::new(),
             bugs.clone(),
             Vec::new(),
@@ -804,7 +756,7 @@ mod tests {
         );
 
         assert_eq!(scene.tile_grid, tile_grid);
-        assert_eq!(scene.wall, wall);
+        assert_eq!(scene.wall_color, wall_color);
         assert!(scene.walls.is_empty());
         assert_eq!(scene.bugs, bugs);
         assert_eq!(scene.play_mode, PlayMode::Attack);
@@ -825,11 +777,7 @@ mod tests {
             Color::from_rgb_u8(32, 32, 32),
         )
         .expect("default cells_per_tile is valid");
-        let wall = WallPresentation::new(
-            6.0,
-            Color::from_rgb_u8(90, 90, 90),
-            TargetPresentation::new(vec![]),
-        );
+        let wall_color = Color::from_rgb_u8(90, 90, 90);
         let preview_region = CellRect::from_origin_and_size(
             maze_defence_core::CellCoord::new(4, 6),
             maze_defence_core::CellRectSize::new(4, 4),
@@ -850,7 +798,7 @@ mod tests {
 
         let scene = Scene::new(
             tile_grid,
-            wall.clone(),
+            wall_color,
             Vec::new(),
             vec![],
             vec![SceneTower::new(
@@ -874,7 +822,7 @@ mod tests {
         assert_eq!(scene.active_tower_footprint_tiles, Some(Vec2::splat(1.0)));
         assert_eq!(scene.towers.len(), 1);
         assert_eq!(scene.tile_grid, tile_grid);
-        assert_eq!(scene.wall, wall);
+        assert_eq!(scene.wall_color, wall_color);
         assert!(scene.walls.is_empty());
         assert_eq!(
             scene.tower_feedback,
@@ -885,5 +833,32 @@ mod tests {
             })
         );
         assert_eq!(scene.tower_targets, vec![target_line]);
+    }
+
+    #[test]
+    fn scene_total_height_matches_bordered_grid_height() {
+        let tile_grid = TileGridPresentation::new(
+            4,
+            3,
+            24.0,
+            TileGridPresentation::DEFAULT_CELLS_PER_TILE,
+            Color::from_rgb_u8(100, 100, 100),
+        )
+        .expect("default cells_per_tile is valid");
+
+        let scene = Scene::new(
+            tile_grid,
+            Color::from_rgb_u8(64, 64, 64),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            PlayMode::Attack,
+            None,
+            None,
+            None,
+        );
+
+        assert_eq!(scene.total_height(), tile_grid.bordered_height());
     }
 }

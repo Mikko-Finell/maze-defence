@@ -222,7 +222,6 @@ impl RenderingBackend for MacroquadBackend {
                 let simulation_breakdown = update_scene(frame_dt, frame_input, &mut scene);
 
                 let tile_grid = scene.tile_grid;
-                let wall = &scene.wall;
                 let metrics = SceneMetrics::from_scene(&scene, screen_width, screen_height);
 
                 let grid_color = to_macroquad_color(tile_grid.line_color);
@@ -238,8 +237,6 @@ impl RenderingBackend for MacroquadBackend {
                 if let Some(preview) = active_builder_preview(&scene) {
                     draw_tower_preview(preview, &metrics);
                 }
-
-                draw_wall(&metrics, wall, grid_color, subgrid_color);
 
                 draw_tower_targets(&scene.tower_targets, &metrics);
 
@@ -321,7 +318,7 @@ impl SceneMetrics {
     fn from_scene(scene: &Scene, screen_width: f32, screen_height: f32) -> Self {
         let tile_grid = scene.tile_grid;
         let world_width = tile_grid.bordered_width();
-        let world_height = scene.total_height();
+        let world_height = tile_grid.bordered_height();
         let scale = if world_width == 0.0 || world_height == 0.0 {
             1.0
         } else {
@@ -516,122 +513,13 @@ fn draw_cell_walls(scene: &Scene, metrics: &SceneMetrics) {
         return;
     }
 
-    let color = to_macroquad_color(scene.wall.color);
+    let color = to_macroquad_color(scene.wall_color);
 
     for SceneWall { column, row } in &scene.walls {
         let x = metrics.offset_x + (*column as f32) * cell_step;
         let y = metrics.offset_y + (*row as f32) * cell_step;
         macroquad::shapes::draw_rectangle(x, y, cell_step, cell_step, color);
     }
-}
-
-fn draw_wall(
-    metrics: &SceneMetrics,
-    wall: &maze_defence_rendering::WallPresentation,
-    grid_color: macroquad::color::Color,
-    subgrid_color: macroquad::color::Color,
-) {
-    let wall_color = to_macroquad_color(wall.color);
-    let wall_height = wall.thickness * metrics.scale;
-    let wall_y = metrics.offset_y + metrics.bordered_grid_height_scaled;
-    let wall_left = metrics.grid_offset_x;
-    let wall_right = metrics.grid_offset_x + metrics.grid_width_scaled;
-
-    let target = &wall.target;
-    let target_cells = &target.cells;
-
-    if target.is_empty() {
-        macroquad::shapes::draw_rectangle(
-            wall_left,
-            wall_y,
-            metrics.grid_width_scaled,
-            wall_height,
-            wall_color,
-        );
-    } else {
-        let mut target_columns: Vec<u32> = target_cells.iter().map(|cell| cell.column).collect();
-        target_columns.sort_unstable();
-        target_columns.dedup();
-
-        let normalized_columns = normalize_target_columns(&target_columns);
-
-        if let (Some(&first_column), Some(&last_column)) =
-            (normalized_columns.first(), normalized_columns.last())
-        {
-            let target_left = metrics.grid_offset_x + first_column as f32 * metrics.cell_step;
-            let target_right = metrics.grid_offset_x + (last_column + 1) as f32 * metrics.cell_step;
-
-            if target_left > wall_left {
-                macroquad::shapes::draw_rectangle(
-                    wall_left,
-                    wall_y,
-                    target_left - wall_left,
-                    wall_height,
-                    wall_color,
-                );
-            }
-
-            if target_right < wall_right {
-                macroquad::shapes::draw_rectangle(
-                    target_right,
-                    wall_y,
-                    wall_right - target_right,
-                    wall_height,
-                    wall_color,
-                );
-            }
-
-            let walkway_top = wall_y;
-            let walkway_bottom = wall_y + wall_height;
-
-            macroquad::shapes::draw_line(
-                target_left,
-                walkway_top,
-                target_left,
-                walkway_bottom,
-                1.0,
-                grid_color,
-            );
-
-            macroquad::shapes::draw_line(
-                target_right,
-                walkway_top,
-                target_right,
-                walkway_bottom,
-                1.0,
-                grid_color,
-            );
-
-            for &column in normalized_columns.iter().skip(1) {
-                let boundary_x = metrics.grid_offset_x + column as f32 * metrics.cell_step;
-                macroquad::shapes::draw_line(
-                    boundary_x,
-                    walkway_top,
-                    boundary_x,
-                    walkway_bottom,
-                    0.5,
-                    subgrid_color,
-                );
-            }
-
-            macroquad::shapes::draw_line(
-                target_left,
-                walkway_bottom,
-                target_right,
-                walkway_bottom,
-                1.0,
-                grid_color,
-            );
-        }
-    }
-}
-
-fn normalize_target_columns(columns: &[u32]) -> Vec<u32> {
-    let margin = TileGridPresentation::SIDE_BORDER_CELL_LAYERS;
-    columns
-        .iter()
-        .map(|&column| column.saturating_sub(margin))
-        .collect()
 }
 
 fn draw_tower_targets(tower_targets: &[TowerTargetLine], metrics: &SceneMetrics) {
@@ -776,15 +664,11 @@ mod tests {
             Color::from_rgb_u8(40, 40, 40),
         )
         .expect("valid grid");
-        let wall = maze_defence_rendering::WallPresentation::new(
-            8.0,
-            Color::from_rgb_u8(64, 64, 64),
-            maze_defence_rendering::TargetPresentation::new(Vec::new()),
-        );
+        let wall_color = Color::from_rgb_u8(64, 64, 64);
 
         Scene::new(
             grid,
-            wall,
+            wall_color,
             Vec::new(),
             Vec::new(),
             Vec::new(),
@@ -809,15 +693,6 @@ mod tests {
         scene.tower_preview = Some(preview);
 
         assert_eq!(active_builder_preview(&scene), Some(preview));
-    }
-
-    #[test]
-    fn target_columns_are_normalized_by_side_margin() {
-        let margin = TileGridPresentation::SIDE_BORDER_CELL_LAYERS;
-        let input = vec![margin, margin + 1, margin + 5];
-        let normalized = normalize_target_columns(&input);
-
-        assert_eq!(normalized, vec![0, 1, 5]);
     }
 
     #[test]
@@ -887,6 +762,15 @@ mod tests {
 
         assert!(origin_column_tiles + footprint.x <= scene.tile_grid.columns as f32 + 1e-5);
         assert!(origin_row_tiles + footprint.y <= scene.tile_grid.rows as f32 + 1e-5);
+    }
+
+    #[test]
+    fn scene_metrics_respect_bordered_grid_height() {
+        let scene = base_scene(PlayMode::Attack, None);
+        let metrics = SceneMetrics::from_scene(&scene, 640.0, 480.0);
+        let expected_height = scene.tile_grid.bordered_height() * metrics.scale;
+
+        assert!((metrics.bordered_grid_height_scaled - expected_height).abs() <= f32::EPSILON);
     }
 
     #[test]

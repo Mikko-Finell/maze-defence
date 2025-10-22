@@ -35,7 +35,7 @@
    - Update existing tests that referenced `query::wall` or compared row counts to accommodate the new bottom border.
    - Extend movement/exit tests so at least one bug walks through the new gap row before being culled (assert the `BugAdvanced` event hits the wall-row cell first, then the exit row).
 
-## 3. Bootstrap & adapters – contract changes
+## 3. Bootstrap & adapters – contract changes [DONE]
 ### systems/bootstrap (`systems/bootstrap/src/lib.rs`)
 - Remove the `wall(&self, world)` accessor. Continue exposing `target(&self, world)` so adapters can read exit data if they need it for UI copy later.
 
