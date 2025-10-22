@@ -18,13 +18,13 @@ use anyhow::Result;
 use clap::{Parser, ValueEnum};
 use glam::Vec2;
 use maze_defence_core::{
-    CellCoord, CellRect, CellRectSize, Command, Event, PlacementError, PlayMode,
+    CellCoord, CellPointHalf, CellRect, CellRectSize, Command, Event, PlacementError, PlayMode,
     ProjectileSnapshot, RemovalError, TileCoord, TowerCooldownView, TowerId, TowerKind,
     TowerTarget,
 };
 use maze_defence_rendering::{
     BugPresentation, Color, FrameInput, FrameSimulationBreakdown, Presentation, RenderingBackend,
-    Scene, SceneTower, SceneWall, TileGridPresentation, TileSpacePosition,
+    Scene, SceneProjectile, SceneTower, SceneWall, TileGridPresentation, TileSpacePosition,
     TowerInteractionFeedback, TowerPreview, TowerTargetLine,
 };
 use maze_defence_rendering_macroquad::MacroquadBackend;
@@ -75,6 +75,48 @@ pub fn push_tower_targets(scene: &mut Scene, targets: &[TowerTarget]) {
         scene
             .tower_targets
             .push(TowerTargetLine::new(target.tower, target.bug, from, to));
+    }
+}
+
+/// Populates the scene with projectiles derived from world snapshots.
+pub fn push_projectiles(scene: &mut Scene, projectiles: &[ProjectileSnapshot]) {
+    scene.projectiles.clear();
+    scene.projectiles.reserve(projectiles.len());
+
+    for snapshot in projectiles {
+        let from = half_point_to_cells(snapshot.origin_half);
+        let to = half_point_to_cells(snapshot.dest_half);
+
+        let progress = if snapshot.distance_half == 0 {
+            1.0
+        } else {
+            let ratio = (snapshot.travelled_half as f64) / (snapshot.distance_half as f64);
+            ratio.clamp(0.0, 1.0) as f32
+        };
+
+        let direction = to - from;
+        let position = if progress <= 0.0 {
+            from
+        } else if progress >= 1.0 {
+            to
+        } else {
+            from + direction * progress
+        };
+
+        scene.projectiles.push(SceneProjectile::new(
+            snapshot.projectile,
+            from,
+            to,
+            position,
+            progress,
+        ));
+    }
+
+    fn half_point_to_cells(point: CellPointHalf) -> Vec2 {
+        Vec2::new(
+            point.column_half() as f32 / 2.0,
+            point.row_half() as f32 / 2.0,
+        )
     }
 }
 
@@ -211,6 +253,7 @@ fn main() -> Result<()> {
     let mut scene = Scene::new(
         grid_scene,
         wall_color,
+        Vec::new(),
         Vec::new(),
         Vec::new(),
         Vec::new(),
@@ -430,6 +473,7 @@ impl Simulation {
         );
 
         push_tower_targets(scene, &self.current_targets);
+        push_projectiles(scene, &self.projectiles);
 
         scene.play_mode = query::play_mode(&self.world);
         scene.tower_preview = if scene.play_mode == PlayMode::Builder {
@@ -782,7 +826,7 @@ impl Simulation {
 mod tests {
     use super::*;
     use glam::Vec2;
-    use maze_defence_core::{BugColor, Health};
+    use maze_defence_core::{BugColor, BugId, Health, ProjectileId};
 
     fn new_simulation() -> Simulation {
         Simulation::new(
@@ -813,11 +857,37 @@ mod tests {
             Vec::new(),
             Vec::new(),
             Vec::new(),
+            Vec::new(),
             PlayMode::Attack,
             None,
             None,
             None,
         )
+    }
+
+    #[test]
+    fn push_projectiles_converts_half_coordinates() {
+        let mut scene = make_scene();
+        let snapshot = ProjectileSnapshot {
+            projectile: ProjectileId::new(7),
+            tower: TowerId::new(11),
+            target: BugId::new(3),
+            origin_half: CellPointHalf::new(6, 4),
+            dest_half: CellPointHalf::new(14, 12),
+            distance_half: 10,
+            travelled_half: 5,
+            speed_half_per_ms: 12,
+        };
+
+        push_projectiles(&mut scene, &[snapshot]);
+
+        assert_eq!(scene.projectiles.len(), 1);
+        let projectile = scene.projectiles[0];
+        assert_eq!(projectile.id, snapshot.projectile);
+        assert_eq!(projectile.from, Vec2::new(3.0, 2.0));
+        assert_eq!(projectile.to, Vec2::new(7.0, 6.0));
+        assert!((projectile.progress - 0.5).abs() <= f32::EPSILON);
+        assert_eq!(projectile.position, Vec2::new(5.0, 4.0));
     }
 
     fn enter_builder_mode(simulation: &mut Simulation) {

@@ -25,7 +25,8 @@ use macroquad::{
 use maze_defence_core::PlayMode;
 use maze_defence_rendering::{
     BugPresentation, Color, FrameInput, FrameSimulationBreakdown, Presentation, RenderingBackend,
-    Scene, SceneTower, SceneWall, TileGridPresentation, TowerPreview, TowerTargetLine,
+    Scene, SceneProjectile, SceneTower, SceneWall, TileGridPresentation, TowerPreview,
+    TowerTargetLine,
 };
 use std::{
     collections::VecDeque,
@@ -239,6 +240,7 @@ impl RenderingBackend for MacroquadBackend {
                 }
 
                 draw_tower_targets(&scene.tower_targets, &metrics);
+                draw_projectiles(&scene.projectiles, &metrics);
 
                 let bug_radius = metrics.cell_step * 0.5;
                 for BugPresentation { column, row, color } in &scene.bugs {
@@ -528,6 +530,19 @@ fn draw_tower_targets(tower_targets: &[TowerTargetLine], metrics: &SceneMetrics)
     }
 }
 
+fn draw_projectiles(projectiles: &[SceneProjectile], metrics: &SceneMetrics) {
+    let Some(points) = projectile_points(projectiles, metrics) else {
+        return;
+    };
+
+    let radius = (metrics.cell_step * 0.1).max(1.0);
+    let color = macroquad::color::Color::new(0.95, 0.92, 0.25, 1.0);
+
+    for position in points {
+        macroquad::shapes::draw_circle(position.x, position.y, radius, color);
+    }
+}
+
 fn tower_target_segments(
     tower_targets: &[TowerTargetLine],
     metrics: &SceneMetrics,
@@ -550,6 +565,24 @@ fn tower_target_segments(
             (start, end)
         })
         .collect()
+}
+
+fn projectile_points(projectiles: &[SceneProjectile], metrics: &SceneMetrics) -> Option<Vec<Vec2>> {
+    if projectiles.is_empty() || metrics.cell_step <= f32::EPSILON {
+        return None;
+    }
+
+    Some(
+        projectiles
+            .iter()
+            .map(|projectile| {
+                Vec2::new(
+                    metrics.offset_x + projectile.position.x * metrics.cell_step,
+                    metrics.offset_y + projectile.position.y * metrics.cell_step,
+                )
+            })
+            .collect(),
+    )
 }
 
 fn draw_towers(towers: &[SceneTower], metrics: &SceneMetrics) {
@@ -652,7 +685,9 @@ fn to_macroquad_color(color: maze_defence_rendering::Color) -> macroquad::color:
 mod tests {
     use super::*;
     use glam::Vec2;
-    use maze_defence_core::{BugId, CellCoord, CellRect, CellRectSize, TowerId, TowerKind};
+    use maze_defence_core::{
+        BugId, CellCoord, CellRect, CellRectSize, ProjectileId, TowerId, TowerKind,
+    };
     use std::time::Duration;
 
     fn base_scene(play_mode: PlayMode, placement_preview: Option<TowerPreview>) -> Scene {
@@ -669,6 +704,7 @@ mod tests {
         Scene::new(
             grid,
             wall_color,
+            Vec::new(),
             Vec::new(),
             Vec::new(),
             Vec::new(),
@@ -794,6 +830,7 @@ mod tests {
                 Vec::new(),
                 Vec::new(),
                 Vec::new(),
+                Vec::new(),
                 PlayMode::Attack,
                 None,
                 None,
@@ -863,6 +900,45 @@ mod tests {
         );
         assert_eq!(start, expected_start);
         assert_eq!(end, expected_end);
+    }
+
+    #[test]
+    fn projectile_points_empty_when_no_projectiles() {
+        let mut scene = base_scene(PlayMode::Attack, None);
+        let metrics = SceneMetrics::from_scene(&scene, 960.0, 960.0);
+
+        assert!(projectile_points(&scene.projectiles, &metrics).is_none());
+
+        scene.projectiles.push(SceneProjectile::new(
+            ProjectileId::new(1),
+            Vec2::new(1.0, 1.0),
+            Vec2::new(3.0, 3.0),
+            Vec2::new(2.0, 2.0),
+            0.5,
+        ));
+        scene.projectiles.push(SceneProjectile::new(
+            ProjectileId::new(2),
+            Vec2::new(4.0, 5.0),
+            Vec2::new(6.0, 7.0),
+            Vec2::new(5.0, 6.0),
+            0.75,
+        ));
+
+        let metrics = SceneMetrics::from_scene(&scene, 960.0, 960.0);
+        let points = projectile_points(&scene.projectiles, &metrics)
+            .expect("projectile points should be available");
+
+        assert_eq!(points.len(), 2);
+        let expected_first = Vec2::new(
+            metrics.offset_x + 2.0 * metrics.cell_step,
+            metrics.offset_y + 2.0 * metrics.cell_step,
+        );
+        let expected_second = Vec2::new(
+            metrics.offset_x + 5.0 * metrics.cell_step,
+            metrics.offset_y + 6.0 * metrics.cell_step,
+        );
+        assert_eq!(points[0], expected_first);
+        assert_eq!(points[1], expected_second);
     }
 
     #[test]
