@@ -39,22 +39,8 @@ const DEFAULT_STEP_QUANTUM: Duration = Duration::from_millis(250);
 const MIN_STEP_QUANTUM: Duration = Duration::from_micros(1);
 const SIDE_BORDER_CELL_LAYERS: u32 = 1;
 const TOP_BORDER_CELL_LAYERS: u32 = 1;
+const BOTTOM_BORDER_CELL_LAYERS: u32 = 1;
 const EXIT_CELL_LAYERS: u32 = 1;
-
-#[derive(Debug)]
-struct Wall {
-    target: Target,
-}
-
-impl Wall {
-    fn new(target: Target) -> Self {
-        Self { target }
-    }
-
-    pub(crate) fn target(&self) -> &Target {
-        &self.target
-    }
-}
 
 /// Represents the authoritative Maze Defence world state.
 #[derive(Debug)]
@@ -62,7 +48,7 @@ pub struct World {
     banner: &'static str,
     tile_grid: TileGrid,
     cells_per_tile: u32,
-    wall: Wall,
+    target: Target,
     targets: Vec<CellCoord>,
     bugs: Vec<Bug>,
     bug_positions: HashMap<BugId, usize>,
@@ -86,8 +72,7 @@ impl World {
     pub fn new() -> Self {
         let tile_grid = TileGrid::new(DEFAULT_GRID_COLUMNS, DEFAULT_GRID_ROWS, DEFAULT_TILE_LENGTH);
         let cells_per_tile = DEFAULT_CELLS_PER_TILE;
-        let wall = build_wall(tile_grid.columns(), tile_grid.rows(), cells_per_tile);
-        let targets = target_cells_from_wall(&wall);
+        let (target, targets) = build_target(tile_grid.columns(), tile_grid.rows(), cells_per_tile);
         let total_columns = total_cell_columns(tile_grid.columns(), cells_per_tile);
         let total_rows = total_cell_rows(tile_grid.rows(), cells_per_tile);
         let occupancy = OccupancyGrid::new(total_columns, total_rows);
@@ -112,7 +97,7 @@ impl World {
             #[cfg(any(test, feature = "tower_scaffolding"))]
             tower_occupancy,
             reservations: ReservationFrame::new(),
-            wall,
+            target,
             targets,
             tile_grid,
             cells_per_tile,
@@ -277,8 +262,9 @@ pub fn apply(world: &mut World, command: Command, out_events: &mut Vec<Event>) {
             world.tile_grid = TileGrid::new(columns, rows, tile_length);
             let normalized_cells = cells_per_tile.max(1);
             world.cells_per_tile = normalized_cells;
-            world.wall = build_wall(columns, rows, normalized_cells);
-            world.targets = target_cells_from_wall(&world.wall);
+            let (target, targets) = build_target(columns, rows, normalized_cells);
+            world.target = target;
+            world.targets = targets;
             let total_columns = total_cell_columns(columns, normalized_cells);
             let total_rows = total_cell_rows(rows, normalized_cells);
             world.occupancy = OccupancyGrid::new(total_columns, total_rows);
@@ -613,7 +599,7 @@ pub mod query {
     /// Provides read-only access to the target carved into the perimeter wall.
     #[must_use]
     pub fn target(world: &World) -> &Target {
-        world.wall.target()
+        &world.target
     }
 
     /// Selects the goal cell nearest to the provided origin.
@@ -819,10 +805,24 @@ impl BugSpawnerRegistry {
             return;
         }
 
-        let bottom_row = rows.saturating_sub(1);
+        for exit_offset in 0..EXIT_CELL_LAYERS {
+            let Some(row) = rows.checked_sub(exit_offset + 1) else {
+                break;
+            };
 
-        for column in 0..columns {
-            let _ = self.cells.remove(&CellCoord::new(column, bottom_row));
+            for column in 0..columns {
+                let _ = self.cells.remove(&CellCoord::new(column, row));
+            }
+        }
+
+        for border_offset in 0..BOTTOM_BORDER_CELL_LAYERS {
+            let Some(row) = rows.checked_sub(EXIT_CELL_LAYERS + border_offset + 1) else {
+                break;
+            };
+
+            for column in 0..columns {
+                let _ = self.cells.remove(&CellCoord::new(column, row));
+            }
         }
     }
 
@@ -1017,6 +1017,7 @@ impl BitGrid {
         }
     }
 
+    #[cfg(any(test, feature = "tower_scaffolding"))]
     fn clear(&mut self, cell: CellCoord) {
         if let Some((index, bit_offset)) = self.bit_position(cell) {
             if let Some(word) = self.words.get_mut(index) {
@@ -1025,6 +1026,7 @@ impl BitGrid {
         }
     }
 
+    #[cfg(any(test, feature = "tower_scaffolding"))]
     fn dimensions(&self) -> (u32, u32) {
         (self.columns, self.rows)
     }
@@ -1068,6 +1070,7 @@ fn total_cell_rows(rows: TileCoord, cells_per_tile: u32) -> u32 {
     } else {
         interior
             .saturating_add(TOP_BORDER_CELL_LAYERS)
+            .saturating_add(BOTTOM_BORDER_CELL_LAYERS)
             .saturating_add(EXIT_CELL_LAYERS)
     }
 }
@@ -1095,16 +1098,55 @@ fn exit_columns_for_tile_grid(columns: TileCoord, cells_per_tile: u32) -> Vec<u3
         .collect()
 }
 
-fn build_wall(columns: TileCoord, rows: TileCoord, cells_per_tile: u32) -> Wall {
-    Wall::new(target_for_grid(columns, rows, cells_per_tile))
+fn visible_wall_row_for_tile_grid(rows: TileCoord, cells_per_tile: u32) -> Option<u32> {
+    if interior_cell_rows(rows, cells_per_tile) == 0 {
+        return None;
+    }
+
+    let exit_row = exit_row_for_tile_grid(rows, cells_per_tile);
+    let bottom_border_end = exit_row.checked_sub(EXIT_CELL_LAYERS)?;
+    let offset = BOTTOM_BORDER_CELL_LAYERS.saturating_sub(1);
+    bottom_border_end.checked_sub(offset)
 }
 
-fn build_cell_walls(_columns: TileCoord, _rows: TileCoord, _cells_per_tile: u32) -> Vec<CellWall> {
-    Vec::new()
+#[cfg(test)]
+fn walkway_row_for_tile_grid(rows: TileCoord, cells_per_tile: u32) -> Option<u32> {
+    let wall_row = visible_wall_row_for_tile_grid(rows, cells_per_tile)?;
+    wall_row.checked_sub(1)
 }
 
-fn target_for_grid(columns: TileCoord, rows: TileCoord, cells_per_tile: u32) -> Target {
-    Target::new(target_cells(columns, rows, cells_per_tile))
+fn build_cell_walls(columns: TileCoord, rows: TileCoord, cells_per_tile: u32) -> Vec<CellWall> {
+    let total_columns = total_cell_columns(columns, cells_per_tile);
+    let Some(visible_wall_row) = visible_wall_row_for_tile_grid(rows, cells_per_tile) else {
+        return Vec::new();
+    };
+
+    if total_columns == 0 {
+        return Vec::new();
+    }
+
+    let exit_columns = exit_columns_for_tile_grid(columns, cells_per_tile);
+    let mut walls = Vec::with_capacity(usize::try_from(total_columns).unwrap_or_default());
+
+    for column in 0..total_columns {
+        if exit_columns.binary_search(&column).is_ok() {
+            continue;
+        }
+
+        walls.push(CellWall::at(CellCoord::new(column, visible_wall_row)));
+    }
+
+    walls
+}
+
+fn build_target(
+    columns: TileCoord,
+    rows: TileCoord,
+    cells_per_tile: u32,
+) -> (Target, Vec<CellCoord>) {
+    let cells = target_cells(columns, rows, cells_per_tile);
+    let target_cells: Vec<CellCoord> = cells.iter().map(|cell| cell.cell()).collect();
+    (Target::new(cells), target_cells)
 }
 
 fn target_cells(columns: TileCoord, rows: TileCoord, cells_per_tile: u32) -> Vec<TargetCell> {
@@ -1153,14 +1195,6 @@ fn advance_cell(
     }
 }
 
-fn target_cells_from_wall(wall: &Wall) -> Vec<CellCoord> {
-    wall.target()
-        .cells()
-        .iter()
-        .map(|cell| cell.cell())
-        .collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1192,14 +1226,56 @@ mod tests {
             let _ = cells.insert(CellCoord::new(last_column, row));
         }
 
-        if columns > 0 && rows > 0 {
-            let bottom_row = rows.saturating_sub(1);
-            for column in 0..columns {
-                let _ = cells.remove(&CellCoord::new(column, bottom_row));
+        for exit_offset in 0..EXIT_CELL_LAYERS {
+            if let Some(row) = rows.checked_sub(exit_offset + 1) {
+                for column in 0..columns {
+                    let _ = cells.remove(&CellCoord::new(column, row));
+                }
+            }
+        }
+
+        for border_offset in 0..BOTTOM_BORDER_CELL_LAYERS {
+            if let Some(row) = rows.checked_sub(EXIT_CELL_LAYERS + border_offset + 1) {
+                for column in 0..columns {
+                    let _ = cells.remove(&CellCoord::new(column, row));
+                }
             }
         }
 
         cells
+    }
+
+    #[test]
+    fn build_cell_walls_returns_empty_when_dimensions_zero() {
+        assert!(build_cell_walls(TileCoord::new(0), TileCoord::new(1), 1).is_empty());
+        assert!(build_cell_walls(TileCoord::new(1), TileCoord::new(0), 1).is_empty());
+        assert!(build_cell_walls(TileCoord::new(1), TileCoord::new(1), 0).is_empty());
+    }
+
+    #[test]
+    fn build_cell_walls_spans_visible_row_with_gap() {
+        let columns = TileCoord::new(5);
+        let rows = TileCoord::new(4);
+        let cells_per_tile = 2;
+
+        let walls = build_cell_walls(columns, rows, cells_per_tile);
+        let total_columns = total_cell_columns(columns, cells_per_tile);
+        let visible_wall_row = visible_wall_row_for_tile_grid(rows, cells_per_tile)
+            .expect("expected visible wall row for configured grid");
+        let exit_columns = exit_columns_for_tile_grid(columns, cells_per_tile);
+
+        assert_eq!(
+            exit_columns.len(),
+            usize::try_from(cells_per_tile).expect("cells_per_tile fits in usize"),
+        );
+
+        let expected_cells: Vec<CellCoord> = (0..total_columns)
+            .filter(|column| exit_columns.binary_search(column).is_err())
+            .map(|column| CellCoord::new(column, visible_wall_row))
+            .collect();
+        let actual_cells: Vec<CellCoord> = walls.iter().map(|wall| wall.cell()).collect();
+
+        assert_eq!(actual_cells, expected_cells);
     }
 
     #[test]
@@ -1266,11 +1342,16 @@ mod tests {
         let world = World::new();
         let occupancy = query::occupancy_view(&world);
         let (columns, rows) = occupancy.dimensions();
+        let wall_cells: Vec<CellCoord> = query::walls(&world)
+            .iter()
+            .map(|wall| wall.cell())
+            .collect();
 
         for column in 0..columns {
             for row in 0..rows {
                 let cell = CellCoord::new(column, row);
-                let expected = !occupancy.is_free(cell);
+                let blocked_by_wall = wall_cells.contains(&cell);
+                let expected = !occupancy.is_free(cell) || blocked_by_wall;
                 assert_eq!(query::is_cell_blocked(&world, cell), expected);
             }
         }
@@ -2362,7 +2443,12 @@ mod tests {
                 .expect("bug should remain before exit step");
         }
 
-        while snapshot.row().saturating_add(1) < exit_cell.row() {
+        let visible_wall_row = visible_wall_row_for_tile_grid(TileCoord::new(3), 1)
+            .expect("configured grid defines wall row");
+        let walkway_row = walkway_row_for_tile_grid(TileCoord::new(3), 1)
+            .expect("configured grid defines walkway row");
+
+        while snapshot.row() < walkway_row {
             let step_events = drive_step(&mut world, bug_id, Direction::South);
             assert!(step_events
                 .iter()
@@ -2373,6 +2459,48 @@ mod tests {
                 .map(|bug| bug.cell)
                 .expect("bug should remain before exit step");
         }
+
+        assert_eq!(
+            snapshot.row(),
+            walkway_row,
+            "bug should pause on walkway row"
+        );
+
+        let wall_step_events = drive_step(&mut world, bug_id, Direction::South);
+        let wall_advanced_cell = wall_step_events
+            .iter()
+            .find_map(|event| {
+                if let Event::BugAdvanced {
+                    bug_id: event_id,
+                    to,
+                    ..
+                } = event
+                {
+                    if *event_id == bug_id {
+                        return Some(*to);
+                    }
+                }
+                None
+            })
+            .expect("bug should advance through wall gap");
+        assert_eq!(
+            wall_advanced_cell,
+            CellCoord::new(exit_cell.column(), visible_wall_row),
+            "bug must enter the visible wall row first",
+        );
+        assert!(
+            wall_step_events
+                .iter()
+                .all(|event| !matches!(event, Event::BugExited { .. })),
+            "bug should not exit from the wall row",
+        );
+
+        snapshot = query::bug_view(&world)
+            .iter()
+            .find(|bug| bug.id == bug_id)
+            .map(|bug| bug.cell)
+            .expect("bug should remain before exit step");
+        assert_eq!(snapshot.row(), visible_wall_row);
 
         let final_events = drive_step(&mut world, bug_id, Direction::South);
         let advanced_index = final_events

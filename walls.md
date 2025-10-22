@@ -11,7 +11,7 @@
 2. Keep `Target`/`TargetCell` public but decouple them from the removed `Wall` wrapper.
 3. Verify nothing else in `core` references the legacy `Wall`; adjust re-exports/tests accordingly.
 
-## 2. World data and helpers (`world/src/lib.rs`)
+## 2. World data and helpers (`world/src/lib.rs`) [DONE]
 1. **State layout**
    - Replace the `wall: Wall` field on `World` with a `target: Target` field (and reuse the existing `targets: Vec<CellCoord>` cache).
    - Update `World::new` and the `Command::ConfigureTileGrid` branch to rebuild `target` directly.
