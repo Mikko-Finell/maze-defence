@@ -469,10 +469,8 @@ fn snap_axis_to_steps(
 /// [`cells_per_tile`](TileGridPresentation::cells_per_tile) configuration.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct BugPresentation {
-    /// Zero-based column index of the grid cell that contains the bug.
-    pub column: u32,
-    /// Zero-based row index of the grid cell that contains the bug.
-    pub row: u32,
+    /// Bug position expressed in cell-space coordinates.
+    pub position: Vec2,
     /// Fill color of the bug's body.
     pub color: Color,
 }
@@ -480,8 +478,8 @@ pub struct BugPresentation {
 impl BugPresentation {
     /// Creates a new bug presentation descriptor.
     #[must_use]
-    pub const fn new(column: u32, row: u32, color: Color) -> Self {
-        Self { column, row, color }
+    pub fn new(position: Vec2, color: Color) -> Self {
+        Self { position, color }
     }
 }
 
@@ -810,7 +808,10 @@ mod tests {
         )
         .expect("default cells_per_tile is valid");
         let wall_color = Color::from_rgb_u8(128, 128, 128);
-        let bugs = vec![BugPresentation::new(2, 3, Color::from_rgb_u8(255, 0, 0))];
+        let bugs = vec![BugPresentation::new(
+            Vec2::new(2.0, 3.0),
+            Color::from_rgb_u8(255, 0, 0),
+        )];
 
         let scene = Scene::new(
             tile_grid,
