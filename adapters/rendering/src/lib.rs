@@ -469,6 +469,8 @@ fn snap_axis_to_steps(
 /// [`cells_per_tile`](TileGridPresentation::cells_per_tile) configuration.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct BugPresentation {
+    /// Identifier allocated to the bug by the world.
+    pub id: BugId,
     /// Bug position expressed in cell-space coordinates.
     pub position: Vec2,
     /// Fill color of the bug's body.
@@ -480,8 +482,9 @@ pub struct BugPresentation {
 impl BugPresentation {
     /// Creates a new bug presentation descriptor.
     #[must_use]
-    pub fn new(position: Vec2, color: Color, health: BugHealthPresentation) -> Self {
+    pub fn new(id: BugId, position: Vec2, color: Color, health: BugHealthPresentation) -> Self {
         Self {
+            id,
             position,
             color,
             health,
@@ -836,6 +839,7 @@ mod tests {
         .expect("default cells_per_tile is valid");
         let wall_color = Color::from_rgb_u8(128, 128, 128);
         let bugs = vec![BugPresentation::new(
+            BugId::new(3),
             Vec2::new(2.0, 3.0),
             Color::from_rgb_u8(255, 0, 0),
             BugHealthPresentation::new(3, 3),

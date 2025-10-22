@@ -18,11 +18,12 @@
 
 use anyhow::Result;
 use glam::Vec2;
+use macroquad::math::Vec2 as MacroquadVec2;
 use macroquad::{
     color::BLACK,
     input::{is_key_pressed, is_mouse_button_pressed, mouse_position, KeyCode, MouseButton},
 };
-use maze_defence_core::{CellRect, PlayMode, TowerKind};
+use maze_defence_core::{CellRect, PlayMode, TowerId, TowerKind};
 use maze_defence_rendering::{
     BugPresentation, Color, FrameInput, FrameSimulationBreakdown, Presentation, RenderingBackend,
     Scene, SceneProjectile, SceneTower, SceneWall, TileGridPresentation, TowerPreview,
@@ -255,7 +256,7 @@ impl RenderingBackend for MacroquadBackend {
                     );
                 }
 
-                draw_towers(&scene.towers, &metrics);
+                draw_towers(&scene.towers, &scene.bugs, &scene.tower_targets, &metrics);
 
                 if let Some(preview) = builder_preview {
                     draw_tower_preview(preview, &metrics);
@@ -268,6 +269,7 @@ impl RenderingBackend for MacroquadBackend {
 
                 let bug_radius = metrics.cell_step * 0.5;
                 for BugPresentation {
+                    id: _,
                     position,
                     color,
                     health,
@@ -659,13 +661,19 @@ fn projectile_points(projectiles: &[SceneProjectile], metrics: &SceneMetrics) ->
     )
 }
 
-fn draw_towers(towers: &[SceneTower], metrics: &SceneMetrics) {
+fn draw_towers(
+    towers: &[SceneTower],
+    bugs: &[BugPresentation],
+    tower_targets: &[TowerTargetLine],
+    metrics: &SceneMetrics,
+) {
     if metrics.cell_step <= f32::EPSILON {
         return;
     }
 
     let base_color = Color::from_rgb_u8(78, 52, 128);
     let outline_color = base_color.lighten(0.35);
+    let turret_color = to_macroquad_color(base_color.lighten(0.55));
     let fill = to_macroquad_color(Color::new(
         base_color.red,
         base_color.green,
@@ -680,7 +688,8 @@ fn draw_towers(towers: &[SceneTower], metrics: &SceneMetrics) {
     ));
     let outline_thickness = (metrics.cell_step * 0.12).max(1.0);
 
-    for SceneTower { region, .. } in towers {
+    for tower in towers {
+        let region = tower.region;
         let size = region.size();
         if size.width() == 0 || size.height() == 0 {
             continue;
@@ -694,7 +703,110 @@ fn draw_towers(towers: &[SceneTower], metrics: &SceneMetrics) {
 
         macroquad::shapes::draw_rectangle(x, y, width, height, fill);
         macroquad::shapes::draw_rectangle_lines(x, y, width, height, outline_thickness, outline);
+
+        let Some(center_cells) = tower_region_center(region) else {
+            continue;
+        };
+
+        let max_dimension = size.width().max(size.height()) as f32;
+        let half_length_cells = max_dimension * 0.5;
+        let direction = turret_direction_for(tower.id, center_cells, tower_targets, bugs);
+        draw_turret(
+            center_cells,
+            direction,
+            half_length_cells,
+            metrics,
+            turret_color,
+        );
     }
+}
+
+fn turret_direction_for(
+    tower: TowerId,
+    center_cells: Vec2,
+    tower_targets: &[TowerTargetLine],
+    bugs: &[BugPresentation],
+) -> Vec2 {
+    let default = default_turret_direction();
+    let Some(target_line) = tower_targets.iter().find(|line| line.tower == tower) else {
+        return default;
+    };
+
+    if let Some(position) = bugs
+        .iter()
+        .find(|bug| bug.id == target_line.bug)
+        .map(|bug| bug.position)
+    {
+        let direction = position - center_cells;
+        if direction.length_squared() > f32::EPSILON {
+            return direction.normalize();
+        }
+    }
+
+    let direction = target_line.to - target_line.from;
+    if direction.length_squared() > f32::EPSILON {
+        return direction.normalize();
+    }
+
+    default
+}
+
+fn default_turret_direction() -> Vec2 {
+    Vec2::new(0.0, -1.0)
+}
+
+fn draw_turret(
+    center_cells: Vec2,
+    direction: Vec2,
+    half_length_cells: f32,
+    metrics: &SceneMetrics,
+    color: macroquad::color::Color,
+) {
+    if metrics.cell_step <= f32::EPSILON {
+        return;
+    }
+
+    let mut direction = direction;
+    if direction.length_squared() <= f32::EPSILON {
+        direction = default_turret_direction();
+    } else {
+        direction = direction.normalize();
+    }
+
+    let turret_width = metrics.cell_step * 0.5;
+    let back_offset = turret_width * 0.5;
+    let forward_length_cells = half_length_cells + 1.0;
+    let forward_length = forward_length_cells * metrics.cell_step;
+    let total_length = forward_length + back_offset;
+
+    let center = Vec2::new(
+        metrics.offset_x + center_cells.x * metrics.cell_step,
+        metrics.offset_y + center_cells.y * metrics.cell_step,
+    );
+
+    let start = center - direction * back_offset;
+    let end = start + direction * total_length;
+    let perpendicular = Vec2::new(-direction.y, direction.x);
+    let half_width = turret_width * 0.5;
+    let offset = perpendicular * half_width;
+
+    let p1 = start + offset;
+    let p2 = start - offset;
+    let p3 = end - offset;
+    let p4 = end + offset;
+
+    macroquad::shapes::draw_triangle(
+        MacroquadVec2::new(p1.x, p1.y),
+        MacroquadVec2::new(p2.x, p2.y),
+        MacroquadVec2::new(p3.x, p3.y),
+        color,
+    );
+    macroquad::shapes::draw_triangle(
+        MacroquadVec2::new(p1.x, p1.y),
+        MacroquadVec2::new(p3.x, p3.y),
+        MacroquadVec2::new(p4.x, p4.y),
+        color,
+    );
 }
 
 fn draw_tower_range_indicator(
@@ -808,6 +920,7 @@ mod tests {
     use maze_defence_core::{
         BugId, CellCoord, CellRect, CellRectSize, ProjectileId, TowerId, TowerKind,
     };
+    use maze_defence_rendering::BugHealthPresentation;
     use std::time::Duration;
 
     fn base_scene(play_mode: PlayMode, placement_preview: Option<TowerPreview>) -> Scene {
@@ -1022,6 +1135,51 @@ mod tests {
         );
         assert_eq!(start, expected_start);
         assert_eq!(end, expected_end);
+    }
+
+    #[test]
+    fn turret_direction_defaults_to_north_without_target() {
+        let direction = turret_direction_for(TowerId::new(7), Vec2::new(5.0, 5.0), &[], &[]);
+
+        assert_vec2_close(direction, Vec2::new(0.0, -1.0));
+    }
+
+    #[test]
+    fn turret_direction_tracks_bug_position() {
+        let tower = TowerId::new(9);
+        let bug = BugId::new(12);
+        let center = Vec2::new(4.0, 4.0);
+        let target_line = TowerTargetLine::new(tower, bug, center, Vec2::new(6.0, 4.0));
+        let bugs = vec![BugPresentation::new(
+            bug,
+            Vec2::new(7.0, 4.0),
+            Color::from_rgb_u8(200, 100, 50),
+            BugHealthPresentation::new(3, 3),
+        )];
+
+        let direction = turret_direction_for(tower, center, &[target_line], &bugs);
+
+        assert_vec2_close(direction, Vec2::new(1.0, 0.0));
+    }
+
+    #[test]
+    fn turret_direction_falls_back_to_target_line_when_bug_missing() {
+        let tower = TowerId::new(5);
+        let bug = BugId::new(8);
+        let center = Vec2::new(3.0, 3.0);
+        let target_line = TowerTargetLine::new(tower, bug, center, Vec2::new(3.0, 1.0));
+
+        let direction = turret_direction_for(tower, center, &[target_line], &[]);
+
+        assert_vec2_close(direction, Vec2::new(0.0, -1.0));
+    }
+
+    fn assert_vec2_close(actual: Vec2, expected: Vec2) {
+        let delta = actual - expected;
+        assert!(
+            delta.length() <= 1e-4,
+            "expected {expected:?}, got {actual:?} (delta {delta:?})"
+        );
     }
 
     #[test]
