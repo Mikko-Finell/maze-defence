@@ -256,65 +256,19 @@ impl RenderingBackend for MacroquadBackend {
                     );
                 }
 
-                draw_towers(&scene.towers, &scene.bugs, &scene.tower_targets, &metrics);
+                draw_bug_health_bars(&scene.bugs, &metrics);
+                draw_bugs(&scene.bugs, &metrics);
+                draw_tower_bases(&scene.towers, &metrics);
 
                 if let Some(preview) = builder_preview {
                     draw_tower_preview(preview, &metrics);
                 }
 
+                draw_projectiles(&scene.projectiles, &metrics);
+                draw_turrets(&scene.towers, &scene.bugs, &scene.tower_targets, &metrics);
+
                 if show_tower_target_lines {
                     draw_tower_targets(&scene.tower_targets, &metrics);
-                }
-                draw_projectiles(&scene.projectiles, &metrics);
-
-                let bug_radius = metrics.cell_step * 0.5;
-                for BugPresentation {
-                    id: _,
-                    position,
-                    color,
-                    health,
-                } in &scene.bugs
-                {
-                    let bug_center = metrics.bug_center(*position);
-                    let bug_center_x = bug_center.x;
-                    let bug_center_y = bug_center.y;
-                    let border_thickness = (bug_radius * 0.2).max(1.0);
-                    macroquad::shapes::draw_circle(
-                        bug_center_x,
-                        bug_center_y,
-                        bug_radius,
-                        to_macroquad_color(*color),
-                    );
-                    macroquad::shapes::draw_circle_lines(
-                        bug_center_x,
-                        bug_center_y,
-                        bug_radius,
-                        border_thickness,
-                        BLACK,
-                    );
-
-                    if metrics.cell_step > f32::EPSILON {
-                        let bar_margin = metrics.cell_step * 0.1;
-                        let bar_width = metrics.cell_step;
-                        let bar_height = (metrics.cell_step * 0.12).max(2.0) + 2.0;
-                        let bar_left = bug_center_x - bar_width * 0.5;
-                        let bar_top = bug_center_y + bug_radius + bar_margin;
-                        macroquad::shapes::draw_rectangle(
-                            bar_left, bar_top, bar_width, bar_height, BLACK,
-                        );
-
-                        if health.maximum > 0 && health.current > 0 {
-                            let ratio =
-                                (health.current as f32 / health.maximum as f32).clamp(0.0, 1.0);
-                            let fill_width = bar_width * ratio;
-                            if fill_width > f32::EPSILON {
-                                let fill_color = macroquad::color::Color::new(0.78, 0.0, 0.0, 1.0);
-                                macroquad::shapes::draw_rectangle(
-                                    bar_left, bar_top, fill_width, bar_height, fill_color,
-                                );
-                            }
-                        }
-                    }
                 }
 
                 let render_duration = render_start.elapsed();
@@ -606,6 +560,68 @@ fn draw_tower_targets(tower_targets: &[TowerTargetLine], metrics: &SceneMetrics)
     }
 }
 
+fn draw_bug_health_bars(bugs: &[BugPresentation], metrics: &SceneMetrics) {
+    if metrics.cell_step <= f32::EPSILON {
+        return;
+    }
+
+    let bug_radius = metrics.cell_step * 0.5;
+    let bar_margin = metrics.cell_step * 0.1;
+    let bar_width = metrics.cell_step;
+    let bar_height = (metrics.cell_step * 0.12).max(2.0) + 2.0;
+
+    for BugPresentation {
+        position, health, ..
+    } in bugs
+    {
+        let bug_center = metrics.bug_center(*position);
+        let bar_left = bug_center.x - bar_width * 0.5;
+        let bar_top = bug_center.y + bug_radius + bar_margin;
+
+        macroquad::shapes::draw_rectangle(bar_left, bar_top, bar_width, bar_height, BLACK);
+
+        if health.maximum > 0 && health.current > 0 {
+            let ratio = (health.current as f32 / health.maximum as f32).clamp(0.0, 1.0);
+            let fill_width = bar_width * ratio;
+            if fill_width > f32::EPSILON {
+                let fill_color = macroquad::color::Color::new(0.78, 0.0, 0.0, 1.0);
+                macroquad::shapes::draw_rectangle(
+                    bar_left, bar_top, fill_width, bar_height, fill_color,
+                );
+            }
+        }
+    }
+}
+
+fn draw_bugs(bugs: &[BugPresentation], metrics: &SceneMetrics) {
+    if metrics.cell_step <= f32::EPSILON {
+        return;
+    }
+
+    let bug_radius = metrics.cell_step * 0.5;
+    let border_thickness = (bug_radius * 0.2).max(1.0);
+
+    for BugPresentation {
+        position, color, ..
+    } in bugs
+    {
+        let bug_center = metrics.bug_center(*position);
+        macroquad::shapes::draw_circle(
+            bug_center.x,
+            bug_center.y,
+            bug_radius,
+            to_macroquad_color(*color),
+        );
+        macroquad::shapes::draw_circle_lines(
+            bug_center.x,
+            bug_center.y,
+            bug_radius,
+            border_thickness,
+            BLACK,
+        );
+    }
+}
+
 fn draw_projectiles(projectiles: &[SceneProjectile], metrics: &SceneMetrics) {
     let Some(points) = projectile_points(projectiles, metrics) else {
         return;
@@ -661,31 +677,46 @@ fn projectile_points(projectiles: &[SceneProjectile], metrics: &SceneMetrics) ->
     )
 }
 
-fn draw_towers(
-    towers: &[SceneTower],
-    bugs: &[BugPresentation],
-    tower_targets: &[TowerTargetLine],
-    metrics: &SceneMetrics,
-) {
+#[derive(Clone, Copy)]
+struct TowerPalette {
+    fill: macroquad::color::Color,
+    outline: macroquad::color::Color,
+    turret: macroquad::color::Color,
+}
+
+fn tower_palette() -> TowerPalette {
+    let base_color = Color::from_rgb_u8(78, 52, 128);
+    let outline_color = base_color.lighten(0.35);
+    let turret_color = base_color.lighten(0.55);
+
+    TowerPalette {
+        fill: to_macroquad_color(Color::new(
+            base_color.red,
+            base_color.green,
+            base_color.blue,
+            1.0,
+        )),
+        outline: to_macroquad_color(Color::new(
+            outline_color.red,
+            outline_color.green,
+            outline_color.blue,
+            1.0,
+        )),
+        turret: to_macroquad_color(Color::new(
+            turret_color.red,
+            turret_color.green,
+            turret_color.blue,
+            1.0,
+        )),
+    }
+}
+
+fn draw_tower_bases(towers: &[SceneTower], metrics: &SceneMetrics) {
     if metrics.cell_step <= f32::EPSILON {
         return;
     }
 
-    let base_color = Color::from_rgb_u8(78, 52, 128);
-    let outline_color = base_color.lighten(0.35);
-    let turret_color = to_macroquad_color(base_color.lighten(0.55));
-    let fill = to_macroquad_color(Color::new(
-        base_color.red,
-        base_color.green,
-        base_color.blue,
-        1.0,
-    ));
-    let outline = to_macroquad_color(Color::new(
-        outline_color.red,
-        outline_color.green,
-        outline_color.blue,
-        1.0,
-    ));
+    let palette = tower_palette();
     let outline_thickness = (metrics.cell_step * 0.12).max(1.0);
 
     for tower in towers {
@@ -701,8 +732,36 @@ fn draw_towers(
         let width = size.width() as f32 * metrics.cell_step;
         let height = size.height() as f32 * metrics.cell_step;
 
-        macroquad::shapes::draw_rectangle(x, y, width, height, fill);
-        macroquad::shapes::draw_rectangle_lines(x, y, width, height, outline_thickness, outline);
+        macroquad::shapes::draw_rectangle(x, y, width, height, palette.fill);
+        macroquad::shapes::draw_rectangle_lines(
+            x,
+            y,
+            width,
+            height,
+            outline_thickness,
+            palette.outline,
+        );
+    }
+}
+
+fn draw_turrets(
+    towers: &[SceneTower],
+    bugs: &[BugPresentation],
+    tower_targets: &[TowerTargetLine],
+    metrics: &SceneMetrics,
+) {
+    if metrics.cell_step <= f32::EPSILON {
+        return;
+    }
+
+    let palette = tower_palette();
+
+    for tower in towers {
+        let region = tower.region;
+        let size = region.size();
+        if size.width() == 0 || size.height() == 0 {
+            continue;
+        }
 
         let Some(center_cells) = tower_region_center(region) else {
             continue;
@@ -716,7 +775,7 @@ fn draw_towers(
             direction,
             half_length_cells,
             metrics,
-            turret_color,
+            palette.turret,
         );
     }
 }
