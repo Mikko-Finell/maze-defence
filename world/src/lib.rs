@@ -738,6 +738,7 @@ impl World {
         let id = self.towers.allocate();
         self.mark_tower_region(region, true);
         self.mark_navigation_dirty();
+        self.rebuild_navigation_field_if_dirty();
         self.towers.insert(TowerState {
             id,
             kind,
@@ -772,6 +773,7 @@ impl World {
 
         self.mark_tower_region(state.region, false);
         self.mark_navigation_dirty();
+        self.rebuild_navigation_field_if_dirty();
         out_events.push(Event::TowerRemoved {
             tower: state.id,
             region: state.region,

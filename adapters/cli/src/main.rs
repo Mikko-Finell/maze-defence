@@ -659,13 +659,13 @@ impl Simulation {
                 world::apply(&mut self.world, command, &mut next_events);
             }
 
-            {
+            self.scratch_commands.clear();
+            if play_mode == PlayMode::Attack {
                 let bug_view = query::bug_view(&self.world);
                 let occupancy_view = query::occupancy_view(&self.world);
                 let target_cells = query::target_cells(&self.world);
                 let navigation_view = query::navigation_field(&self.world);
                 let reservation_ledger = query::reservation_ledger(&self.world);
-                self.scratch_commands.clear();
                 let pathfinding_start = Instant::now();
                 self.movement.handle(
                     &events,
