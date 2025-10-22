@@ -468,22 +468,26 @@ impl CrowdPlanner {
                     node.first_hop
                 };
 
-                if distance < current_distance {
+                let distance_delta = i32::from(distance) - i32::from(current_distance);
+
+                if distance_delta < 0 {
                     return Some(first_hop);
                 }
 
-                let candidate = Candidate {
-                    cell: neighbor,
-                    distance,
-                    congestion,
-                };
+                if distance_delta == 0 {
+                    let candidate = Candidate {
+                        cell: neighbor,
+                        distance,
+                        congestion,
+                    };
 
-                match &best_fallback {
-                    None => best_fallback = Some((candidate, first_hop)),
-                    Some((best, _)) if candidate_better_than(candidate, *best) => {
-                        best_fallback = Some((candidate, first_hop));
+                    match &best_fallback {
+                        None => best_fallback = Some((candidate, first_hop)),
+                        Some((best, _)) if candidate_better_than(candidate, *best) => {
+                            best_fallback = Some((candidate, first_hop));
+                        }
+                        _ => {}
                     }
-                    _ => {}
                 }
 
                 if node.depth + 1 < radius_u32 {
@@ -1317,8 +1321,8 @@ mod tests {
             &|cell| occupancy_blocked.occupant(cell).is_some(),
         );
 
-        assert_ne!(next, Some(CellCoord::new(1, 0)));
-        assert_eq!(movement.planner.stalled_for.value(1), 0);
+        assert_eq!(next, None);
+        assert_eq!(movement.planner.stalled_for.value(1), 1);
     }
 
     fn navigation_stub(width: u32, height: u32) -> NavigationFieldView<'static> {
