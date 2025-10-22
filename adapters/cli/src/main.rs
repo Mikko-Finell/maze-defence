@@ -876,7 +876,6 @@ mod tests {
             dest_half: CellPointHalf::new(14, 12),
             distance_half: 10,
             travelled_half: 5,
-            speed_half_per_ms: 12,
         };
 
         push_projectiles(&mut scene, &[snapshot]);

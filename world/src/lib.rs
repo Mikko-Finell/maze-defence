@@ -336,13 +336,23 @@ pub fn apply(world: &mut World, command: Command, out_events: &mut Vec<Event>) {
             let mut completed = Vec::new();
             for projectile_id in projectile_ids {
                 if let Some(projectile) = world.projectiles.get_mut(&projectile_id) {
-                    let advance_half = u128::from(projectile.speed_half_per_ms) * dt_millis;
-                    let travelled = projectile
-                        .travelled_half
-                        .saturating_add(advance_half)
-                        .min(projectile.distance_half);
+                    if projectile.travel_time_ms == 0 {
+                        projectile.travelled_half = projectile.distance_half;
+                        completed.push((projectile_id, projectile.target, projectile.damage));
+                        continue;
+                    }
+
+                    let new_elapsed = projectile
+                        .elapsed_ms
+                        .saturating_add(dt_millis)
+                        .min(projectile.travel_time_ms);
+                    projectile.elapsed_ms = new_elapsed;
+
+                    let travelled = projectile.distance_half.saturating_mul(new_elapsed)
+                        / projectile.travel_time_ms;
                     projectile.travelled_half = travelled;
-                    if travelled >= projectile.distance_half {
+
+                    if projectile.elapsed_ms >= projectile.travel_time_ms {
                         completed.push((projectile_id, projectile.target, projectile.damage));
                     }
                 }
@@ -498,6 +508,11 @@ impl World {
         let start = tower_center_half(tower_region);
         let end = bug_center_half(bug_cell);
         let distance_half = start.distance_to(end);
+        let range_cells = tower_kind.range_in_cells(self.cells_per_tile);
+        let max_range_half = u128::from(range_cells) * 2;
+        let base_time_ms = u128::from(tower_kind.projectile_travel_time_ms());
+        let travel_time_ms =
+            compute_projectile_travel_time(distance_half, max_range_half, base_time_ms);
         let projectile_state = ProjectileState {
             id: projectile_id,
             tower,
@@ -506,7 +521,8 @@ impl World {
             end,
             distance_half,
             travelled_half: 0,
-            speed_half_per_ms: tower_kind.speed_half_cells_per_ms(),
+            travel_time_ms,
+            elapsed_ms: 0,
             damage: tower_kind.projectile_damage(),
         };
         let replaced = self.projectiles.insert(projectile_id, projectile_state);
@@ -975,7 +991,6 @@ pub mod query {
                 dest_half: projectile.end,
                 distance_half: projectile.distance_half,
                 travelled_half: projectile.travelled_half,
-                speed_half_per_ms: projectile.speed_half_per_ms,
             })
     }
 
@@ -1015,6 +1030,20 @@ fn bug_center_half(cell: CellCoord) -> CellPointHalf {
     )
 }
 
+fn compute_projectile_travel_time(
+    distance_half: u128,
+    max_range_half: u128,
+    base_time_ms: u128,
+) -> u128 {
+    if distance_half == 0 || max_range_half == 0 || base_time_ms == 0 {
+        return 0;
+    }
+
+    let scaled = base_time_ms.saturating_mul(distance_half);
+    let time = (scaled + max_range_half - 1) / max_range_half;
+    time.max(1)
+}
+
 #[allow(dead_code)]
 #[derive(Clone, Debug)]
 struct ProjectileState {
@@ -1025,7 +1054,8 @@ struct ProjectileState {
     end: CellPointHalf,
     distance_half: u128,
     travelled_half: u128,
-    speed_half_per_ms: u32,
+    travel_time_ms: u128,
+    elapsed_ms: u128,
     damage: Damage,
 }
 
@@ -2094,10 +2124,16 @@ mod tests {
         assert_eq!(state.end, expected_end);
         assert_eq!(state.distance_half, expected_distance);
         assert_eq!(state.travelled_half, 0);
-        assert_eq!(
-            state.speed_half_per_ms,
-            TowerKind::Basic.speed_half_cells_per_ms(),
+        let max_range_half =
+            u128::from(TowerKind::Basic.range_in_cells(query::cells_per_tile(&world)))
+                .saturating_mul(2);
+        let expected_time = super::compute_projectile_travel_time(
+            expected_distance,
+            max_range_half,
+            u128::from(TowerKind::Basic.projectile_travel_time_ms()),
         );
+        assert_eq!(state.travel_time_ms, expected_time);
+        assert_eq!(state.elapsed_ms, 0);
         assert_eq!(state.damage, TowerKind::Basic.projectile_damage());
 
         let cooldown = Duration::from_millis(u64::from(TowerKind::Basic.fire_cooldown_ms()));
@@ -2277,10 +2313,6 @@ mod tests {
         assert_eq!(snapshots[0].dest_half, bug_end);
         assert_eq!(snapshots[0].travelled_half, 0);
         assert_eq!(snapshots[0].distance_half, first_start.distance_to(bug_end),);
-        assert_eq!(
-            snapshots[0].speed_half_per_ms,
-            TowerKind::Basic.speed_half_cells_per_ms(),
-        );
 
         assert_eq!(snapshots[1].projectile, ProjectileId::new(1));
         assert_eq!(snapshots[1].tower, TowerId::new(1));
@@ -2291,10 +2323,6 @@ mod tests {
         assert_eq!(
             snapshots[1].distance_half,
             second_start.distance_to(bug_end),
-        );
-        assert_eq!(
-            snapshots[1].speed_half_per_ms,
-            TowerKind::Basic.speed_half_cells_per_ms(),
         );
     }
 
@@ -2476,10 +2504,9 @@ mod tests {
             .get(&projectile_id)
             .expect("projectile present");
 
-        let speed = u128::from(projectile.speed_half_per_ms);
-        let distance = projectile.distance_half;
-        let travel_ms = (distance + speed - 1) / speed;
-        let dt = Duration::from_millis(u64::try_from(travel_ms).expect("distance fits in u64"));
+        let travel_ms = projectile.travel_time_ms;
+        assert!(travel_ms > 0, "projectile travel time should be positive");
+        let dt = Duration::from_millis(u64::try_from(travel_ms).expect("travel time fits in u64"));
 
         apply(&mut world, Command::Tick { dt }, &mut events);
 
@@ -2572,10 +2599,9 @@ mod tests {
             .projectiles
             .get(&projectile_id)
             .expect("projectile present");
-        let speed = u128::from(projectile.speed_half_per_ms);
-        let distance = projectile.distance_half;
-        let travel_ms = (distance + speed - 1) / speed;
-        let dt = Duration::from_millis(u64::try_from(travel_ms).expect("distance fits in u64"));
+        let travel_ms = projectile.travel_time_ms;
+        assert!(travel_ms > 0, "projectile travel time should be positive");
+        let dt = Duration::from_millis(u64::try_from(travel_ms).expect("travel time fits in u64"));
 
         apply(&mut world, Command::Tick { dt }, &mut events);
 
@@ -2670,10 +2696,9 @@ mod tests {
             .projectiles
             .get(&projectile_id)
             .expect("projectile present");
-        let speed = u128::from(projectile.speed_half_per_ms);
-        let distance = projectile.distance_half;
-        let travel_ms = (distance + speed - 1) / speed;
-        let dt = Duration::from_millis(u64::try_from(travel_ms).expect("distance fits in u64"));
+        let travel_ms = projectile.travel_time_ms;
+        assert!(travel_ms > 0, "projectile travel time should be positive");
+        let dt = Duration::from_millis(u64::try_from(travel_ms).expect("travel time fits in u64"));
 
         apply(&mut world, Command::Tick { dt }, &mut events);
 
@@ -4185,7 +4210,7 @@ mod tests {
         assert_eq!(first, second, "combat replay diverged between runs");
 
         let fingerprint = first.fingerprint();
-        let expected = 0xbf2b_751d_14c6_1a79;
+        let expected = 0x2373_e8e7_752a_5bcc;
         assert_eq!(
             fingerprint, expected,
             "combat replay fingerprint mismatch: {fingerprint:#x}"
@@ -4418,11 +4443,7 @@ mod tests {
     }
 
     fn travel_time_millis(projectile: &ProjectileState) -> u128 {
-        let speed = u128::from(projectile.speed_half_per_ms);
-        if speed == 0 {
-            return 0;
-        }
-        (projectile.distance_half + speed - 1) / speed
+        projectile.travel_time_ms
     }
 
     #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -4497,7 +4518,6 @@ mod tests {
         dest_half: CellPointHalf,
         distance_half: u128,
         travelled_half: u128,
-        speed_half_per_ms: u32,
     }
 
     impl From<ProjectileSnapshot> for ProjectileRecord {
@@ -4510,7 +4530,6 @@ mod tests {
                 dest_half: snapshot.dest_half,
                 distance_half: snapshot.distance_half,
                 travelled_half: snapshot.travelled_half,
-                speed_half_per_ms: snapshot.speed_half_per_ms,
             }
         }
     }

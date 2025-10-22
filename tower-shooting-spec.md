@@ -19,7 +19,7 @@ Evolve the targeting foundation into full combat: towers should periodically fir
 ## Domain rules
 
 * **Fire rate:** Each `TowerKind` exposes a `fire_cooldown_ms` constant. `Basic` towers use `1000` so they can fire once per second. The world converts this integer into a `Duration` when resetting cooldowns.
-* **Projectile speed:** Every tower kind defines `speed_half_cells_per_ms` (e.g., `Basic` = `12`). Multiply by the integer millisecond delta inside the world to update projectile travel without floats.
+* **Projectile pacing:** Every tower kind defines how long a projectile should take to cross its maximum range (e.g., `Basic` = `1_000` ms). The world keeps travel deterministic by scaling that duration in proportion to the cached half-cell distance for each projectile.
 * **Damage:** Tower kinds declare an integer damage amount dealt per projectile. Damage is applied atomically on hit; no splash or over-time effects.
 * **Projectile path:** Spawned projectiles cache the firing tower centre and the targeted bug centre at the moment of firing. They advance linearly along this vector until the cached distance is fully travelled. Missing is impossible—the projectile either damages the intended bug or expires at the destination if the bug has already died.
 * **Bug health:** Bugs spawn with maximum and current health values (identical for now). Health only changes when damage resolves. When health reaches zero, the bug dies immediately and is removed from movement/pathing consideration.
@@ -38,7 +38,7 @@ Evolve the targeting foundation into full combat: towers should periodically fir
 * `pub enum ProjectileRejection { InvalidMode, CooldownActive, MissingTower, MissingTarget }`.
 * Extend `TowerKind` with:
   * `pub const fn fire_cooldown_ms(self) -> u32` (`Basic` → `1000`).
-  * `pub const fn speed_half_cells_per_ms(self) -> u32` (`Basic` → `12`).
+  * `pub const fn projectile_travel_time_ms(self) -> u32` (`Basic` → `1000`).
   * `pub const fn projectile_damage(self) -> Damage` (`Basic` → `Damage(1)`).
 * Extend `BugSpawned` DTOs with health for presentation: add `health: Health` to the event, mirroring the command below.
 
@@ -71,7 +71,8 @@ Document each addition to maintain the message contract clarity.
   * `start: CellPointHalf` / `end: CellPointHalf` (half-cell integer coordinates for precision).
   * `distance_half: u128` (precomputed line length in half-cell units).
   * `travelled_half: u128` accumulated during ticks.
-  * `speed_half_per_ms: u32` derived from tower kind + `cells_per_tile`.
+  * `travel_time_ms: u128` derived from tower kind + `cells_per_tile` so maximum-range shots take the declared duration.
+  * `elapsed_ms: u128` accumulated during ticks.
 * `next_projectile_id: ProjectileId` monotonic allocator.
 
 ### Handling `Command::FireProjectile`
@@ -90,7 +91,7 @@ Document each addition to maintain the message contract clarity.
 
 * When processing `Command::Tick` in Attack mode:
   * Reduce `cooldown_remaining` for every tower by `dt`, saturating at zero.
-  * For each projectile, compute `advance_half = projectile.speed_half_per_ms as u128 * dt.as_millis() as u128`, add it to `travelled_half`, and clamp at `distance_half`.
+  * For each projectile, add `dt.as_millis()` to `elapsed_ms` (clamped to `travel_time_ms`) and recompute `travelled_half = distance_half * elapsed_ms / travel_time_ms`.
   * When `travelled_half >= distance_half`:
     * Look up the target bug by id. If alive, subtract damage, emit `BugDamaged`, and if health hits zero remove the bug, clear occupancy, and emit `BugDied`. Then emit `ProjectileHit`.
     * If the bug is already dead, emit `ProjectileExpired` without applying damage.

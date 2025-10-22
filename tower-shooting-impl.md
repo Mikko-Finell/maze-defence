@@ -9,7 +9,7 @@ The sequence below layers combat from contracts → world authority → pure sys
 **Deliverables:**
 
 * Add the `Health`, `Damage`, `ProjectileId`, and `ProjectileRejection` types exactly as specced, with doc comments spelling out zero/dead semantics and rejection reasons.
-* Extend `TowerKind` with integer timing/damage accessors (`fire_cooldown_ms`, `speed_half_cells_per_ms`, `projectile_damage`). Keep them `const fn` and unit-test the `Basic` values.
+* Extend `TowerKind` with integer timing/damage accessors (`fire_cooldown_ms`, `projectile_travel_time_ms`, `projectile_damage`). Keep them `const fn` and unit-test the `Basic` values.
 * Add the `Command::FireProjectile` variant, extend `Command::SpawnBug` with a `health: Health` field, and update `Event` with the new projectile/bug health events. Document ordering/meaning for each event.
 
 **Exit checks:** `core` compiles, serialization/serde (if present) covers the new types, and unit tests prove the constant values/constructors.
@@ -22,7 +22,7 @@ The sequence below layers combat from contracts → world authority → pure sys
 
 * Extend tower state with `cooldown_remaining: Duration` (initialised to zero) and ensure builder mode keeps it frozen.
 * Extend bug state with `health: Health`; update spawn helpers/default fixtures to pass the new health argument.
-* Introduce `ProjectileState` struct (id, tower, target, start/end `CellPointHalf`, `distance_half`, `travelled_half`, `speed_half_per_ms`, cached `damage`). Add `projectiles: BTreeMap<ProjectileId, ProjectileState>` and `next_projectile_id` allocator.
+* Introduce `ProjectileState` struct (id, tower, target, start/end `CellPointHalf`, `distance_half`, `travelled_half`, `travel_time_ms`, `elapsed_ms`, cached `damage`). Add `projectiles: BTreeMap<ProjectileId, ProjectileState>` and `next_projectile_id` allocator.
 * Wire bug removal helpers so they key off `health == Health::ZERO` rather than ad-hoc flags (but no behaviour change yet).
 
 **Exit checks:** World crate compiles, state constructors/tests updated, and existing behaviour is unchanged when no projectiles exist.
@@ -45,7 +45,7 @@ The sequence below layers combat from contracts → world authority → pure sys
 
 **Deliverables:**
 
-* During `Tick` handling (attack mode only): decrement tower cooldowns saturating at zero, advance projectiles by `speed_half_per_ms * dt.as_millis()` with clamping to `distance_half`.
+* During `Tick` handling (attack mode only): decrement tower cooldowns saturating at zero, increment each projectile's elapsed time by `dt.as_millis()` (clamped to its travel duration), and derive `travelled_half = distance_half * elapsed_ms / travel_time_ms`.
 * When `travelled_half >= distance_half`, branch on bug liveness (by id). Apply damage atomically, emit `BugDamaged` and optionally `BugDied` when health hits zero, clean up occupancy/pathing, then emit `ProjectileHit`. If the bug is already gone, emit `ProjectileExpired`.
 * Remove projectiles from the map exactly once after emitting the terminal event.
 * Ensure builder mode leaves cooldowns/projectiles untouched even if ticks continue for UI cadence.
@@ -59,7 +59,7 @@ The sequence below layers combat from contracts → world authority → pure sys
 **Deliverables:**
 
 * Implement `query::tower_cooldowns(&World) -> impl Iterator<Item = TowerCooldownView>` returning tower id, kind, and `ready_in: Duration` or milliseconds.
-* Implement `query::projectiles(&World) -> impl Iterator<Item = ProjectileSnapshot>` including ids, tower/bug ids, integer endpoints (`origin_half`, `dest_half`), `distance_half`, `travelled_half`, and `speed_half_per_ms`.
+* Implement `query::projectiles(&World) -> impl Iterator<Item = ProjectileSnapshot>` including ids, tower/bug ids, integer endpoints (`origin_half`, `dest_half`), `distance_half`, and `travelled_half`.
 * Update existing queries (bugs, towers) to filter out dead bugs automatically.
 
 **Exit checks:** Query unit tests verify stable ordering (BTree iteration), correct values, and that snapshots remain integer-based for determinism.
