@@ -150,9 +150,23 @@ impl World {
         }
 
         let (columns, rows) = self.occupancy.dimensions();
+        let walls = &self.walls;
+        #[cfg(any(test, feature = "tower_scaffolding"))]
+        let tower_occupancy = &self.tower_occupancy;
         self.navigation_field
             .rebuild_with(columns, rows, &self.targets, |cell| {
-                self.walls.contains(cell)
+                if walls.contains(cell) {
+                    return true;
+                }
+
+                #[cfg(any(test, feature = "tower_scaffolding"))]
+                {
+                    if tower_occupancy.contains(cell) {
+                        return true;
+                    }
+                }
+
+                false
             });
         let field_width = self.navigation_field.width();
         let field_height = self.navigation_field.height();
@@ -367,6 +381,8 @@ pub fn apply(world: &mut World, command: Command, out_events: &mut Vec<Event>) {
             if world.play_mode == PlayMode::Builder {
                 return;
             }
+
+            world.rebuild_navigation_field_if_dirty();
             world.tick_index = world.tick_index.saturating_add(1);
             out_events.push(Event::TimeAdvanced { dt });
 
@@ -438,7 +454,9 @@ pub fn apply(world: &mut World, command: Command, out_events: &mut Vec<Event>) {
             world.play_mode = mode;
 
             match mode {
-                PlayMode::Attack => {}
+                PlayMode::Attack => {
+                    world.rebuild_navigation_field_if_dirty();
+                }
                 PlayMode::Builder => {
                     world.clear_bugs();
                 }
@@ -719,6 +737,7 @@ impl World {
 
         let id = self.towers.allocate();
         self.mark_tower_region(region, true);
+        self.mark_navigation_dirty();
         self.towers.insert(TowerState {
             id,
             kind,
@@ -752,6 +771,7 @@ impl World {
         };
 
         self.mark_tower_region(state.region, false);
+        self.mark_navigation_dirty();
         out_events.push(Event::TowerRemoved {
             tower: state.id,
             region: state.region,
@@ -2148,6 +2168,94 @@ mod tests {
                 Some(0),
                 "exit cells remain zero after rebuild",
             );
+        }
+    }
+
+    #[test]
+    fn navigation_field_blocks_tower_cells_after_builder_edits() {
+        let mut world = World::new();
+        let mut events = Vec::new();
+
+        apply(
+            &mut world,
+            Command::SetPlayMode {
+                mode: PlayMode::Builder,
+            },
+            &mut events,
+        );
+
+        assert_eq!(
+            events,
+            vec![Event::PlayModeChanged {
+                mode: PlayMode::Builder,
+            }],
+        );
+        events.clear();
+
+        let origin = CellCoord::new(2, 2);
+        let footprint = footprint_for(TowerKind::Basic);
+
+        let (columns, rows) = world.tower_occupancy.dimensions();
+        assert!(
+            origin.column().saturating_add(footprint.width()) <= columns,
+            "tower footprint must remain within the maze columns",
+        );
+        assert!(
+            origin.row().saturating_add(footprint.height()) <= rows,
+            "tower footprint must remain within the maze rows",
+        );
+
+        apply(
+            &mut world,
+            Command::PlaceTower {
+                kind: TowerKind::Basic,
+                origin,
+            },
+            &mut events,
+        );
+
+        assert_eq!(
+            events,
+            vec![Event::TowerPlaced {
+                tower: TowerId::new(0),
+                kind: TowerKind::Basic,
+                region: CellRect::from_origin_and_size(origin, footprint),
+            }],
+        );
+        events.clear();
+
+        apply(
+            &mut world,
+            Command::SetPlayMode {
+                mode: PlayMode::Attack,
+            },
+            &mut events,
+        );
+
+        assert_eq!(
+            events,
+            vec![Event::PlayModeChanged {
+                mode: PlayMode::Attack,
+            }],
+        );
+        assert!(
+            !world.navigation_dirty,
+            "navigation rebuild should complete when switching to attack",
+        );
+
+        let navigation = query::navigation_field(&world);
+        for column_offset in 0..footprint.width() {
+            for row_offset in 0..footprint.height() {
+                let cell = CellCoord::new(
+                    origin.column().saturating_add(column_offset),
+                    origin.row().saturating_add(row_offset),
+                );
+                assert_eq!(
+                    navigation.distance(cell),
+                    Some(u16::MAX),
+                    "tower-covered cell should be unreachable",
+                );
+            }
         }
     }
 
@@ -4672,7 +4780,7 @@ mod tests {
         assert_eq!(first, second, "combat replay diverged between runs");
 
         let fingerprint = first.fingerprint();
-        let expected = 0x444c_815b_d072_9bae;
+        let expected = 0xf750_f195_b3ad_abdd;
         assert_eq!(
             fingerprint, expected,
             "combat replay fingerprint mismatch: {fingerprint:#x}"
