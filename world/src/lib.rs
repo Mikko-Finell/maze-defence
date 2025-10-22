@@ -22,7 +22,7 @@ use towers::{footprint_for, TowerRegistry, TowerState};
 
 use maze_defence_core::{
     BugColor, BugId, CellCoord, Command, Direction, Event, Health, PlayMode, Target, TargetCell,
-    TileCoord, TileGrid, Wall, WELCOME_BANNER,
+    TileCoord, TileGrid, WELCOME_BANNER,
 };
 
 use maze_defence_core::structures::Wall as CellWall;
@@ -40,6 +40,21 @@ const MIN_STEP_QUANTUM: Duration = Duration::from_micros(1);
 const SIDE_BORDER_CELL_LAYERS: u32 = 1;
 const TOP_BORDER_CELL_LAYERS: u32 = 1;
 const EXIT_CELL_LAYERS: u32 = 1;
+
+#[derive(Debug)]
+struct Wall {
+    target: Target,
+}
+
+impl Wall {
+    fn new(target: Target) -> Self {
+        Self { target }
+    }
+
+    pub(crate) fn target(&self) -> &Target {
+        &self.target
+    }
+}
 
 /// Represents the authoritative Maze Defence world state.
 #[derive(Debug)]
@@ -559,7 +574,7 @@ impl World {
 pub mod query {
     use super::World;
     use maze_defence_core::{
-        BugSnapshot, BugView, CellCoord, Goal, OccupancyView, PlayMode, Target, TileGrid, Wall,
+        BugSnapshot, BugView, CellCoord, Goal, OccupancyView, PlayMode, Target, TileGrid,
     };
 
     use maze_defence_core::structures::{Wall as CellWall, WallView as CellWallView};
@@ -593,12 +608,6 @@ pub mod query {
     #[must_use]
     pub fn cells_per_tile(world: &World) -> u32 {
         world.cells_per_tile.max(1)
-    }
-
-    /// Provides read-only access to the wall guarding the maze perimeter.
-    #[must_use]
-    pub fn wall(world: &World) -> &Wall {
-        &world.wall
     }
 
     /// Provides read-only access to the target carved into the perimeter wall.
