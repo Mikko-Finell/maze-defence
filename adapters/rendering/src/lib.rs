@@ -12,7 +12,8 @@
 use anyhow::Result as AnyResult;
 use glam::Vec2;
 use maze_defence_core::{
-    BugId, CellCoord, CellRect, PlacementError, PlayMode, RemovalError, TowerId, TowerKind,
+    BugId, CellCoord, CellRect, PlacementError, PlayMode, ProjectileId, RemovalError, TowerId,
+    TowerKind,
 };
 use std::{error::Error, fmt, time::Duration};
 
@@ -510,6 +511,35 @@ impl TowerTargetLine {
     }
 }
 
+/// Projectile currently travelling between a tower and its cached target.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SceneProjectile {
+    /// Identifier allocated to the projectile by the world.
+    pub id: ProjectileId,
+    /// Cached origin of the projectile expressed in cell coordinates.
+    pub from: Vec2,
+    /// Cached destination expressed in cell coordinates.
+    pub to: Vec2,
+    /// Current projectile position expressed in cell coordinates.
+    pub position: Vec2,
+    /// Normalised travel progress in the inclusive range `0.0..=1.0`.
+    pub progress: f32,
+}
+
+impl SceneProjectile {
+    /// Creates a new projectile scene descriptor.
+    #[must_use]
+    pub fn new(id: ProjectileId, from: Vec2, to: Vec2, position: Vec2, progress: f32) -> Self {
+        Self {
+            id,
+            from,
+            to,
+            position,
+            progress,
+        }
+    }
+}
+
 /// Scene description combining the tile grid, perimeter wall colour and inhabitants.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Scene {
@@ -523,6 +553,8 @@ pub struct Scene {
     pub bugs: Vec<BugPresentation>,
     /// Towers currently visible within the maze.
     pub towers: Vec<SceneTower>,
+    /// Projectiles currently travelling across the maze.
+    pub projectiles: Vec<SceneProjectile>,
     /// Targeting beams emitted by towers while in attack mode.
     pub tower_targets: Vec<TowerTargetLine>,
     /// Active play mode for the simulation.
@@ -545,6 +577,7 @@ impl Scene {
         walls: Vec<SceneWall>,
         bugs: Vec<BugPresentation>,
         towers: Vec<SceneTower>,
+        projectiles: Vec<SceneProjectile>,
         tower_targets: Vec<TowerTargetLine>,
         play_mode: PlayMode,
         tower_preview: Option<TowerPreview>,
@@ -557,6 +590,7 @@ impl Scene {
             walls,
             bugs,
             towers,
+            projectiles,
             tower_targets,
             play_mode,
             tower_preview,
@@ -785,6 +819,7 @@ mod tests {
             bugs.clone(),
             Vec::new(),
             Vec::new(),
+            Vec::new(),
             PlayMode::Attack,
             None,
             None,
@@ -799,6 +834,7 @@ mod tests {
         assert!(scene.tower_preview.is_none());
         assert!(scene.active_tower_footprint_tiles.is_none());
         assert!(scene.towers.is_empty());
+        assert!(scene.projectiles.is_empty());
         assert!(scene.tower_targets.is_empty());
         assert!(scene.tower_feedback.is_none());
     }
@@ -842,6 +878,7 @@ mod tests {
                 TowerKind::Basic,
                 preview_region,
             )],
+            Vec::new(),
             vec![target_line],
             PlayMode::Builder,
             Some(placement_preview),
@@ -869,6 +906,7 @@ mod tests {
             })
         );
         assert_eq!(scene.tower_targets, vec![target_line]);
+        assert!(scene.projectiles.is_empty());
     }
 
     #[test]
@@ -885,6 +923,7 @@ mod tests {
         let scene = Scene::new(
             tile_grid,
             Color::from_rgb_u8(64, 64, 64),
+            Vec::new(),
             Vec::new(),
             Vec::new(),
             Vec::new(),

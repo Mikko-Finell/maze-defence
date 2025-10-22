@@ -102,7 +102,7 @@ The sequence below layers combat from contracts → world authority → pure sys
 
 **Exit checks:** Headless simulation tests cover attack/builder transitions, confirm commands emit only when cooldown-ready, and ensure projectile snapshots are cached.
 
-# 9) Scene & adapters — TODO
+# 9) Scene & adapters — DONE
 
 **Goal:** Visualise projectiles using deterministic data only.
 
@@ -111,6 +111,7 @@ The sequence below layers combat from contracts → world authority → pure sys
 * Extend `Scene` with `projectiles: Vec<SceneProjectile>` containing ids, endpoints, float positions/progress derived from integer snapshots.
 * Update CLI/macroquad adapters to populate/draw projectile dots (radius derived from cell size) without inventing new timing logic.
 * Adjust existing scene constructors/tests/snapshots to include the new field while keeping non-visual adapters no-ops.
+* Populated scene projectiles from world snapshots, exposed them via adapters, and rendered them as deterministic macroquad dots.
 
 **Exit checks:** Rendering/unit tests cover the new scene data; manual smoke test shows dots travelling along targeting lines.
 
