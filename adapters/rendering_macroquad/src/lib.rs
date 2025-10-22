@@ -416,8 +416,8 @@ impl SceneMetrics {
 
     fn bug_center(&self, position: Vec2) -> Vec2 {
         Vec2::new(
-            self.offset_x + (position.x + 0.5) * self.cell_step,
-            self.offset_y + (position.y + 0.5) * self.cell_step,
+            self.offset_x + position.x * self.cell_step,
+            self.offset_y + position.y * self.cell_step,
         )
     }
 }
