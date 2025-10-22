@@ -9,8 +9,6 @@
 
 //! Deterministic movement system that plans paths and proposes bug steps.
 
-use std::{cmp::Ordering, collections::BinaryHeap};
-
 use maze_defence_core::{
     BugId, BugSnapshot, BugView, CellCoord, Command, Direction, Event, Goal, NavigationFieldView,
     OccupancyView, PlayMode, ReservationLedgerView,
@@ -88,17 +86,12 @@ impl Default for Movement {
 
 #[derive(Debug)]
 struct CrowdPlanner {
-    frontier: BinaryHeap<NodeState>,
-    came_from: Vec<Option<CellCoord>>,
-    g_score: Vec<u32>,
-    generation: Vec<u32>,
     targets: Vec<CellCoord>,
     prepared_dimensions: Option<(u32, u32)>,
-    workspace_nodes: usize,
-    current_generation: u32,
     congestion: Vec<u8>,
     detour_queue: Vec<CellCoord>,
     last_cell: LastCellRing,
+    stall_counters: StallCounter,
 }
 
 impl CrowdPlanner {
@@ -125,13 +118,6 @@ impl CrowdPlanner {
 
         let node_count_u64 = u64::from(columns) * u64::from(rows);
         let node_count = usize::try_from(node_count_u64).unwrap_or(0);
-        if node_count > self.workspace_nodes {
-            self.g_score.resize(node_count, u32::MAX);
-            self.came_from.resize(node_count, None);
-            self.generation.resize(node_count, 0);
-            self.workspace_nodes = node_count;
-        }
-
         let field_cells = navigation_view.cells().len();
         if self.congestion.len() < field_cells {
             self.congestion.resize(field_cells, 0);
@@ -165,6 +151,7 @@ impl CrowdPlanner {
         self.emit_step_commands(
             bug_view,
             occupancy_view,
+            navigation_view,
             columns,
             rows,
             is_cell_blocked,
@@ -192,6 +179,7 @@ impl CrowdPlanner {
         &mut self,
         bug_view: &BugView,
         occupancy_view: OccupancyView<'_>,
+        navigation_view: &NavigationFieldView<'_>,
         columns: u32,
         rows: u32,
         is_cell_blocked: &F,
@@ -202,8 +190,9 @@ impl CrowdPlanner {
         let mut ordered: Vec<_> = bug_view.iter().collect();
         ordered.sort_by_key(|bug| bug.id);
         self.last_cell.begin_tick(&ordered);
+        self.stall_counters.begin_tick(&ordered);
 
-        for bug in ordered {
+        for (index, bug) in ordered.into_iter().enumerate() {
             if !bug.ready_for_step {
                 continue;
             }
@@ -213,28 +202,38 @@ impl CrowdPlanner {
             };
 
             if bug.cell == goal.cell() {
+                self.stall_counters.reset(index);
                 continue;
             }
 
-            let Some(next_cell) = self.plan_next_hop(bug, goal, columns, rows, is_cell_blocked)
-            else {
+            let Some(next_cell) = self.plan_next_hop(
+                bug,
+                goal,
+                navigation_view,
+                occupancy_view,
+                columns,
+                rows,
+                is_cell_blocked,
+            ) else {
+                self.stall_counters.increment(index);
                 continue;
             };
 
-            if next_cell != goal.cell() && is_cell_blocked(next_cell) {
-                continue;
-            }
-
             if !cell_available_for(next_cell, bug.id, occupancy_view) {
+                self.stall_counters.increment(index);
                 continue;
             }
 
-            if let Some(direction) = direction_between(bug.cell, next_cell) {
-                out.push(Command::StepBug {
-                    bug_id: bug.id,
-                    direction,
-                });
-            }
+            let Some(direction) = direction_between(bug.cell, next_cell) else {
+                self.stall_counters.increment(index);
+                continue;
+            };
+
+            out.push(Command::StepBug {
+                bug_id: bug.id,
+                direction,
+            });
+            self.stall_counters.reset(index);
         }
     }
 
@@ -242,6 +241,8 @@ impl CrowdPlanner {
         &mut self,
         bug: &BugSnapshot,
         goal: Goal,
+        navigation_view: &NavigationFieldView<'_>,
+        occupancy_view: OccupancyView<'_>,
         columns: u32,
         rows: u32,
         is_cell_blocked: &F,
@@ -249,112 +250,77 @@ impl CrowdPlanner {
     where
         F: Fn(CellCoord) -> bool,
     {
-        let start_index = index(columns, rows, bug.cell)?;
+        let Some(current_distance) = navigation_view.distance(bug.cell) else {
+            return None;
+        };
 
-        self.reset_workspace();
-        self.prepare_node(start_index);
-        self.g_score[start_index] = 0;
-        self.frontier.push(NodeState::new(
-            bug.cell,
-            0,
-            heuristic_to_goal(bug.cell, goal.cell()),
-        ));
+        if current_distance == u16::MAX {
+            return None;
+        }
 
-        while let Some(current) = self.frontier.pop() {
-            if current.cell == goal.cell() {
-                return self.reconstruct_first_hop(bug.cell, goal.cell(), columns, rows);
+        let mut best: Option<NeighborCandidate> = None;
+
+        for (order, neighbor) in
+            enumerate_neighbors(bug.cell, columns, rows, goal.cell(), is_cell_blocked).enumerate()
+        {
+            if !cell_available_for(neighbor, bug.id, occupancy_view) {
+                continue;
             }
 
-            let neighbors =
-                enumerate_neighbors(current.cell, columns, rows, goal.cell(), is_cell_blocked);
-            for neighbor in neighbors {
-                let Some(neighbor_index) = index(columns, rows, neighbor) else {
-                    continue;
-                };
+            let Some(distance) = navigation_view.distance(neighbor) else {
+                continue;
+            };
 
-                let tentative = current.g_cost + 1;
-                self.prepare_node(neighbor_index);
-                if tentative >= self.g_score[neighbor_index] {
-                    continue;
+            if distance == u16::MAX {
+                continue;
+            }
+
+            let delta = i32::from(distance) - i32::from(current_distance);
+            if delta >= 0 {
+                continue;
+            }
+
+            let candidate = NeighborCandidate {
+                cell: neighbor,
+                distance,
+                order,
+            };
+
+            best = match best {
+                None => Some(candidate),
+                Some(existing) => {
+                    if candidate.distance < existing.distance
+                        || (candidate.distance == existing.distance
+                            && candidate.order < existing.order)
+                    {
+                        Some(candidate)
+                    } else {
+                        Some(existing)
+                    }
                 }
-
-                self.came_from[neighbor_index] = Some(current.cell);
-                self.g_score[neighbor_index] = tentative;
-                self.frontier.push(NodeState::new(
-                    neighbor,
-                    tentative,
-                    heuristic_to_goal(neighbor, goal.cell()),
-                ));
-            }
+            };
         }
 
-        None
+        best.map(|candidate| candidate.cell)
     }
+}
 
-    fn prepare_node(&mut self, index: usize) {
-        if self.generation[index] != self.current_generation {
-            self.generation[index] = self.current_generation;
-            self.g_score[index] = u32::MAX;
-            self.came_from[index] = None;
-        }
-    }
-
-    fn reconstruct_first_hop(
-        &self,
-        start: CellCoord,
-        goal: CellCoord,
-        columns: u32,
-        rows: u32,
-    ) -> Option<CellCoord> {
-        let mut current = goal;
-
-        loop {
-            let index = index(columns, rows, current)?;
-            let previous = self.came_from_for_current_generation(index)?;
-
-            if previous == start {
-                return Some(current);
-            }
-
-            current = previous;
-        }
-    }
-
-    fn came_from_for_current_generation(&self, index: usize) -> Option<CellCoord> {
-        if self.generation.get(index) == Some(&self.current_generation) {
-            self.came_from[index]
-        } else {
-            None
-        }
-    }
-
-    fn reset_workspace(&mut self) {
-        self.frontier.clear();
-        if self.current_generation == u32::MAX {
-            self.current_generation = 1;
-            for stamp in &mut self.generation {
-                *stamp = 0;
-            }
-        } else {
-            self.current_generation = self.current_generation.saturating_add(1);
-        }
-    }
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct NeighborCandidate {
+    cell: CellCoord,
+    distance: u16,
+    order: usize,
 }
 
 impl Default for CrowdPlanner {
     fn default() -> Self {
         Self {
-            frontier: BinaryHeap::new(),
-            came_from: Vec::new(),
-            g_score: Vec::new(),
-            generation: Vec::new(),
             targets: Vec::new(),
             prepared_dimensions: None,
-            workspace_nodes: 0,
-            current_generation: 0,
             congestion: Vec::new(),
             detour_queue: Vec::new(),
             last_cell: LastCellRing::default(),
+            stall_counters: StallCounter::default(),
         }
     }
 }
@@ -380,37 +346,36 @@ impl LastCellRing {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct NodeState {
-    cell: CellCoord,
-    g_cost: u32,
-    f_cost: u32,
+#[derive(Debug, Default)]
+struct StallCounter {
+    counts: Vec<u32>,
+    bug_ids: Vec<Option<BugId>>,
 }
 
-impl NodeState {
-    fn new(cell: CellCoord, g_cost: u32, heuristic: u32) -> Self {
-        Self {
-            cell,
-            g_cost,
-            f_cost: g_cost.saturating_add(heuristic),
+impl StallCounter {
+    fn begin_tick(&mut self, ordered: &[&BugSnapshot]) {
+        let bug_count = ordered.len();
+        self.counts.resize(bug_count, 0);
+        self.bug_ids.resize(bug_count, None);
+
+        for (index, bug) in ordered.iter().enumerate() {
+            if self.bug_ids[index] != Some(bug.id) {
+                self.counts[index] = 0;
+                self.bug_ids[index] = Some(bug.id);
+            }
         }
     }
-}
 
-impl Ord for NodeState {
-    fn cmp(&self, other: &Self) -> Ordering {
-        other
-            .f_cost
-            .cmp(&self.f_cost)
-            .then_with(|| other.g_cost.cmp(&self.g_cost))
-            .then_with(|| other.cell.column().cmp(&self.cell.column()))
-            .then_with(|| other.cell.row().cmp(&self.cell.row()))
+    fn reset(&mut self, index: usize) {
+        if let Some(value) = self.counts.get_mut(index) {
+            *value = 0;
+        }
     }
-}
 
-impl PartialOrd for NodeState {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
+    fn increment(&mut self, index: usize) {
+        if let Some(value) = self.counts.get_mut(index) {
+            *value = value.saturating_add(1);
+        }
     }
 }
 
@@ -504,21 +469,6 @@ fn direction_between(from: CellCoord, to: CellCoord) -> Option<Direction> {
     }
 }
 
-fn heuristic_to_goal(cell: CellCoord, goal: CellCoord) -> u32 {
-    cell.manhattan_distance(goal)
-}
-
-fn index(columns: u32, rows: u32, cell: CellCoord) -> Option<usize> {
-    if cell.column() >= columns || cell.row() >= rows {
-        return None;
-    }
-
-    let width = usize::try_from(columns).ok()?;
-    let row = usize::try_from(cell.row()).ok()?;
-    let column = usize::try_from(cell.column()).ok()?;
-    Some(row * width + column)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -579,102 +529,128 @@ mod tests {
     }
 
     #[test]
-    fn path_planning_is_consistent_across_generations() {
+    fn gradient_prefers_lower_distance_neighbor() {
         let mut movement = Movement::default();
-        let columns = 5;
-        let rows = 4;
-        let target = CellCoord::new(4, 3);
-        assert_eq!(
-            movement.planner.prepare_workspace(
-                columns,
-                rows,
-                &navigation_stub(columns, rows),
-                &[target]
-            ),
-            20
-        );
-        let goal = Goal::at(target);
-        let blocked = [
-            CellCoord::new(1, 0),
-            CellCoord::new(1, 1),
-            CellCoord::new(1, 2),
-            CellCoord::new(3, 2),
-        ];
-        let is_cell_blocked = |cell: CellCoord| blocked.iter().any(|candidate| *candidate == cell);
+        let width = 3;
+        let height = 3;
+        let navigation = navigation_field(width, height, &[4, 3, 2, 3, 2, 1, 4, 3, 2]);
+        let cell_count = usize::try_from(width).unwrap() * usize::try_from(height).unwrap();
+        let occupancy_cells = vec![None; cell_count];
+        let occupancy_view = OccupancyView::new(&occupancy_cells, width, height);
 
-        let expected_path = vec![
-            CellCoord::new(0, 1),
-            CellCoord::new(0, 2),
-            CellCoord::new(0, 3),
-            CellCoord::new(1, 3),
-            CellCoord::new(2, 3),
-            CellCoord::new(3, 3),
-            CellCoord::new(4, 3),
-        ];
+        let target = CellCoord::new(2, 1);
+        let _ = movement
+            .planner
+            .prepare_workspace(width, height, &navigation, &[target]);
 
-        let first_path = collect_path(
-            &mut movement,
-            bug_snapshot_at(CellCoord::new(0, 0)),
-            goal,
-            columns,
-            rows,
-            &is_cell_blocked,
-        );
-        assert_eq!(first_path, expected_path);
+        let bug = bug_snapshot_at(CellCoord::new(0, 1));
+        let next = movement
+            .planner
+            .plan_next_hop(
+                &bug,
+                Goal::at(target),
+                &navigation,
+                occupancy_view,
+                width,
+                height,
+                &|_| false,
+            )
+            .expect("gradient should select a neighbour");
 
-        let _ = movement.planner.prepare_workspace(
-            columns,
-            rows,
-            &navigation_stub(columns, rows),
-            &[target],
-        );
-        let second_path = collect_path(
-            &mut movement,
-            bug_snapshot_at(CellCoord::new(0, 0)),
-            goal,
-            columns,
-            rows,
-            &is_cell_blocked,
-        );
-        assert_eq!(second_path, expected_path);
+        assert_eq!(next, CellCoord::new(1, 1));
     }
 
     #[test]
-    fn heuristic_matches_manhattan_distance() {
-        let from = CellCoord::new(0, 0);
-        let goal = CellCoord::new(3, 4);
-        assert_eq!(heuristic_to_goal(from, goal), 7);
+    fn gradient_skips_occupied_neighbor() {
+        let mut movement = Movement::default();
+        let width = 3;
+        let height = 3;
+        let navigation = navigation_field(width, height, &[4, 3, 2, 3, 2, 1, 2, 1, 0]);
+        let cell_count = usize::try_from(width).unwrap() * usize::try_from(height).unwrap();
+        let mut occupancy_cells = vec![None; cell_count];
+        set_occupant(
+            &mut occupancy_cells,
+            width,
+            CellCoord::new(2, 1),
+            BugId::new(99),
+        );
+        let occupancy_view = OccupancyView::new(&occupancy_cells, width, height);
+
+        let target = CellCoord::new(2, 2);
+        let _ = movement
+            .planner
+            .prepare_workspace(width, height, &navigation, &[target]);
+
+        let bug = bug_snapshot_at(CellCoord::new(1, 1));
+        let next = movement
+            .planner
+            .plan_next_hop(
+                &bug,
+                Goal::at(target),
+                &navigation,
+                occupancy_view,
+                width,
+                height,
+                &|_| false,
+            )
+            .expect("planner should find an alternate neighbour");
+
+        assert_eq!(next, CellCoord::new(1, 2));
     }
 
-    fn collect_path<F>(
-        movement: &mut Movement,
-        mut bug: BugSnapshot,
-        goal: Goal,
-        columns: u32,
-        rows: u32,
-        is_cell_blocked: &F,
-    ) -> Vec<CellCoord>
-    where
-        F: Fn(CellCoord) -> bool,
-    {
-        let mut path = Vec::new();
-        while bug.cell != goal.cell() {
-            let Some(next) =
-                movement
-                    .planner
-                    .plan_next_hop(&bug, goal, columns, rows, is_cell_blocked)
-            else {
-                break;
-            };
-            path.push(next);
-            bug.cell = next;
-        }
-        path
+    #[test]
+    fn gradient_prefers_neighbour_order_on_tie() {
+        let mut movement = Movement::default();
+        let width = 3;
+        let height = 3;
+        let navigation = navigation_field(width, height, &[4, 3, 2, 3, 2, 1, 2, 1, 0]);
+        let cell_count = usize::try_from(width).unwrap() * usize::try_from(height).unwrap();
+        let occupancy_cells = vec![None; cell_count];
+        let occupancy_view = OccupancyView::new(&occupancy_cells, width, height);
+
+        let target = CellCoord::new(2, 2);
+        let _ = movement
+            .planner
+            .prepare_workspace(width, height, &navigation, &[target]);
+
+        let bug = bug_snapshot_at(CellCoord::new(1, 1));
+        let next = movement
+            .planner
+            .plan_next_hop(
+                &bug,
+                Goal::at(target),
+                &navigation,
+                occupancy_view,
+                width,
+                height,
+                &|_| false,
+            )
+            .expect("planner should pick a neighbour");
+
+        assert_eq!(next, CellCoord::new(2, 1));
     }
 
     fn navigation_stub(width: u32, height: u32) -> NavigationFieldView<'static> {
         let cells = usize::try_from(width).unwrap_or(0) * usize::try_from(height).unwrap_or(0);
         NavigationFieldView::from_owned(vec![0; cells], width, height)
+    }
+
+    fn navigation_field(
+        width: u32,
+        height: u32,
+        distances: &[u16],
+    ) -> NavigationFieldView<'static> {
+        let cell_count = usize::try_from(width).unwrap() * usize::try_from(height).unwrap();
+        assert_eq!(distances.len(), cell_count);
+        NavigationFieldView::from_owned(distances.to_vec(), width, height)
+    }
+
+    fn set_occupant(cells: &mut [Option<BugId>], width: u32, cell: CellCoord, bug: BugId) {
+        let width = usize::try_from(width).expect("width fits usize");
+        let row = usize::try_from(cell.row()).expect("row fits usize");
+        let column = usize::try_from(cell.column()).expect("column fits usize");
+        let index = row * width + column;
+        cells[index] = Some(bug);
     }
 
     fn bug_snapshot_at(cell: CellCoord) -> BugSnapshot {

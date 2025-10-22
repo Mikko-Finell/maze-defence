@@ -91,6 +91,100 @@ fn emits_step_commands_toward_target() {
 }
 
 #[test]
+fn gradient_progress_with_distant_blockers() {
+    let mut world = World::new();
+    let mut events = Vec::new();
+    world::apply(
+        &mut world,
+        Command::ConfigureTileGrid {
+            columns: TileCoord::new(3),
+            rows: TileCoord::new(5),
+            tile_length: 1.0,
+            cells_per_tile: 1,
+        },
+        &mut events,
+    );
+    world::apply(
+        &mut world,
+        Command::SpawnBug {
+            spawner: CellCoord::new(0, 0),
+            color: BugColor::from_rgb(0x2f, 0x95, 0x32),
+            health: Health::new(3),
+        },
+        &mut events,
+    );
+
+    let mut movement = Movement::default();
+    pump_system(&mut world, &mut movement, events);
+
+    let target_cells = query::target_cells(&world);
+    let exit_cell = target_cells
+        .first()
+        .copied()
+        .expect("expected at least one exit cell");
+
+    let initial_bug_view = query::bug_view(&world);
+    let bug_id = initial_bug_view
+        .iter()
+        .next()
+        .map(|bug| bug.id)
+        .expect("bug should exist");
+
+    let mut tick_events = Vec::new();
+    world::apply(
+        &mut world,
+        Command::Tick {
+            dt: Duration::from_millis(250),
+        },
+        &mut tick_events,
+    );
+
+    let bug_view = query::bug_view(&world);
+    let bug_snapshot = bug_view
+        .iter()
+        .find(|snapshot| snapshot.id == bug_id)
+        .expect("bug snapshot missing");
+    assert!(
+        bug_snapshot.cell.manhattan_distance(exit_cell) >= 2,
+        "bug should not be adjacent to the exit for this scenario",
+    );
+
+    let occupancy_view = query::occupancy_view(&world);
+    let navigation_view = query::navigation_field(&world);
+    let reservation_ledger = query::reservation_ledger(&world);
+    let mut commands = Vec::new();
+    movement.handle(
+        &tick_events,
+        &bug_view,
+        occupancy_view,
+        navigation_view,
+        reservation_ledger,
+        &target_cells,
+        |cell| cell == exit_cell || query::is_cell_blocked(&world, cell),
+        &mut commands,
+    );
+
+    let step_direction = commands.iter().find_map(|command| match command {
+        Command::StepBug {
+            bug_id: id,
+            direction,
+        } if *id == bug_id => Some(*direction),
+        _ => None,
+    });
+
+    let direction = step_direction.expect("expected bug to receive a step command");
+    let destination = advance_cell(bug_snapshot.cell, direction);
+    assert_ne!(
+        destination, exit_cell,
+        "bug should not target the blocked exit"
+    );
+    assert!(
+        destination.manhattan_distance(exit_cell) < bug_snapshot.cell.manhattan_distance(exit_cell),
+        "bug should advance toward the exit despite distant blockers",
+    );
+}
+
+#[test]
 fn step_commands_target_free_cells() {
     let mut world = World::new();
     let mut events = Vec::new();
