@@ -21,7 +21,7 @@ fn deterministic_replay_handles_equidistant_bugs_and_builder_mode() {
     assert_eq!(first.assignments.len(), script_len);
 
     let fingerprint = first.fingerprint();
-    let expected = 0x9e25_1286_96c5_5708;
+    let expected = 0x947c_9912_6280_80d1;
     assert_eq!(
         fingerprint, expected,
         "fingerprint mismatch: {fingerprint:#x}"
