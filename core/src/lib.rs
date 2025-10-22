@@ -20,6 +20,98 @@ use std::{num::NonZeroU32, time::Duration};
 
 use serde::{Deserialize, Serialize};
 
+/// Domain structures that occupy individual navigation cells.
+pub mod structures {
+    use super::CellCoord;
+
+    /// Permanent structure that occupies a single navigation cell.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+    pub struct Wall {
+        cell: CellCoord,
+    }
+
+    impl Wall {
+        /// Creates a wall anchored at the provided cell coordinate.
+        #[must_use]
+        pub const fn at(cell: CellCoord) -> Self {
+            Self { cell }
+        }
+
+        /// Returns the cell guarded by the wall.
+        #[must_use]
+        pub const fn cell(&self) -> CellCoord {
+            self.cell
+        }
+
+        /// Zero-based column index of the wall within the navigation grid.
+        #[must_use]
+        pub const fn column(&self) -> u32 {
+            self.cell.column()
+        }
+
+        /// Zero-based row index of the wall within the navigation grid.
+        #[must_use]
+        pub const fn row(&self) -> u32 {
+            self.cell.row()
+        }
+    }
+
+    /// Read-only snapshot describing all cell-sized walls stored in the world.
+    #[derive(Clone, Debug, Default, PartialEq, Eq)]
+    pub struct WallView {
+        walls: Vec<Wall>,
+    }
+
+    impl WallView {
+        /// Creates a new view from the provided wall collection.
+        #[must_use]
+        pub fn from_walls(mut walls: Vec<Wall>) -> Self {
+            walls.sort_by_key(|wall| (wall.column(), wall.row()));
+            walls.dedup();
+            Self { walls }
+        }
+
+        /// Iterator over the captured wall descriptors in deterministic order.
+        #[must_use = "iterators are lazy and do nothing unless consumed"]
+        pub fn iter(&self) -> impl Iterator<Item = &Wall> {
+            self.walls.iter()
+        }
+
+        /// Consumes the view, yielding the underlying wall descriptors.
+        #[must_use]
+        pub fn into_vec(self) -> Vec<Wall> {
+            self.walls
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn wall_view_sorts_and_deduplicates_cells() {
+            let walls = vec![
+                Wall::at(CellCoord::new(4, 2)),
+                Wall::at(CellCoord::new(1, 1)),
+                Wall::at(CellCoord::new(4, 2)),
+                Wall::at(CellCoord::new(0, 3)),
+            ];
+
+            let view = WallView::from_walls(walls);
+            let ordered: Vec<_> = view.iter().map(|wall| wall.cell()).collect();
+
+            assert_eq!(
+                ordered,
+                vec![
+                    CellCoord::new(0, 3),
+                    CellCoord::new(1, 1),
+                    CellCoord::new(4, 2),
+                ]
+            );
+        }
+    }
+}
+
 /// Canonical banner emitted when the experience boots.
 pub const WELCOME_BANNER: &str = "Welcome to Maze Defence.";
 

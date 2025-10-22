@@ -25,7 +25,7 @@ use macroquad::{
 use maze_defence_core::PlayMode;
 use maze_defence_rendering::{
     BugPresentation, Color, FrameInput, FrameSimulationBreakdown, Presentation, RenderingBackend,
-    Scene, SceneTower, TileGridPresentation, TowerPreview, TowerTargetLine,
+    Scene, SceneTower, SceneWall, TileGridPresentation, TowerPreview, TowerTargetLine,
 };
 use std::{
     collections::VecDeque,
@@ -231,6 +231,7 @@ impl RenderingBackend for MacroquadBackend {
                 let render_start = Instant::now();
                 draw_subgrid(&metrics, &tile_grid, subgrid_color);
                 draw_tile_grid(&metrics, &tile_grid, grid_color);
+                draw_cell_walls(&scene, &metrics);
 
                 draw_towers(&scene.towers, &metrics);
 
@@ -505,6 +506,25 @@ fn draw_tile_grid(
     }
 }
 
+fn draw_cell_walls(scene: &Scene, metrics: &SceneMetrics) {
+    if scene.walls.is_empty() {
+        return;
+    }
+
+    let cell_step = metrics.cell_step;
+    if cell_step <= f32::EPSILON {
+        return;
+    }
+
+    let color = to_macroquad_color(scene.wall.color);
+
+    for SceneWall { column, row } in &scene.walls {
+        let x = metrics.offset_x + (*column as f32) * cell_step;
+        let y = metrics.offset_y + (*row as f32) * cell_step;
+        macroquad::shapes::draw_rectangle(x, y, cell_step, cell_step, color);
+    }
+}
+
 fn draw_wall(
     metrics: &SceneMetrics,
     wall: &maze_defence_rendering::WallPresentation,
@@ -765,6 +785,7 @@ mod tests {
         Scene::new(
             grid,
             wall,
+            Vec::new(),
             Vec::new(),
             Vec::new(),
             Vec::new(),
