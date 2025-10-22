@@ -11,7 +11,7 @@
 
 use maze_defence_core::{
     BugId, BugSnapshot, BugView, CellCoord, Command, Direction, Event, NavigationFieldView,
-    OccupancyView, PlayMode, ReservationLedgerView, CONGESTION_LOOKAHEAD,
+    OccupancyView, PlayMode, ReservationLedgerView, CONGESTION_LOOKAHEAD, DETOUR_RADIUS,
 };
 use maze_defence_world::query::select_goal;
 
@@ -87,7 +87,10 @@ struct CrowdPlanner {
     targets: Vec<CellCoord>,
     prepared_dimensions: Option<(u32, u32)>,
     congestion: Vec<u8>,
-    detour_queue: Vec<CellCoord>,
+    detour_queue: Vec<DetourNode>,
+    detour_marks: Vec<u32>,
+    detour_generation: u32,
+    reserved_destinations: Vec<CellCoord>,
     last_cell: LastCellRing,
     stalled_for: StallCounter,
 }
@@ -130,6 +133,10 @@ impl CrowdPlanner {
                 .reserve(field_cells - self.detour_queue.capacity());
         }
 
+        if self.detour_marks.len() < field_cells {
+            self.detour_marks.resize(field_cells, 0);
+        }
+
         node_count
     }
 
@@ -147,11 +154,12 @@ impl CrowdPlanner {
         let mut ordered: Vec<_> = bug_view.iter().collect();
         ordered.sort_by_key(|bug| bug.id);
 
-        self.prepare_per_tick(&ordered, navigation_view, reservation_ledger.len());
+        self.prepare_per_tick(&ordered, navigation_view);
         self.emit_step_commands(
-            ordered,
+            &ordered,
             occupancy_view,
             navigation_view,
+            reservation_ledger,
             is_cell_blocked,
             out,
         );
@@ -161,7 +169,6 @@ impl CrowdPlanner {
         &mut self,
         ordered: &[&BugSnapshot],
         navigation_view: &NavigationFieldView<'_>,
-        reservation_count: usize,
     ) {
         if self.congestion.len() < navigation_view.cells().len() {
             self.congestion.resize(navigation_view.cells().len(), 0);
@@ -173,14 +180,16 @@ impl CrowdPlanner {
         self.build_congestion_map(ordered, navigation_view);
 
         self.detour_queue.clear();
-        self.detour_queue.reserve(reservation_count);
+        self.reserved_destinations.clear();
+        self.reserved_destinations.reserve(ordered.len());
     }
 
     fn emit_step_commands<F>(
         &mut self,
-        ordered: Vec<&BugSnapshot>,
+        ordered: &[&BugSnapshot],
         occupancy_view: OccupancyView<'_>,
         navigation_view: &NavigationFieldView<'_>,
+        reservation_ledger: &ReservationLedgerView<'_>,
         is_cell_blocked: &F,
         out: &mut Vec<Command>,
     ) where
@@ -189,7 +198,8 @@ impl CrowdPlanner {
         self.last_cell.begin_tick(&ordered);
         self.stalled_for.begin_tick(&ordered);
 
-        for (index, bug) in ordered.into_iter().enumerate() {
+        for (index, bug) in ordered.iter().enumerate() {
+            let bug = *bug;
             if !bug.ready_for_step {
                 continue;
             }
@@ -202,17 +212,27 @@ impl CrowdPlanner {
                 continue;
             }
 
-            let Some(next_cell) =
-                self.plan_next_hop(index, bug, navigation_view, occupancy_view, is_cell_blocked)
-            else {
+            let Some(next_cell) = self.plan_next_hop(
+                index,
+                bug,
+                ordered,
+                navigation_view,
+                occupancy_view,
+                reservation_ledger,
+                is_cell_blocked,
+            ) else {
                 continue;
             };
 
-            if next_cell != goal.cell() && is_cell_blocked(next_cell) {
-                continue;
-            }
-
-            if !cell_available_for(next_cell, bug.id, occupancy_view) {
+            if next_cell != goal.cell()
+                && !self.cell_passable(
+                    next_cell,
+                    bug.id,
+                    occupancy_view,
+                    reservation_ledger,
+                    is_cell_blocked,
+                )
+            {
                 continue;
             }
 
@@ -221,6 +241,7 @@ impl CrowdPlanner {
                     bug_id: bug.id,
                     direction,
                 });
+                self.reserved_destinations.push(next_cell);
                 self.last_cell.record(index, bug.cell);
             }
         }
@@ -230,8 +251,10 @@ impl CrowdPlanner {
         &mut self,
         bug_index: usize,
         bug: &BugSnapshot,
+        ordered: &[&BugSnapshot],
         navigation_view: &NavigationFieldView<'_>,
         occupancy_view: OccupancyView<'_>,
+        reservation_ledger: &ReservationLedgerView<'_>,
         is_cell_blocked: &F,
     ) -> Option<CellCoord>
     where
@@ -240,6 +263,7 @@ impl CrowdPlanner {
         let current_distance = navigation_view.distance(bug.cell).unwrap_or(u16::MAX);
         let width = navigation_view.width();
         let height = navigation_view.height();
+        let (occupancy_columns, occupancy_rows) = occupancy_view.dimensions();
 
         let current_congestion = self.congestion_value(bug.cell, width, height).unwrap_or(0);
 
@@ -248,11 +272,24 @@ impl CrowdPlanner {
         let last_cell = self.last_cell.last(bug_index);
 
         for neighbor in neighbors_within_field(bug.cell, width, height) {
-            if is_cell_blocked(neighbor) {
+            if self.cell_reserved_by_lower_bug(
+                bug.id,
+                neighbor,
+                ordered,
+                reservation_ledger,
+                occupancy_columns,
+                occupancy_rows,
+            ) {
                 continue;
             }
 
-            if !cell_available_for(neighbor, bug.id, occupancy_view) {
+            if !self.cell_passable(
+                neighbor,
+                bug.id,
+                occupancy_view,
+                reservation_ledger,
+                is_cell_blocked,
+            ) {
                 continue;
             }
 
@@ -300,8 +337,221 @@ impl CrowdPlanner {
             return Some(candidate.cell);
         }
 
+        if let Some(next_cell) = self.search_detour(
+            bug,
+            ordered,
+            navigation_view,
+            occupancy_view,
+            reservation_ledger,
+            is_cell_blocked,
+            current_distance,
+            occupancy_columns,
+            occupancy_rows,
+        ) {
+            self.stalled_for.reset(bug_index);
+            return Some(next_cell);
+        }
+
         self.stalled_for.increment(bug_index);
         None
+    }
+
+    fn search_detour<F>(
+        &mut self,
+        bug: &BugSnapshot,
+        ordered: &[&BugSnapshot],
+        navigation_view: &NavigationFieldView<'_>,
+        occupancy_view: OccupancyView<'_>,
+        reservation_ledger: &ReservationLedgerView<'_>,
+        is_cell_blocked: &F,
+        current_distance: u16,
+        occupancy_columns: u32,
+        occupancy_rows: u32,
+    ) -> Option<CellCoord>
+    where
+        F: Fn(CellCoord) -> bool,
+    {
+        let radius = usize::try_from(DETOUR_RADIUS).unwrap_or(0);
+        if radius == 0 {
+            return None;
+        }
+        let radius_u32 = u32::try_from(radius).unwrap_or(0);
+        if radius_u32 == 0 {
+            return None;
+        }
+
+        let width = navigation_view.width();
+        let height = navigation_view.height();
+
+        self.detour_generation = self.detour_generation.wrapping_add(1);
+        if self.detour_generation == 0 {
+            self.detour_marks.fill(0);
+            self.detour_generation = 1;
+        }
+        let generation = self.detour_generation;
+
+        self.detour_queue.clear();
+        self.detour_queue.push(DetourNode {
+            cell: bug.cell,
+            depth: 0,
+            first_hop: bug.cell,
+        });
+
+        if let Some(index) = field_index(bug.cell, width, height) {
+            if let Some(mark) = self.detour_marks.get_mut(index) {
+                *mark = generation;
+            }
+        }
+
+        let mut best_fallback: Option<(Candidate, CellCoord)> = None;
+        let mut head = 0;
+
+        while head < self.detour_queue.len() {
+            let node = self.detour_queue[head];
+            head += 1;
+
+            if node.depth >= radius_u32 {
+                continue;
+            }
+
+            for neighbor in neighbors_within_field(node.cell, width, height) {
+                let Some(index) = field_index(neighbor, width, height) else {
+                    continue;
+                };
+
+                if self.detour_marks.get(index).copied().unwrap_or(0) == generation {
+                    continue;
+                }
+
+                if self.cell_reserved_by_lower_bug(
+                    bug.id,
+                    neighbor,
+                    ordered,
+                    reservation_ledger,
+                    occupancy_columns,
+                    occupancy_rows,
+                ) {
+                    continue;
+                }
+
+                if node.depth > 0 {
+                    if let Some(occupant) = occupancy_view.occupant(neighbor) {
+                        if occupant != bug.id {
+                            continue;
+                        }
+                    }
+                }
+
+                if !self.cell_passable(
+                    neighbor,
+                    bug.id,
+                    occupancy_view,
+                    reservation_ledger,
+                    is_cell_blocked,
+                ) {
+                    continue;
+                }
+
+                if let Some(mark) = self.detour_marks.get_mut(index) {
+                    *mark = generation;
+                }
+
+                let Some(distance) = navigation_view.distance(neighbor) else {
+                    continue;
+                };
+
+                let congestion = self.congestion.get(index).copied().unwrap_or_default();
+
+                let first_hop = if node.depth == 0 {
+                    neighbor
+                } else {
+                    node.first_hop
+                };
+
+                if distance < current_distance {
+                    return Some(first_hop);
+                }
+
+                let candidate = Candidate {
+                    cell: neighbor,
+                    distance,
+                    congestion,
+                };
+
+                match &best_fallback {
+                    None => best_fallback = Some((candidate, first_hop)),
+                    Some((best, _)) if candidate_better_than(candidate, *best) => {
+                        best_fallback = Some((candidate, first_hop));
+                    }
+                    _ => {}
+                }
+
+                if node.depth + 1 < radius_u32 {
+                    self.detour_queue.push(DetourNode {
+                        cell: neighbor,
+                        depth: node.depth + 1,
+                        first_hop,
+                    });
+                }
+            }
+        }
+
+        best_fallback.map(|(_, first_hop)| first_hop)
+    }
+
+    fn cell_passable<F>(
+        &self,
+        cell: CellCoord,
+        bug_id: BugId,
+        occupancy_view: OccupancyView<'_>,
+        reservation_ledger: &ReservationLedgerView<'_>,
+        is_cell_blocked: &F,
+    ) -> bool
+    where
+        F: Fn(CellCoord) -> bool,
+    {
+        if let Some(occupant) = occupancy_view.occupant(cell) {
+            if occupant == bug_id {
+                return true;
+            }
+
+            return reservation_ledger.claim_for(occupant).is_some();
+        }
+
+        !is_cell_blocked(cell)
+    }
+
+    fn cell_reserved_by_lower_bug(
+        &self,
+        bug_id: BugId,
+        cell: CellCoord,
+        ordered: &[&BugSnapshot],
+        reservation_ledger: &ReservationLedgerView<'_>,
+        occupancy_columns: u32,
+        occupancy_rows: u32,
+    ) -> bool {
+        if self
+            .reserved_destinations
+            .iter()
+            .any(|reserved| *reserved == cell)
+        {
+            return true;
+        }
+
+        reservation_ledger
+            .iter()
+            .filter(|claim| claim.bug_id() < bug_id)
+            .any(|claim| {
+                let Some(origin) = bug_position(ordered, claim.bug_id()) else {
+                    return false;
+                };
+                let Some(destination) =
+                    step_cell(origin, claim.direction(), occupancy_columns, occupancy_rows)
+                else {
+                    return false;
+                };
+                destination == cell
+            })
     }
 
     fn build_congestion_map(
@@ -374,6 +624,13 @@ impl CrowdPlanner {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
+struct DetourNode {
+    cell: CellCoord,
+    depth: u32,
+    first_hop: CellCoord,
+}
+
 #[derive(Clone, Copy)]
 struct Candidate {
     cell: CellCoord,
@@ -410,6 +667,37 @@ fn candidate_better_than(candidate: Candidate, existing: Candidate) -> bool {
     lexicographically_less(candidate.cell, existing.cell)
 }
 
+fn bug_position(ordered: &[&BugSnapshot], bug_id: BugId) -> Option<CellCoord> {
+    ordered
+        .iter()
+        .copied()
+        .find(|bug| bug.id == bug_id)
+        .map(|bug| bug.cell)
+}
+
+fn step_cell(cell: CellCoord, direction: Direction, columns: u32, rows: u32) -> Option<CellCoord> {
+    match direction {
+        Direction::North => cell
+            .row()
+            .checked_sub(1)
+            .map(|row| CellCoord::new(cell.column(), row)),
+        Direction::South => cell
+            .row()
+            .checked_add(1)
+            .filter(|row| *row < rows)
+            .map(|row| CellCoord::new(cell.column(), row)),
+        Direction::East => cell
+            .column()
+            .checked_add(1)
+            .filter(|column| *column < columns)
+            .map(|column| CellCoord::new(column, cell.row())),
+        Direction::West => cell
+            .column()
+            .checked_sub(1)
+            .map(|column| CellCoord::new(column, cell.row())),
+    }
+}
+
 impl Default for CrowdPlanner {
     fn default() -> Self {
         Self {
@@ -417,6 +705,9 @@ impl Default for CrowdPlanner {
             prepared_dimensions: None,
             congestion: Vec::new(),
             detour_queue: Vec::new(),
+            detour_marks: Vec::new(),
+            detour_generation: 0,
+            reserved_destinations: Vec::new(),
             last_cell: LastCellRing::default(),
             stalled_for: StallCounter::default(),
         }
@@ -494,13 +785,6 @@ impl StallCounter {
     #[cfg(test)]
     fn value(&self, index: usize) -> u32 {
         self.values.get(index).copied().unwrap_or(0)
-    }
-}
-
-fn cell_available_for(cell: CellCoord, bug_id: BugId, occupancy_view: OccupancyView<'_>) -> bool {
-    match occupancy_view.occupant(cell) {
-        None => true,
-        Some(occupant) => occupant == bug_id,
     }
 }
 
@@ -582,7 +866,7 @@ fn lexicographically_less(left: CellCoord, right: CellCoord) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use maze_defence_core::{BugColor, Health};
+    use maze_defence_core::{BugColor, Health, ReservationClaim, ReservationLedgerView};
     use std::time::Duration;
 
     #[test]
@@ -652,12 +936,25 @@ mod tests {
 
         let bug = bug_snapshot_at(CellCoord::new(0, 0));
         let ordered = vec![&bug];
+        movement.planner.prepare_per_tick(&ordered, &navigation);
+        movement
+            .planner
+            .congestion
+            .iter_mut()
+            .for_each(|value| *value = 0);
         movement.planner.last_cell.begin_tick(&ordered);
         movement.planner.stalled_for.begin_tick(&ordered);
 
-        let next = movement
-            .planner
-            .plan_next_hop(0, &bug, &navigation, occupancy, &|_| false);
+        let reservation = ReservationLedgerView::from_owned(Vec::new());
+        let next = movement.planner.plan_next_hop(
+            0,
+            &bug,
+            &ordered,
+            &navigation,
+            occupancy,
+            &reservation,
+            &|_| false,
+        );
 
         assert_eq!(next, Some(CellCoord::new(0, 1)));
         assert_eq!(movement.planner.stalled_for.value(0), 0);
@@ -677,12 +974,25 @@ mod tests {
 
         let bug = bug_snapshot_at(CellCoord::new(1, 1));
         let ordered = vec![&bug];
+        movement.planner.prepare_per_tick(&ordered, &navigation);
+        movement
+            .planner
+            .congestion
+            .iter_mut()
+            .for_each(|value| *value = 0);
         movement.planner.last_cell.begin_tick(&ordered);
         movement.planner.stalled_for.begin_tick(&ordered);
 
-        let next = movement
-            .planner
-            .plan_next_hop(0, &bug, &navigation, occupancy, &|_| false);
+        let reservation = ReservationLedgerView::from_owned(Vec::new());
+        let next = movement.planner.plan_next_hop(
+            0,
+            &bug,
+            &ordered,
+            &navigation,
+            occupancy,
+            &reservation,
+            &|_| false,
+        );
 
         assert_eq!(next, Some(CellCoord::new(0, 1)));
         assert_eq!(movement.planner.stalled_for.value(0), 0);
@@ -703,12 +1013,26 @@ mod tests {
 
         let bug = bug_snapshot_at(CellCoord::new(0, 0));
         let ordered = vec![&bug];
+        movement.planner.prepare_per_tick(&ordered, &navigation);
+        movement
+            .planner
+            .congestion
+            .iter_mut()
+            .for_each(|value| *value = 0);
         movement.planner.last_cell.begin_tick(&ordered);
         movement.planner.stalled_for.begin_tick(&ordered);
 
-        let next = movement
-            .planner
-            .plan_next_hop(0, &bug, &navigation, occupancy, &|_| false);
+        let reservation = ReservationLedgerView::from_owned(Vec::new());
+        let occupancy_blocked = occupancy;
+        let next = movement.planner.plan_next_hop(
+            0,
+            &bug,
+            &ordered,
+            &navigation,
+            occupancy,
+            &reservation,
+            &|cell| occupancy_blocked.occupant(cell).is_some(),
+        );
 
         assert_eq!(next, Some(CellCoord::new(1, 0)));
         assert_eq!(movement.planner.stalled_for.value(0), 0);
@@ -728,12 +1052,25 @@ mod tests {
 
         let bug = bug_snapshot_at(CellCoord::new(0, 0));
         let ordered = vec![&bug];
+        movement.planner.prepare_per_tick(&ordered, &navigation);
+        movement
+            .planner
+            .congestion
+            .iter_mut()
+            .for_each(|value| *value = 0);
         movement.planner.last_cell.begin_tick(&ordered);
         movement.planner.stalled_for.begin_tick(&ordered);
 
-        let next = movement
-            .planner
-            .plan_next_hop(0, &bug, &navigation, occupancy, &|_| false);
+        let reservation = ReservationLedgerView::from_owned(Vec::new());
+        let next = movement.planner.plan_next_hop(
+            0,
+            &bug,
+            &ordered,
+            &navigation,
+            occupancy,
+            &reservation,
+            &|_| true,
+        );
 
         assert_eq!(next, None);
         assert_eq!(movement.planner.stalled_for.value(0), 1);
@@ -748,6 +1085,9 @@ mod tests {
             .planner
             .prepare_workspace(3, 3, &navigation, &[target]);
 
+        let bug = bug_snapshot_at(CellCoord::new(1, 1));
+        let ordered = vec![&bug];
+        movement.planner.prepare_per_tick(&ordered, &navigation);
         movement.planner.congestion.resize(9, 0);
         movement.planner.congestion[4] = 4;
         movement.planner.congestion[3] = 3;
@@ -758,14 +1098,20 @@ mod tests {
         occupancy_cells[7] = Some(BugId::new(2));
         let occupancy = OccupancyView::new(&occupancy_cells, 3, 3);
 
-        let bug = bug_snapshot_at(CellCoord::new(1, 1));
-        let ordered = vec![&bug];
         movement.planner.last_cell.begin_tick(&ordered);
         movement.planner.stalled_for.begin_tick(&ordered);
 
-        let next = movement
-            .planner
-            .plan_next_hop(0, &bug, &navigation, occupancy, &|_| false);
+        let reservation = ReservationLedgerView::from_owned(Vec::new());
+        let occupancy_blocked = occupancy;
+        let next = movement.planner.plan_next_hop(
+            0,
+            &bug,
+            &ordered,
+            &navigation,
+            occupancy,
+            &reservation,
+            &|cell| occupancy_blocked.occupant(cell).is_some(),
+        );
 
         assert_eq!(next, Some(CellCoord::new(2, 1)));
         assert_eq!(movement.planner.stalled_for.value(0), 0);
@@ -780,6 +1126,9 @@ mod tests {
             .planner
             .prepare_workspace(3, 3, &navigation, &[target]);
 
+        let bug = bug_snapshot_at(CellCoord::new(1, 1));
+        let ordered = vec![&bug];
+        movement.planner.prepare_per_tick(&ordered, &navigation);
         movement.planner.congestion.resize(9, 0);
         movement.planner.congestion[4] = 4;
         movement.planner.congestion[3] = 0;
@@ -790,18 +1139,186 @@ mod tests {
         occupancy_cells[7] = Some(BugId::new(2));
         let occupancy = OccupancyView::new(&occupancy_cells, 3, 3);
 
-        let bug = bug_snapshot_at(CellCoord::new(1, 1));
-        let ordered = vec![&bug];
         movement.planner.last_cell.begin_tick(&ordered);
         movement.planner.last_cell.record(0, CellCoord::new(0, 1));
         movement.planner.stalled_for.begin_tick(&ordered);
 
-        let next = movement
-            .planner
-            .plan_next_hop(0, &bug, &navigation, occupancy, &|_| false);
+        let reservation = ReservationLedgerView::from_owned(Vec::new());
+        let occupancy_blocked = occupancy;
+        let next = movement.planner.plan_next_hop(
+            0,
+            &bug,
+            &ordered,
+            &navigation,
+            occupancy,
+            &reservation,
+            &|cell| occupancy_blocked.occupant(cell).is_some(),
+        );
 
         assert_eq!(next, Some(CellCoord::new(2, 1)));
         assert_eq!(movement.planner.stalled_for.value(0), 0);
+    }
+
+    #[test]
+    fn detour_bfs_finds_progress_cell() {
+        let mut movement = Movement::default();
+        let navigation = NavigationFieldView::from_owned(vec![4, 3, 4, 3, 2, 3, 2, 1, 2], 3, 3);
+        let target = CellCoord::new(1, 2);
+        let _ = movement
+            .planner
+            .prepare_workspace(3, 3, &navigation, &[target]);
+
+        let blocker = bug_snapshot_with_id(0, CellCoord::new(1, 1));
+        let seeker = bug_snapshot_with_id(1, CellCoord::new(1, 0));
+        let ordered = vec![&blocker, &seeker];
+        movement.planner.prepare_per_tick(&ordered, &navigation);
+        movement.planner.last_cell.begin_tick(&ordered);
+        movement.planner.stalled_for.begin_tick(&ordered);
+
+        let mut occupancy_cells: Vec<Option<BugId>> = vec![None; 9];
+        occupancy_cells[4] = Some(blocker.id);
+        let occupancy = OccupancyView::new(&occupancy_cells, 3, 3);
+        let reservation = ReservationLedgerView::from_owned(Vec::new());
+        let occupancy_blocked = occupancy;
+
+        let next = movement.planner.plan_next_hop(
+            1,
+            &seeker,
+            &ordered,
+            &navigation,
+            occupancy,
+            &reservation,
+            &|cell| cell.column() == 2 || occupancy_blocked.occupant(cell).is_some(),
+        );
+
+        assert_eq!(next, Some(CellCoord::new(0, 0)));
+        assert_eq!(movement.planner.stalled_for.value(1), 0);
+    }
+
+    #[test]
+    fn detour_bfs_skips_vacating_intermediate_occupant() {
+        let mut movement = Movement::default();
+        let navigation = NavigationFieldView::from_owned(vec![5, 4, 3, 4, 3, 2, 3, 2, 1], 3, 3);
+        let target = CellCoord::new(2, 2);
+        let _ = movement
+            .planner
+            .prepare_workspace(3, 3, &navigation, &[target]);
+
+        let vacating = bug_snapshot_with_id(0, CellCoord::new(1, 0));
+        let seeker = bug_snapshot_with_id(1, CellCoord::new(0, 1));
+        let ordered = vec![&vacating, &seeker];
+        movement.planner.prepare_per_tick(&ordered, &navigation);
+        movement.planner.congestion.resize(9, 0);
+        movement.planner.last_cell.begin_tick(&ordered);
+        movement.planner.stalled_for.begin_tick(&ordered);
+
+        let mut occupancy_cells: Vec<Option<BugId>> = vec![None; 9];
+        occupancy_cells[1] = Some(vacating.id);
+        occupancy_cells[3] = Some(seeker.id);
+        let occupancy = OccupancyView::new(&occupancy_cells, 3, 3);
+        let reservation = ReservationLedgerView::from_owned(vec![ReservationClaim::new(
+            vacating.id,
+            Direction::East,
+        )]);
+
+        let _ = movement.planner.plan_next_hop(
+            1,
+            &seeker,
+            &ordered,
+            &navigation,
+            occupancy,
+            &reservation,
+            &|cell| cell == CellCoord::new(1, 1) || cell == CellCoord::new(0, 2),
+        );
+
+        assert!(movement
+            .planner
+            .detour_queue
+            .iter()
+            .any(|node| node.cell == CellCoord::new(0, 0)));
+        assert!(movement
+            .planner
+            .detour_queue
+            .iter()
+            .all(|node| node.cell != CellCoord::new(1, 0)));
+    }
+
+    #[test]
+    fn plan_next_hop_allows_vacating_occupant() {
+        let mut movement = Movement::default();
+        let navigation = NavigationFieldView::from_owned(vec![3, 2, 1, 2, 1, 0], 1, 6);
+        let target = CellCoord::new(0, 5);
+        let _ = movement
+            .planner
+            .prepare_workspace(1, 6, &navigation, &[target]);
+
+        let blocker = bug_snapshot_with_id(0, CellCoord::new(0, 1));
+        let seeker = bug_snapshot_with_id(1, CellCoord::new(0, 0));
+        let ordered = vec![&blocker, &seeker];
+        movement.planner.prepare_per_tick(&ordered, &navigation);
+        movement.planner.last_cell.begin_tick(&ordered);
+        movement.planner.stalled_for.begin_tick(&ordered);
+
+        let mut occupancy_cells: Vec<Option<BugId>> = vec![None; 6];
+        occupancy_cells[1] = Some(blocker.id);
+        let occupancy = OccupancyView::new(&occupancy_cells, 1, 6);
+        let reservation = ReservationLedgerView::from_owned(vec![ReservationClaim::new(
+            blocker.id,
+            Direction::South,
+        )]);
+        let occupancy_blocked = occupancy;
+
+        let next = movement.planner.plan_next_hop(
+            1,
+            &seeker,
+            &ordered,
+            &navigation,
+            occupancy,
+            &reservation,
+            &|cell| occupancy_blocked.occupant(cell).is_some(),
+        );
+
+        assert_eq!(next, Some(CellCoord::new(0, 1)));
+        assert_eq!(movement.planner.stalled_for.value(1), 0);
+    }
+
+    #[test]
+    fn plan_next_hop_skips_cells_reserved_by_lower_bug() {
+        let mut movement = Movement::default();
+        let navigation = NavigationFieldView::from_owned(vec![2, 1, 3, 2], 2, 2);
+        let target = CellCoord::new(1, 0);
+        let _ = movement
+            .planner
+            .prepare_workspace(2, 2, &navigation, &[target]);
+
+        let reserver = bug_snapshot_with_id(0, CellCoord::new(0, 0));
+        let seeker = bug_snapshot_with_id(1, CellCoord::new(1, 1));
+        let ordered = vec![&reserver, &seeker];
+        movement.planner.prepare_per_tick(&ordered, &navigation);
+        movement.planner.last_cell.begin_tick(&ordered);
+        movement.planner.stalled_for.begin_tick(&ordered);
+
+        let mut occupancy_cells: Vec<Option<BugId>> = vec![None; 4];
+        occupancy_cells[0] = Some(reserver.id);
+        let occupancy = OccupancyView::new(&occupancy_cells, 2, 2);
+        let reservation = ReservationLedgerView::from_owned(vec![ReservationClaim::new(
+            reserver.id,
+            Direction::East,
+        )]);
+        let occupancy_blocked = occupancy;
+
+        let next = movement.planner.plan_next_hop(
+            1,
+            &seeker,
+            &ordered,
+            &navigation,
+            occupancy,
+            &reservation,
+            &|cell| occupancy_blocked.occupant(cell).is_some(),
+        );
+
+        assert_ne!(next, Some(CellCoord::new(1, 0)));
+        assert_eq!(movement.planner.stalled_for.value(1), 0);
     }
 
     fn navigation_stub(width: u32, height: u32) -> NavigationFieldView<'static> {
@@ -810,8 +1327,12 @@ mod tests {
     }
 
     fn bug_snapshot_at(cell: CellCoord) -> BugSnapshot {
+        bug_snapshot_with_id(1, cell)
+    }
+
+    fn bug_snapshot_with_id(id: u32, cell: CellCoord) -> BugSnapshot {
         BugSnapshot {
-            id: BugId::new(1),
+            id: BugId::new(id),
             cell,
             color: BugColor::from_rgb(0, 0, 0),
             max_health: Health::new(3),
