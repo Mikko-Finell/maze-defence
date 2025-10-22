@@ -293,8 +293,8 @@ impl RenderingBackend for MacroquadBackend {
 
                     if metrics.cell_step > f32::EPSILON {
                         let bar_margin = metrics.cell_step * 0.1;
-                        let bar_width = metrics.cell_step * 0.6;
-                        let bar_height = (metrics.cell_step * 0.12).max(2.0);
+                        let bar_width = metrics.cell_step;
+                        let bar_height = (metrics.cell_step * 0.12).max(2.0) + 2.0;
                         let bar_left = bug_center_x - bar_width * 0.5;
                         let bar_top = bug_center_y + bug_radius + bar_margin;
                         macroquad::shapes::draw_rectangle(
