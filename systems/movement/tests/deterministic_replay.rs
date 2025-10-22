@@ -5,7 +5,8 @@ use std::{
 };
 
 use maze_defence_core::{
-    BugColor, BugSnapshot, CellCoord, Command, Event, Health, PlayMode, TileCoord,
+    BugColor, BugSnapshot, CellCoord, Command, Event, Health, NavigationFieldView, PlayMode,
+    TileCoord,
 };
 use maze_defence_system_movement::Movement;
 use maze_defence_world::{self as world, query, World};
@@ -18,7 +19,7 @@ fn deterministic_replay_produces_expected_snapshot() {
     assert_eq!(first, second, "replay diverged between runs");
 
     let fingerprint = first.fingerprint();
-    let expected = 0x9fce_0ab2_0dfc_92e2;
+    let expected = 0xb32e_d8ac_baae_7eaa;
     assert_eq!(
         fingerprint, expected,
         "fingerprint mismatch: {fingerprint:#x}"
@@ -43,7 +44,14 @@ fn replay(commands: Vec<Command>) -> ReplayOutcome {
         .map(BugState::from)
         .collect();
 
-    ReplayOutcome { bugs, events: log }
+    let navigation = query::navigation_field(&world);
+    let navigation_fingerprint = navigation_fingerprint(&navigation);
+
+    ReplayOutcome {
+        bugs,
+        events: log,
+        navigation_fingerprint,
+    }
 }
 
 fn process_movement(
@@ -196,6 +204,15 @@ fn movement_pauses_in_builder_mode() {
 struct ReplayOutcome {
     bugs: Vec<BugState>,
     events: Vec<EventRecord>,
+    navigation_fingerprint: u64,
+}
+
+fn navigation_fingerprint(view: &NavigationFieldView<'_>) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    view.width().hash(&mut hasher);
+    view.height().hash(&mut hasher);
+    view.cells().hash(&mut hasher);
+    hasher.finish()
 }
 
 impl ReplayOutcome {
