@@ -7,7 +7,7 @@ own, keeps determinism guards green, and layers behaviour from contracts →
 world authority → pure systems → harness coverage. Because no work has landed
 yet, every stage below is marked `[TODO]`.
 
-# 1) [TODO] Navigation contracts & tuning constants (`core`)
+# 1) [DONE] Navigation contracts & tuning constants (`core`)
 
 **Goal:** Establish the shared vocabulary and fixed tuning knobs the rest of the
 stack relies on.
@@ -27,7 +27,7 @@ stack relies on.
 **Exit checks:** `core` compiles, constant values are unit-tested, and the query
 API has doc tests demonstrating read-only usage.
 
-# 2) [TODO] Static navigation field storage (`world`)
+# 2) [DONE] Static navigation field storage (`world`)
 
 **Goal:** Build and persist the Manhattan-distance grid authoritative to the
 world state.
@@ -50,7 +50,7 @@ world state.
 **Exit checks:** World crate compiles, builder tests pass, and maze mutation
 paths trigger deterministic rebuilds without panics.
 
-# 3) [TODO] Navigation field query surface (`world::query`)
+# 3) [DONE] Navigation field query surface (`world::query`)
 
 **Goal:** Expose read-only access to the field so systems/adapters can consume
 it without violating authority boundaries.

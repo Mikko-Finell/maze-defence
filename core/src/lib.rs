@@ -16,7 +16,7 @@
 //! react to deterministically. Systems consume event streams, query immutable
 //! snapshots, and respond exclusively with new command batches.
 
-use std::{num::NonZeroU32, time::Duration};
+use std::{borrow::Cow, num::NonZeroU32, time::Duration};
 
 use serde::{Deserialize, Serialize};
 
@@ -114,6 +114,31 @@ pub mod structures {
 
 /// Canonical banner emitted when the experience boots.
 pub const WELCOME_BANNER: &str = "Welcome to Maze Defence.";
+
+/// Number of cells a congestion probe inspects ahead of each bug.
+///
+/// The pathing spec keeps this window small (five cells) so the gradient
+/// dominates the decision making while still detecting jams slightly ahead of
+/// the current position. Values in the `4..=6` range were validated during
+/// authoring; any change must re-run the deterministic replay harness to keep
+/// behaviour reproducible across runs.
+pub const CONGESTION_LOOKAHEAD: u32 = 5;
+
+/// Multiplier applied to congestion samples when scoring neighbours.
+///
+/// Keeping this weight at three preserves the gradient as the primary
+/// signal—the congestion term only nudges decisions when distances tie. The
+/// spec calls out that adjustments should remain low and deterministic, so
+/// revisit replay fixtures before modifying the constant.
+pub const CONGESTION_WEIGHT: u32 = 3;
+
+/// Depth limit for the bounded detour breadth-first search.
+///
+/// A radius of six keeps detours local while guaranteeing the planner explores
+/// small side corridors before stalling. Expanding this radius increases the
+/// search cost and must be accompanied by replay updates to maintain
+/// determinism.
+pub const DETOUR_RADIUS: u32 = 6;
 
 /// Describes the active gameplay mode for the simulation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -802,6 +827,125 @@ impl BugView {
     }
 }
 
+/// Read-only snapshot of the pre-computed navigation distances.
+///
+/// The field stores a deterministic Manhattan distance for every cell in the
+/// maze plus the virtual exit row. Consumers may borrow the backing buffer or
+/// take ownership of it, but the API only ever exposes immutable slices so
+/// callers cannot mutate authoritative data.
+///
+/// ```
+/// use maze_defence_core::{CellCoord, NavigationFieldView};
+///
+/// // 3×2 field laid out in row-major order pointing toward the exit in the
+/// // bottom-right corner.
+/// let view = NavigationFieldView::from_owned(vec![3, 2, 1, 2, 1, 0], 3, 2);
+///
+/// assert_eq!(view.width(), 3);
+/// assert_eq!(view.height(), 2);
+/// assert_eq!(view.distance(CellCoord::new(2, 1)), Some(0));
+/// assert_eq!(view.cells()[0], 3);
+/// ```
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NavigationFieldView<'a> {
+    width: u32,
+    height: u32,
+    #[serde(borrow)]
+    distances: Cow<'a, [u16]>,
+}
+
+impl<'a> NavigationFieldView<'a> {
+    /// Captures a new view borrowing the provided navigation distances.
+    #[must_use]
+    pub fn from_slice(distances: &'a [u16], width: u32, height: u32) -> Self {
+        Self::with_distances(Cow::Borrowed(distances), width, height)
+    }
+
+    /// Captures a new view that owns its navigation distances outright.
+    #[must_use]
+    pub fn from_owned(
+        distances: Vec<u16>,
+        width: u32,
+        height: u32,
+    ) -> NavigationFieldView<'static> {
+        NavigationFieldView::with_distances(Cow::Owned(distances), width, height)
+    }
+
+    fn with_distances(distances: Cow<'a, [u16]>, width: u32, height: u32) -> Self {
+        let expected_len = NavigationFieldView::expected_len(width, height);
+        assert_eq!(
+            distances.len(),
+            expected_len,
+            "navigation field dimensions must match the backing buffer length",
+        );
+        Self {
+            width,
+            height,
+            distances,
+        }
+    }
+
+    fn expected_len(width: u32, height: u32) -> usize {
+        let width = usize::try_from(width).expect("width fits usize");
+        let height = usize::try_from(height).expect("height fits usize");
+        width
+            .checked_mul(height)
+            .expect("navigation field dimensions stay within addressable range")
+    }
+
+    fn index_of(&self, cell: CellCoord) -> Option<usize> {
+        if cell.column() >= self.width || cell.row() >= self.height {
+            return None;
+        }
+
+        let column = usize::try_from(cell.column()).ok()?;
+        let row = usize::try_from(cell.row()).ok()?;
+        let width = usize::try_from(self.width).ok()?;
+        Some(row * width + column)
+    }
+
+    /// Width of the navigation field measured in cells.
+    #[must_use]
+    pub const fn width(&self) -> u32 {
+        self.width
+    }
+
+    /// Height of the navigation field measured in cells.
+    #[must_use]
+    pub const fn height(&self) -> u32 {
+        self.height
+    }
+
+    /// Immutable view of the dense distances stored in row-major order.
+    #[must_use]
+    pub fn cells(&self) -> &[u16] {
+        &self.distances
+    }
+
+    /// Reports the stored distance for the provided cell, if within bounds.
+    #[must_use]
+    pub fn distance(&self, cell: CellCoord) -> Option<u16> {
+        self.index_of(cell)
+            .and_then(|index| self.distances.get(index).copied())
+    }
+
+    /// Iterator over all distances in row-major order.
+    #[must_use = "iterators are lazy and do nothing unless consumed"]
+    pub fn iter(&'a self) -> impl Iterator<Item = u16> + 'a {
+        self.distances.iter().copied()
+    }
+
+    /// Converts the view into an owned variant, cloning the backing buffer when required.
+    #[must_use]
+    pub fn into_owned(self) -> NavigationFieldView<'static> {
+        NavigationFieldView {
+            width: self.width,
+            height: self.height,
+            distances: Cow::Owned(self.distances.into_owned()),
+        }
+    }
+}
+
 /// Read-only view into the dense occupancy grid.
 #[derive(Clone, Copy, Debug)]
 pub struct OccupancyView<'a> {
@@ -1129,8 +1273,9 @@ mod tests {
     use std::num::NonZeroU32;
 
     use super::{
-        CellCoord, CellRect, CellRectSize, Damage, Health, PlacementError, ProjectileId,
-        ProjectileRejection, RemovalError, TowerId, TowerKind,
+        CellCoord, CellRect, CellRectSize, Damage, Health, NavigationFieldView, PlacementError,
+        ProjectileId, ProjectileRejection, RemovalError, TowerId, TowerKind, CONGESTION_LOOKAHEAD,
+        CONGESTION_WEIGHT, DETOUR_RADIUS,
     };
     use serde::{de::DeserializeOwned, Serialize};
 
@@ -1149,6 +1294,10 @@ mod tests {
         let bytes = bincode::serialize(value).expect("serialize");
         let restored: T = bincode::deserialize(&bytes).expect("deserialize");
         assert_eq!(&restored, value);
+    }
+
+    fn deserialize_navigation_field<'de>(bytes: &'de [u8]) -> NavigationFieldView<'de> {
+        bincode::deserialize(bytes).expect("deserialize navigation field")
     }
 
     #[test]
@@ -1227,6 +1376,21 @@ mod tests {
     fn tower_range_in_cells_scales_with_configuration() {
         let cells_per_tile = 3;
         assert_eq!(TowerKind::Basic.range_in_cells(cells_per_tile), 12);
+    }
+
+    #[test]
+    fn navigation_constants_match_specification() {
+        assert_eq!(CONGESTION_LOOKAHEAD, 5);
+        assert_eq!(CONGESTION_WEIGHT, 3);
+        assert_eq!(DETOUR_RADIUS, 6);
+    }
+
+    #[test]
+    fn navigation_field_view_round_trips_through_bincode() {
+        let view = NavigationFieldView::from_owned(vec![3, 2, 1, 2, 1, 0], 3, 2);
+        let bytes = bincode::serialize(&view).expect("serialize navigation field");
+        let restored = deserialize_navigation_field(&bytes).into_owned();
+        assert_eq!(restored, view);
     }
 
     #[test]

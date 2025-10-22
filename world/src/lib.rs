@@ -9,6 +9,8 @@
 
 //! Authoritative world state management for Maze Defence.
 
+mod navigation;
+
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap},
     time::Duration,
@@ -29,6 +31,8 @@ use maze_defence_core::{
 use maze_defence_core::ProjectileRejection;
 
 use maze_defence_core::structures::Wall as CellWall;
+
+use navigation::NavigationField;
 
 #[cfg(any(test, feature = "tower_scaffolding"))]
 use maze_defence_core::{CellRect, PlacementError, RemovalError, TowerKind};
@@ -64,6 +68,8 @@ pub struct World {
     next_projectile_id: ProjectileId,
     occupancy: OccupancyGrid,
     walls: MazeWalls,
+    navigation_field: NavigationField,
+    navigation_dirty: bool,
     #[cfg(any(test, feature = "tower_scaffolding"))]
     towers: TowerRegistry,
     #[cfg(any(test, feature = "tower_scaffolding"))]
@@ -102,6 +108,8 @@ impl World {
             next_projectile_id: ProjectileId::new(0),
             occupancy,
             walls,
+            navigation_field: NavigationField::default(),
+            navigation_dirty: true,
             #[cfg(any(test, feature = "tower_scaffolding"))]
             towers: TowerRegistry::new(),
             #[cfg(any(test, feature = "tower_scaffolding"))]
@@ -117,6 +125,7 @@ impl World {
         };
         world.rebuild_bug_spawners();
         world.clear_bugs();
+        world.rebuild_navigation_field_if_dirty();
         world
     }
 
@@ -126,6 +135,41 @@ impl World {
         self.occupancy.clear();
         self.reservations.clear();
         self.next_bug_id = 0;
+    }
+
+    fn mark_navigation_dirty(&mut self) {
+        self.navigation_dirty = true;
+    }
+
+    fn rebuild_navigation_field_if_dirty(&mut self) {
+        if !self.navigation_dirty {
+            return;
+        }
+
+        let (columns, rows) = self.occupancy.dimensions();
+        self.navigation_field
+            .rebuild_with(columns, rows, &self.targets, |cell| {
+                self.walls.contains(cell)
+            });
+        let field_width = self.navigation_field.width();
+        let field_height = self.navigation_field.height();
+        debug_assert_eq!(field_width, columns);
+        debug_assert_eq!(field_height, rows);
+        if let (Ok(width), Ok(height)) =
+            (usize::try_from(field_width), usize::try_from(field_height))
+        {
+            debug_assert_eq!(
+                self.navigation_field.cells().len(),
+                width.checked_mul(height).unwrap_or(0),
+            );
+        }
+        if field_width > 0 && field_height > 0 {
+            debug_assert!(self
+                .targets
+                .iter()
+                .all(|exit| { self.navigation_field.distance(*exit) == Some(0) }));
+        }
+        self.navigation_dirty = false;
     }
 
     fn iter_bugs_mut(&mut self) -> impl Iterator<Item = &mut Bug> {
@@ -306,6 +350,7 @@ pub fn apply(world: &mut World, command: Command, out_events: &mut Vec<Event>) {
                 total_rows,
                 build_cell_walls(columns, rows, normalized_cells),
             );
+            world.mark_navigation_dirty();
             #[cfg(any(test, feature = "tower_scaffolding"))]
             {
                 world.tower_occupancy = BitGrid::new(total_columns, total_rows);
@@ -313,6 +358,7 @@ pub fn apply(world: &mut World, command: Command, out_events: &mut Vec<Event>) {
             }
             world.rebuild_bug_spawners();
             world.clear_bugs();
+            world.rebuild_navigation_field_if_dirty();
         }
         Command::Tick { dt } => {
             if world.play_mode == PlayMode::Builder {
@@ -794,8 +840,8 @@ impl World {
 pub mod query {
     use super::World;
     use maze_defence_core::{
-        BugSnapshot, BugView, CellCoord, Goal, OccupancyView, PlayMode, ProjectileSnapshot, Target,
-        TileGrid,
+        BugSnapshot, BugView, CellCoord, Goal, NavigationFieldView, OccupancyView, PlayMode,
+        ProjectileSnapshot, Target, TileGrid,
     };
 
     use maze_defence_core::structures::{Wall as CellWall, WallView as CellWallView};
@@ -880,6 +926,27 @@ pub mod query {
             })
             .collect();
         BugView::from_snapshots(snapshots)
+    }
+
+    /// Provides an immutable view of the pre-computed navigation distances.
+    ///
+    /// The world rebuilds the field eagerly whenever maze geometry changes, so
+    /// callers may assume the returned slice reflects the latest layout. The
+    /// data is exposed in row-major order and includes the virtual exit row so
+    /// systems can reason about the boundary conditions without duplicating the
+    /// buffer.
+    #[must_use]
+    pub fn navigation_field(world: &World) -> NavigationFieldView<'_> {
+        debug_assert!(
+            !world.navigation_dirty,
+            "navigation field must be rebuilt before queries"
+        );
+
+        NavigationFieldView::from_slice(
+            world.navigation_field.cells(),
+            world.navigation_field.width(),
+            world.navigation_field.height(),
+        )
     }
 
     /// Exposes a read-only view of the dense occupancy grid.
@@ -1031,6 +1098,7 @@ fn bug_center_half(cell: CellCoord) -> CellPointHalf {
     )
 }
 
+#[cfg_attr(not(any(test, feature = "tower_scaffolding")), allow(dead_code))]
 fn compute_projectile_travel_time(
     distance_half: u128,
     max_range_half: u128,
@@ -1536,8 +1604,8 @@ fn advance_cell(
 mod tests {
     use super::*;
     use maze_defence_core::{
-        BugColor, BugId, BugSnapshot, Direction, Goal, Health, PlayMode, ProjectileId,
-        ProjectileSnapshot, TowerCooldownSnapshot, TowerId, TowerKind,
+        BugColor, BugId, BugSnapshot, Direction, Goal, Health, NavigationFieldView, PlayMode,
+        ProjectileId, ProjectileSnapshot, TowerCooldownSnapshot, TowerId, TowerKind,
     };
 
     use std::{
@@ -1546,6 +1614,14 @@ mod tests {
         hash::{Hash, Hasher},
         time::Duration,
     };
+
+    fn navigation_fingerprint(view: &NavigationFieldView<'_>) -> u64 {
+        let mut hasher = DefaultHasher::new();
+        view.width().hash(&mut hasher);
+        view.height().hash(&mut hasher);
+        view.cells().hash(&mut hasher);
+        hasher.finish()
+    }
 
     fn expected_outer_rim(columns: u32, rows: u32) -> BTreeSet<CellCoord> {
         let mut cells = BTreeSet::new();
@@ -1761,6 +1837,200 @@ mod tests {
         let view = query::walls(&world);
         let cells: Vec<CellCoord> = view.iter().map(|wall| wall.cell()).collect();
         assert_eq!(cells, vec![CellCoord::new(1, 1)]);
+    }
+
+    #[test]
+    fn navigation_field_query_borrows_world_buffer() {
+        let world = World::new();
+
+        let view = query::navigation_field(&world);
+
+        assert_eq!(view.width(), world.navigation_field.width());
+        assert_eq!(view.height(), world.navigation_field.height());
+        assert!(std::ptr::eq(
+            view.cells().as_ptr(),
+            world.navigation_field.cells().as_ptr()
+        ));
+    }
+
+    #[test]
+    fn navigation_field_descends_toward_exit() {
+        let mut world = World::new();
+        let mut events = Vec::new();
+
+        apply(
+            &mut world,
+            Command::ConfigureTileGrid {
+                columns: TileCoord::new(3),
+                rows: TileCoord::new(3),
+                tile_length: DEFAULT_TILE_LENGTH,
+                cells_per_tile: 1,
+            },
+            &mut events,
+        );
+
+        assert!(events.is_empty());
+
+        let expected_columns = total_cell_columns(TileCoord::new(3), 1);
+        let expected_rows = total_cell_rows(TileCoord::new(3), 1);
+        assert_eq!(world.navigation_field.width(), expected_columns);
+        assert_eq!(world.navigation_field.height(), expected_rows);
+        assert!(!world.navigation_dirty);
+
+        let exit_row = exit_row_for_tile_grid(TileCoord::new(3), 1);
+        let exit_columns = exit_columns_for_tile_grid(TileCoord::new(3), 1);
+        for column in exit_columns.iter().copied() {
+            let exit_cell = CellCoord::new(column, exit_row);
+            assert_eq!(
+                world.navigation_field.distance(exit_cell),
+                Some(0),
+                "exit cells must be zero distance",
+            );
+        }
+
+        let visible_wall_row = visible_wall_row_for_tile_grid(TileCoord::new(3), 1)
+            .expect("visible wall row must exist");
+        let walkway_row =
+            walkway_row_for_tile_grid(TileCoord::new(3), 1).expect("walkway row must exist");
+        assert!(walkway_row > 0, "walkway row should have interior above");
+        let interior_row = walkway_row - 1;
+
+        let exit_column = exit_columns[0];
+        let exit_distance = world
+            .navigation_field
+            .distance(CellCoord::new(exit_column, exit_row))
+            .expect("exit distance available");
+        let wall_distance = world
+            .navigation_field
+            .distance(CellCoord::new(exit_column, visible_wall_row))
+            .expect("wall distance available");
+        let walkway_distance = world
+            .navigation_field
+            .distance(CellCoord::new(exit_column, walkway_row))
+            .expect("walkway distance available");
+        let interior_distance = world
+            .navigation_field
+            .distance(CellCoord::new(exit_column, interior_row))
+            .expect("interior distance available");
+
+        assert!(exit_distance < wall_distance);
+        assert!(wall_distance < walkway_distance);
+        assert!(walkway_distance < interior_distance);
+
+        let blocked_column = (0..expected_columns)
+            .find(|column| !exit_columns.contains(&column))
+            .expect("non-exit column should exist");
+        let blocked_cell = CellCoord::new(blocked_column, visible_wall_row);
+        assert_eq!(
+            world.navigation_field.distance(blocked_cell),
+            Some(u16::MAX),
+            "static walls remain unreachable",
+        );
+    }
+
+    #[test]
+    fn navigation_field_updates_when_grid_resized() {
+        let mut world = World::new();
+        let mut events = Vec::new();
+
+        apply(
+            &mut world,
+            Command::ConfigureTileGrid {
+                columns: TileCoord::new(3),
+                rows: TileCoord::new(3),
+                tile_length: DEFAULT_TILE_LENGTH,
+                cells_per_tile: 1,
+            },
+            &mut events,
+        );
+        events.clear();
+
+        let initial_width = world.navigation_field.width();
+        let initial_height = world.navigation_field.height();
+
+        apply(
+            &mut world,
+            Command::ConfigureTileGrid {
+                columns: TileCoord::new(4),
+                rows: TileCoord::new(2),
+                tile_length: DEFAULT_TILE_LENGTH,
+                cells_per_tile: 2,
+            },
+            &mut events,
+        );
+
+        assert!(events.is_empty());
+
+        let expected_width = total_cell_columns(TileCoord::new(4), 2);
+        let expected_height = total_cell_rows(TileCoord::new(2), 2);
+
+        assert_ne!(world.navigation_field.width(), initial_width);
+        assert_ne!(world.navigation_field.height(), initial_height);
+        assert_eq!(world.navigation_field.width(), expected_width);
+        assert_eq!(world.navigation_field.height(), expected_height);
+        assert!(!world.navigation_dirty);
+    }
+
+    #[test]
+    fn navigation_field_query_updates_after_world_changes() {
+        let mut world = World::new();
+        let mut events = Vec::new();
+
+        apply(
+            &mut world,
+            Command::ConfigureTileGrid {
+                columns: TileCoord::new(3),
+                rows: TileCoord::new(2),
+                tile_length: DEFAULT_TILE_LENGTH,
+                cells_per_tile: 1,
+            },
+            &mut events,
+        );
+        events.clear();
+
+        let initial = query::navigation_field(&world);
+        let first_dimensions = (initial.width(), initial.height());
+        let exit_row = exit_row_for_tile_grid(TileCoord::new(2), 1);
+        let exit_columns = exit_columns_for_tile_grid(TileCoord::new(3), 1);
+        for column in exit_columns.iter().copied() {
+            assert_eq!(
+                initial.distance(CellCoord::new(column, exit_row)),
+                Some(0),
+                "exit cell distance should be zero",
+            );
+        }
+        drop(initial);
+
+        apply(
+            &mut world,
+            Command::ConfigureTileGrid {
+                columns: TileCoord::new(4),
+                rows: TileCoord::new(3),
+                tile_length: DEFAULT_TILE_LENGTH,
+                cells_per_tile: 2,
+            },
+            &mut events,
+        );
+
+        assert!(events.is_empty());
+
+        let updated = query::navigation_field(&world);
+        let expected_dimensions = (
+            total_cell_columns(TileCoord::new(4), 2),
+            total_cell_rows(TileCoord::new(3), 2),
+        );
+        assert_ne!(first_dimensions, expected_dimensions);
+        assert_eq!((updated.width(), updated.height()), expected_dimensions);
+
+        let new_exit_row = exit_row_for_tile_grid(TileCoord::new(3), 2);
+        let new_exit_columns = exit_columns_for_tile_grid(TileCoord::new(4), 2);
+        for column in new_exit_columns.iter().copied() {
+            assert_eq!(
+                updated.distance(CellCoord::new(column, new_exit_row)),
+                Some(0),
+                "exit cells remain zero after rebuild",
+            );
+        }
     }
 
     #[test]
@@ -4217,7 +4487,7 @@ mod tests {
         assert_eq!(first, second, "combat replay diverged between runs");
 
         let fingerprint = first.fingerprint();
-        let expected = 0x2373_e8e7_752a_5bcc;
+        let expected = 0x444c_815b_d072_9bae;
         assert_eq!(
             fingerprint, expected,
             "combat replay fingerprint mismatch: {fingerprint:#x}"
@@ -4256,6 +4526,9 @@ mod tests {
             .map(ProjectileRecord::from)
             .collect();
 
+        let navigation = query::navigation_field(&world);
+        let navigation_fingerprint = navigation_fingerprint(&navigation);
+
         CombatReplayOutcome {
             towers,
             cooldowns,
@@ -4264,6 +4537,7 @@ mod tests {
             next_bug_id: world.next_bug_id,
             next_projectile_id: world.next_projectile_id,
             events: log,
+            navigation_fingerprint,
         }
     }
 
@@ -4462,6 +4736,7 @@ mod tests {
         next_bug_id: u32,
         next_projectile_id: ProjectileId,
         events: Vec<CombatEventRecord>,
+        navigation_fingerprint: u64,
     }
 
     impl CombatReplayOutcome {
@@ -4659,7 +4934,7 @@ mod tests {
         assert_eq!(first, second, "tower replay diverged between runs");
 
         let fingerprint = first.fingerprint();
-        let expected = 0x195a_71ab_29bc_3554;
+        let expected = 0x9ce8_45fc_6b4f_81d2;
         assert_eq!(
             fingerprint, expected,
             "tower replay fingerprint mismatch: {fingerprint:#x}"
@@ -4682,9 +4957,13 @@ mod tests {
             .map(TowerRecord::from)
             .collect();
 
+        let navigation = query::navigation_field(&world);
+        let navigation_fingerprint = navigation_fingerprint(&navigation);
+
         ReplayOutcome {
             towers,
             events: log,
+            navigation_fingerprint,
         }
     }
 
@@ -4758,6 +5037,7 @@ mod tests {
     struct ReplayOutcome {
         towers: Vec<TowerRecord>,
         events: Vec<EventRecord>,
+        navigation_fingerprint: u64,
     }
 
     impl ReplayOutcome {

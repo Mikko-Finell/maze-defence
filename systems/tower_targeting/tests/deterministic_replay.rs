@@ -4,8 +4,8 @@ use std::{
 };
 
 use maze_defence_core::{
-    BugColor, BugId, CellCoord, CellPoint, CellRect, Command, Event, Health, PlayMode, TileCoord,
-    TowerId, TowerKind, TowerTarget,
+    BugColor, BugId, CellCoord, CellPoint, CellRect, Command, Event, Health, NavigationFieldView,
+    PlayMode, TileCoord, TowerId, TowerKind, TowerTarget,
 };
 use maze_defence_system_tower_targeting::TowerTargeting;
 use maze_defence_world::{self as world, query, World};
@@ -21,7 +21,7 @@ fn deterministic_replay_handles_equidistant_bugs_and_builder_mode() {
     assert_eq!(first.assignments.len(), script_len);
 
     let fingerprint = first.fingerprint();
-    let expected = 0x79bd_b84c_66ed_33a3;
+    let expected = 0x9e25_1286_96c5_5708;
     assert_eq!(
         fingerprint, expected,
         "fingerprint mismatch: {fingerprint:#x}"
@@ -90,9 +90,13 @@ fn replay(commands: Vec<Command>) -> ReplayOutcome {
         assignments.push(TargetSnapshot::from(&current_targets));
     }
 
+    let navigation = query::navigation_field(&world);
+    let navigation_fingerprint = navigation_fingerprint(&navigation);
+
     ReplayOutcome {
         events,
         assignments,
+        navigation_fingerprint,
     }
 }
 
@@ -198,6 +202,15 @@ fn squared_distance_to_center(cell: CellCoord, center: (u32, u32)) -> u64 {
 struct ReplayOutcome {
     events: Vec<EventRecord>,
     assignments: Vec<TargetSnapshot>,
+    navigation_fingerprint: u64,
+}
+
+fn navigation_fingerprint(view: &NavigationFieldView<'_>) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    view.width().hash(&mut hasher);
+    view.height().hash(&mut hasher);
+    view.cells().hash(&mut hasher);
+    hasher.finish()
 }
 
 impl ReplayOutcome {

@@ -4,7 +4,9 @@ use std::{
     time::Duration,
 };
 
-use maze_defence_core::{BugColor, CellCoord, Command, Event, Health, PlayMode, TileCoord};
+use maze_defence_core::{
+    BugColor, CellCoord, Command, Event, Health, NavigationFieldView, PlayMode, TileCoord,
+};
 use maze_defence_system_spawning::{Config, Spawning};
 use maze_defence_world::{self as world, query, World};
 
@@ -119,7 +121,7 @@ fn deterministic_replay_produces_identical_sequence() {
     assert_eq!(first, second, "replay diverged between runs");
 
     let fingerprint = first.fingerprint();
-    let expected = 0xa8d8_f0c8_b58d_3cfc;
+    let expected = 0x08eb_0c34_60fa_6b17;
     assert_eq!(
         fingerprint, expected,
         "fingerprint mismatch: {fingerprint:#x}",
@@ -146,7 +148,14 @@ fn replay(commands: Vec<Command>) -> ReplayOutcome {
         .map(BugState::from)
         .collect();
 
-    ReplayOutcome { bugs, spawns: log }
+    let navigation = query::navigation_field(&world);
+    let navigation_fingerprint = navigation_fingerprint(&navigation);
+
+    ReplayOutcome {
+        bugs,
+        spawns: log,
+        navigation_fingerprint,
+    }
 }
 
 fn process_spawning(
@@ -234,6 +243,15 @@ fn scripted_commands() -> Vec<Command> {
 struct ReplayOutcome {
     bugs: Vec<BugState>,
     spawns: Vec<SpawnRecord>,
+    navigation_fingerprint: u64,
+}
+
+fn navigation_fingerprint(view: &NavigationFieldView<'_>) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    view.width().hash(&mut hasher);
+    view.height().hash(&mut hasher);
+    view.cells().hash(&mut hasher);
+    hasher.finish()
 }
 
 impl ReplayOutcome {
