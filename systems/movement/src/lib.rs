@@ -11,7 +11,7 @@
 
 use maze_defence_core::{
     BugId, BugSnapshot, BugView, CellCoord, Command, Direction, Event, NavigationFieldView,
-    OccupancyView, PlayMode, ReservationLedgerView,
+    OccupancyView, PlayMode, ReservationLedgerView, CONGESTION_LOOKAHEAD, CONGESTION_WEIGHT,
 };
 use maze_defence_world::query::select_goal;
 
@@ -144,9 +144,12 @@ impl CrowdPlanner {
     ) where
         F: Fn(CellCoord) -> bool,
     {
-        self.prepare_per_tick(navigation_view, reservation_ledger.len());
+        let mut ordered: Vec<_> = bug_view.iter().collect();
+        ordered.sort_by_key(|bug| bug.id);
+
+        self.prepare_per_tick(&ordered, navigation_view, reservation_ledger.len());
         self.emit_step_commands(
-            bug_view,
+            ordered,
             occupancy_view,
             navigation_view,
             is_cell_blocked,
@@ -156,6 +159,7 @@ impl CrowdPlanner {
 
     fn prepare_per_tick(
         &mut self,
+        ordered: &[&BugSnapshot],
         navigation_view: &NavigationFieldView<'_>,
         reservation_count: usize,
     ) {
@@ -166,13 +170,15 @@ impl CrowdPlanner {
             *value = 0;
         }
 
+        self.build_congestion_map(ordered, navigation_view);
+
         self.detour_queue.clear();
         self.detour_queue.reserve(reservation_count);
     }
 
     fn emit_step_commands<F>(
         &mut self,
-        bug_view: &BugView,
+        ordered: Vec<&BugSnapshot>,
         occupancy_view: OccupancyView<'_>,
         navigation_view: &NavigationFieldView<'_>,
         is_cell_blocked: &F,
@@ -180,8 +186,6 @@ impl CrowdPlanner {
     ) where
         F: Fn(CellCoord) -> bool,
     {
-        let mut ordered: Vec<_> = bug_view.iter().collect();
-        ordered.sort_by_key(|bug| bug.id);
         self.last_cell.begin_tick(&ordered);
         self.stalled_for.begin_tick(&ordered);
 
@@ -217,6 +221,7 @@ impl CrowdPlanner {
                     bug_id: bug.id,
                     direction,
                 });
+                self.last_cell.record(index, bug.cell);
             }
         }
     }
@@ -236,7 +241,11 @@ impl CrowdPlanner {
         let width = navigation_view.width();
         let height = navigation_view.height();
 
-        let mut best: Option<(CellCoord, u16)> = None;
+        let current_congestion = self.congestion_value(bug.cell, width, height).unwrap_or(0);
+
+        let mut decreasing_best: Option<Candidate> = None;
+        let mut flat_best: Option<Candidate> = None;
+        let last_cell = self.last_cell.last(bug_index);
 
         for neighbor in neighbors_within_field(bug.cell, width, height) {
             if is_cell_blocked(neighbor) {
@@ -251,30 +260,149 @@ impl CrowdPlanner {
                 continue;
             };
 
-            if distance >= current_distance {
+            let Some(index) = field_index(neighbor, width, height) else {
+                continue;
+            };
+
+            let neighbor_congestion = self.congestion.get(index).copied().unwrap_or_default();
+            let congestion_penalty =
+                u32::from(neighbor_congestion).saturating_mul(CONGESTION_WEIGHT);
+            let score = u32::from(distance).saturating_add(congestion_penalty);
+            let distance_delta = i32::from(distance) - i32::from(current_distance);
+
+            if distance_delta < 0 {
+                let candidate = Candidate {
+                    cell: neighbor,
+                    distance,
+                    congestion: neighbor_congestion,
+                    score,
+                };
+                update_best(&mut decreasing_best, candidate);
                 continue;
             }
 
-            match &mut best {
-                None => best = Some((neighbor, distance)),
-                Some((best_cell, best_distance)) => {
-                    if distance < *best_distance
-                        || (distance == *best_distance
-                            && lexicographically_less(neighbor, *best_cell))
-                    {
-                        *best_cell = neighbor;
-                        *best_distance = distance;
-                    }
-                }
+            if distance_delta == 0
+                && neighbor_congestion < current_congestion
+                && last_cell.map_or(true, |last| last != neighbor)
+            {
+                let candidate = Candidate {
+                    cell: neighbor,
+                    distance,
+                    congestion: neighbor_congestion,
+                    score,
+                };
+                update_best(&mut flat_best, candidate);
             }
         }
 
-        if let Some((cell, _)) = best {
+        if let Some(candidate) = decreasing_best {
             self.stalled_for.reset(bug_index);
-            Some(cell)
-        } else {
-            self.stalled_for.increment(bug_index);
-            None
+            return Some(candidate.cell);
+        }
+
+        if let Some(candidate) = flat_best {
+            self.stalled_for.reset(bug_index);
+            return Some(candidate.cell);
+        }
+
+        self.stalled_for.increment(bug_index);
+        None
+    }
+
+    fn build_congestion_map(
+        &mut self,
+        ordered: &[&BugSnapshot],
+        navigation_view: &NavigationFieldView<'_>,
+    ) {
+        let width = navigation_view.width();
+        let height = navigation_view.height();
+        let lookahead = usize::try_from(CONGESTION_LOOKAHEAD).unwrap_or(0);
+
+        for bug in ordered.iter().copied() {
+            let mut current = bug.cell;
+            let Some(mut current_distance) = navigation_view.distance(current) else {
+                continue;
+            };
+
+            if current_distance == 0 {
+                continue;
+            }
+
+            for _ in 0..lookahead {
+                let mut next_cell: Option<(CellCoord, u16)> = None;
+
+                for neighbor in neighbors_within_field(current, width, height) {
+                    let Some(distance) = navigation_view.distance(neighbor) else {
+                        continue;
+                    };
+
+                    if distance >= current_distance {
+                        continue;
+                    }
+
+                    match next_cell {
+                        None => next_cell = Some((neighbor, distance)),
+                        Some((best_cell, best_distance)) => {
+                            if distance < best_distance
+                                || (distance == best_distance
+                                    && lexicographically_less(neighbor, best_cell))
+                            {
+                                next_cell = Some((neighbor, distance));
+                            }
+                        }
+                    }
+                }
+
+                let Some((step, step_distance)) = next_cell else {
+                    break;
+                };
+
+                if let Some(index) = field_index(step, width, height) {
+                    if let Some(value) = self.congestion.get_mut(index) {
+                        *value = value.saturating_add(1);
+                    }
+                }
+
+                current = step;
+                current_distance = step_distance;
+
+                if current_distance == 0 {
+                    break;
+                }
+            }
+        }
+    }
+
+    fn congestion_value(&self, cell: CellCoord, width: u32, height: u32) -> Option<u8> {
+        let index = field_index(cell, width, height)?;
+        self.congestion.get(index).copied()
+    }
+}
+
+#[derive(Clone, Copy)]
+struct Candidate {
+    cell: CellCoord,
+    distance: u16,
+    congestion: u8,
+    score: u32,
+}
+
+fn update_best(current: &mut Option<Candidate>, candidate: Candidate) {
+    match current {
+        None => *current = Some(candidate),
+        Some(existing) => {
+            if candidate.score < existing.score
+                || (candidate.score == existing.score && candidate.distance < existing.distance)
+                || (candidate.score == existing.score
+                    && candidate.distance == existing.distance
+                    && candidate.congestion < existing.congestion)
+                || (candidate.score == existing.score
+                    && candidate.distance == existing.distance
+                    && candidate.congestion == existing.congestion
+                    && lexicographically_less(candidate.cell, existing.cell))
+            {
+                *existing = candidate;
+            }
         }
     }
 }
@@ -310,6 +438,21 @@ impl LastCellRing {
                 self.bug_ids[index] = Some(bug.id);
             }
         }
+    }
+
+    fn record(&mut self, index: usize, cell: CellCoord) {
+        if let Some(entry) = self.history.get_mut(index) {
+            entry.rotate_right(1);
+            entry[0] = Some(cell);
+        }
+    }
+
+    fn last(&self, index: usize) -> Option<CellCoord> {
+        self.history
+            .get(index)
+            .and_then(|entry| entry.get(0))
+            .copied()
+            .flatten()
     }
 }
 
@@ -415,6 +558,17 @@ fn neighbors_within_field(
     }
 
     buffer.into_iter().take(count).flatten()
+}
+
+fn field_index(cell: CellCoord, width: u32, height: u32) -> Option<usize> {
+    if cell.column() >= width || cell.row() >= height {
+        return None;
+    }
+
+    let column = usize::try_from(cell.column()).ok()?;
+    let row = usize::try_from(cell.row()).ok()?;
+    let width = usize::try_from(width).ok()?;
+    Some(row * width + column)
 }
 
 /// Lexicographic comparison used during neighbor tie-break: column, then row.
@@ -580,6 +734,71 @@ mod tests {
 
         assert_eq!(next, None);
         assert_eq!(movement.planner.stalled_for.value(0), 1);
+    }
+
+    #[test]
+    fn plan_next_hop_prefers_lower_congestion_flat_neighbor() {
+        let mut movement = Movement::default();
+        let navigation = NavigationFieldView::from_owned(vec![3, 2, 3, 2, 2, 2, 1, 0, 1], 3, 3);
+        let target = CellCoord::new(1, 2);
+        let _ = movement
+            .planner
+            .prepare_workspace(3, 3, &navigation, &[target]);
+
+        movement.planner.congestion.resize(9, 0);
+        movement.planner.congestion[4] = 4;
+        movement.planner.congestion[3] = 3;
+        movement.planner.congestion[5] = 1;
+        movement.planner.congestion[1] = 5;
+
+        let mut occupancy_cells: Vec<Option<BugId>> = vec![None; 9];
+        occupancy_cells[7] = Some(BugId::new(2));
+        let occupancy = OccupancyView::new(&occupancy_cells, 3, 3);
+
+        let bug = bug_snapshot_at(CellCoord::new(1, 1));
+        let ordered = vec![&bug];
+        movement.planner.last_cell.begin_tick(&ordered);
+        movement.planner.stalled_for.begin_tick(&ordered);
+
+        let next = movement
+            .planner
+            .plan_next_hop(0, &bug, &navigation, occupancy, &|_| false);
+
+        assert_eq!(next, Some(CellCoord::new(2, 1)));
+        assert_eq!(movement.planner.stalled_for.value(0), 0);
+    }
+
+    #[test]
+    fn plan_next_hop_skips_flat_move_to_last_cell() {
+        let mut movement = Movement::default();
+        let navigation = NavigationFieldView::from_owned(vec![3, 2, 3, 2, 2, 2, 1, 0, 1], 3, 3);
+        let target = CellCoord::new(1, 2);
+        let _ = movement
+            .planner
+            .prepare_workspace(3, 3, &navigation, &[target]);
+
+        movement.planner.congestion.resize(9, 0);
+        movement.planner.congestion[4] = 4;
+        movement.planner.congestion[3] = 0;
+        movement.planner.congestion[5] = 1;
+        movement.planner.congestion[1] = 5;
+
+        let mut occupancy_cells: Vec<Option<BugId>> = vec![None; 9];
+        occupancy_cells[7] = Some(BugId::new(2));
+        let occupancy = OccupancyView::new(&occupancy_cells, 3, 3);
+
+        let bug = bug_snapshot_at(CellCoord::new(1, 1));
+        let ordered = vec![&bug];
+        movement.planner.last_cell.begin_tick(&ordered);
+        movement.planner.last_cell.record(0, CellCoord::new(0, 1));
+        movement.planner.stalled_for.begin_tick(&ordered);
+
+        let next = movement
+            .planner
+            .plan_next_hop(0, &bug, &navigation, occupancy, &|_| false);
+
+        assert_eq!(next, Some(CellCoord::new(2, 1)));
+        assert_eq!(movement.planner.stalled_for.value(0), 0);
     }
 
     fn navigation_stub(width: u32, height: u32) -> NavigationFieldView<'static> {

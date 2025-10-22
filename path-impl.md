@@ -108,7 +108,7 @@ walker so bugs always advance when a lower-distance neighbour is free.
 **Exit checks:** Movement tests cover gradient-only progress, and the planner no
 longer falls back to full-path searches.
 
-# 6) [TODO] Congestion map & side-step heuristics (`systems/movement`)
+# 6) [DONE] Congestion map & side-step heuristics (`systems/movement`)
 
 **Goal:** Bias traffic away from saturated lanes and allow controlled lateral
 moves without oscillation.
