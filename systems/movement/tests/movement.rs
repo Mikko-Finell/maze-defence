@@ -1,8 +1,8 @@
 use std::time::Duration;
 
 use maze_defence_core::{
-    BugColor, BugId, BugView, CellCoord, Command, Direction, Event, Health, OccupancyView,
-    PlayMode, TileCoord, TowerKind,
+    BugColor, BugId, BugView, CellCoord, Command, Direction, Event, Health, NavigationFieldView,
+    OccupancyView, PlayMode, TileCoord, TowerKind,
 };
 use maze_defence_system_movement::Movement;
 use maze_defence_world::{self as world, query, World};
@@ -159,6 +159,82 @@ fn step_commands_target_free_cells() {
         world::apply(&mut world, command, &mut follow_up_events);
     }
     pump_system(&mut world, &mut movement, follow_up_events);
+}
+
+#[test]
+fn bugs_progress_despite_distant_blockers() {
+    let mut world = World::new();
+    let mut events = Vec::new();
+    world::apply(
+        &mut world,
+        Command::ConfigureTileGrid {
+            columns: TileCoord::new(5),
+            rows: TileCoord::new(5),
+            tile_length: 1.0,
+            cells_per_tile: 1,
+        },
+        &mut events,
+    );
+    world::apply(
+        &mut world,
+        Command::SpawnBug {
+            spawner: CellCoord::new(0, 0),
+            color: BugColor::from_rgb(0x2f, 0x95, 0x32),
+            health: Health::new(3),
+        },
+        &mut events,
+    );
+
+    let mut movement = Movement::default();
+    pump_system(&mut world, &mut movement, events);
+
+    let mut tick_events = Vec::new();
+    world::apply(
+        &mut world,
+        Command::Tick {
+            dt: Duration::from_millis(250),
+        },
+        &mut tick_events,
+    );
+
+    let bug_view = query::bug_view(&world);
+    let occupancy_view = query::occupancy_view(&world);
+    let target_cells = query::target_cells(&world);
+    let navigation_view = query::navigation_field(&world);
+    let reservation_ledger = query::reservation_ledger(&world);
+    let bug = bug_view
+        .iter()
+        .next()
+        .expect("expected spawned bug snapshot");
+    let first_step =
+        gradient_step(bug.cell, &navigation_view).expect("bug should have a gradient step");
+    let blocked_cell = gradient_step(first_step, &navigation_view)
+        .expect("maze should provide at least two gradient steps");
+
+    let mut commands = Vec::new();
+    movement.handle(
+        &tick_events,
+        &bug_view,
+        occupancy_view,
+        navigation_view,
+        reservation_ledger,
+        &target_cells,
+        |cell| cell == blocked_cell || query::is_cell_blocked(&world, cell),
+        &mut commands,
+    );
+
+    let mut destinations = commands.iter().filter_map(|command| match command {
+        Command::StepBug { bug_id, direction } if bug_id == &bug.id => {
+            Some(advance_cell(bug.cell, *direction))
+        }
+        _ => None,
+    });
+    let destination = destinations.next();
+    assert_eq!(destination, Some(first_step));
+    assert!(
+        destinations.next().is_none(),
+        "bug should receive exactly one move"
+    );
 }
 
 #[test]
@@ -639,6 +715,44 @@ fn advance_cell(cell: CellCoord, direction: Direction) -> CellCoord {
         Direction::South => CellCoord::new(cell.column(), cell.row() + 1),
         Direction::West => CellCoord::new(cell.column().saturating_sub(1), cell.row()),
     }
+}
+
+fn gradient_step(cell: CellCoord, navigation: &NavigationFieldView<'_>) -> Option<CellCoord> {
+    let current = navigation.distance(cell)?;
+    if current == 0 {
+        return None;
+    }
+
+    neighbor_cells(cell)
+        .filter_map(|candidate| {
+            navigation
+                .distance(candidate)
+                .map(|distance| (candidate, distance))
+        })
+        .filter(|(_, distance)| *distance < current && *distance != u16::MAX)
+        .min_by_key(|(candidate, distance)| (*distance, candidate.column(), candidate.row()))
+        .map(|(candidate, _)| candidate)
+}
+
+fn neighbor_cells(cell: CellCoord) -> impl Iterator<Item = CellCoord> {
+    let north = cell
+        .row()
+        .checked_sub(1)
+        .map(|row| CellCoord::new(cell.column(), row));
+    let south = cell
+        .row()
+        .checked_add(1)
+        .map(|row| CellCoord::new(cell.column(), row));
+    let east = cell
+        .column()
+        .checked_add(1)
+        .map(|column| CellCoord::new(column, cell.row()));
+    let west = cell
+        .column()
+        .checked_sub(1)
+        .map(|column| CellCoord::new(column, cell.row()));
+
+    [north, east, south, west].into_iter().flatten()
 }
 
 fn select_blocked_bug(
