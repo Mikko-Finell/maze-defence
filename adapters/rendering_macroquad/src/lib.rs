@@ -22,7 +22,7 @@ use macroquad::{
     color::BLACK,
     input::{is_key_pressed, is_mouse_button_pressed, mouse_position, KeyCode, MouseButton},
 };
-use maze_defence_core::PlayMode;
+use maze_defence_core::{CellRect, PlayMode, TowerKind};
 use maze_defence_rendering::{
     BugPresentation, Color, FrameInput, FrameSimulationBreakdown, Presentation, RenderingBackend,
     Scene, SceneProjectile, SceneTower, SceneWall, TileGridPresentation, TowerPreview,
@@ -238,9 +238,26 @@ impl RenderingBackend for MacroquadBackend {
                 draw_tile_grid(&metrics, &tile_grid, grid_color);
                 draw_cell_walls(&scene, &metrics);
 
+                let builder_preview = active_builder_preview(&scene);
+                if let Some(preview) = builder_preview {
+                    draw_tower_range_indicator(
+                        preview.kind,
+                        preview.region,
+                        &scene.tile_grid,
+                        &metrics,
+                    );
+                } else if let Some(tower) = hovered_tower(&scene) {
+                    draw_tower_range_indicator(
+                        tower.kind,
+                        tower.region,
+                        &scene.tile_grid,
+                        &metrics,
+                    );
+                }
+
                 draw_towers(&scene.towers, &metrics);
 
-                if let Some(preview) = active_builder_preview(&scene) {
+                if let Some(preview) = builder_preview {
                     draw_tower_preview(preview, &metrics);
                 }
 
@@ -446,6 +463,19 @@ fn active_builder_preview(scene: &Scene) -> Option<TowerPreview> {
     }
 }
 
+fn hovered_tower(scene: &Scene) -> Option<SceneTower> {
+    if scene.play_mode != PlayMode::Attack {
+        return None;
+    }
+
+    let hovered = scene.hovered_tower?;
+    scene
+        .towers
+        .iter()
+        .copied()
+        .find(|tower| tower.id == hovered)
+}
+
 fn draw_subgrid(
     metrics: &SceneMetrics,
     tile_grid: &TileGridPresentation,
@@ -631,6 +661,52 @@ fn draw_towers(towers: &[SceneTower], metrics: &SceneMetrics) {
     }
 }
 
+fn draw_tower_range_indicator(
+    kind: TowerKind,
+    region: CellRect,
+    tile_grid: &TileGridPresentation,
+    metrics: &SceneMetrics,
+) {
+    if metrics.cell_step <= f32::EPSILON {
+        return;
+    }
+
+    let radius_cells = kind.range_in_cells(tile_grid.cells_per_tile);
+    if radius_cells == 0 {
+        return;
+    }
+
+    let Some(center) = tower_region_center(region) else {
+        return;
+    };
+
+    let radius = radius_cells as f32 * metrics.cell_step;
+    if radius <= f32::EPSILON {
+        return;
+    }
+
+    let center_x = metrics.offset_x + center.x * metrics.cell_step;
+    let center_y = metrics.offset_y + center.y * metrics.cell_step;
+    let fill = macroquad::color::Color::new(1.0, 0.0, 0.0, 0.15);
+    let outline_thickness = (metrics.cell_step * 0.06).max(1.0);
+
+    macroquad::shapes::draw_circle(center_x, center_y, radius, fill);
+    macroquad::shapes::draw_circle_lines(center_x, center_y, radius, outline_thickness, BLACK);
+}
+
+fn tower_region_center(region: CellRect) -> Option<Vec2> {
+    let size = region.size();
+    if size.width() == 0 || size.height() == 0 {
+        return None;
+    }
+
+    let origin = region.origin();
+    Some(Vec2::new(
+        origin.column() as f32 + size.width() as f32 * 0.5,
+        origin.row() as f32 + size.height() as f32 * 0.5,
+    ))
+}
+
 fn draw_tower_preview(preview: TowerPreview, metrics: &SceneMetrics) {
     let Some((x, y, width, height)) = preview_rectangle(preview, metrics) else {
         return;
@@ -717,6 +793,7 @@ mod tests {
             Vec::new(),
             Vec::new(),
             Vec::new(),
+            None,
             play_mode,
             placement_preview,
             None,
@@ -839,6 +916,7 @@ mod tests {
                 Vec::new(),
                 Vec::new(),
                 Vec::new(),
+                None,
                 PlayMode::Attack,
                 None,
                 None,

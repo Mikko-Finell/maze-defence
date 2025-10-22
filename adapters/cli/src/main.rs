@@ -269,6 +269,7 @@ fn main() -> Result<()> {
         Vec::new(),
         Vec::new(),
         Vec::new(),
+        None,
         query::play_mode(simulation.world()),
         None,
         None,
@@ -592,6 +593,14 @@ impl Simulation {
         };
         scene.active_tower_footprint_tiles = if scene.play_mode == PlayMode::Builder {
             Some(self.selected_tower_footprint_tiles())
+        } else {
+            None
+        };
+        scene.hovered_tower = if scene.play_mode == PlayMode::Attack {
+            self.pending_input
+                .cursor_tile_space
+                .map(|tile| self.tile_position_to_cell(tile))
+                .and_then(|cell| query::tower_at(&self.world, cell))
         } else {
             None
         };
@@ -990,6 +999,7 @@ mod tests {
             Vec::new(),
             Vec::new(),
             Vec::new(),
+            None,
             PlayMode::Attack,
             None,
             None,
@@ -1451,6 +1461,45 @@ mod tests {
         };
         assert_eq!(simulation.tower_feedback(), Some(expected_feedback));
         assert_eq!(scene.tower_feedback, Some(expected_feedback));
+    }
+
+    #[test]
+    fn populate_scene_marks_hovered_tower_in_attack_mode() {
+        let mut simulation = new_simulation();
+        enter_builder_mode(&mut simulation);
+
+        let preview_tile = TileSpacePosition::from_indices(0, 0);
+        let preview_world = Vec2::new(16.0, 16.0);
+
+        simulation.handle_input(FrameInput {
+            cursor_world_space: Some(preview_world),
+            cursor_tile_space: Some(preview_tile),
+            confirm_action: true,
+            ..FrameInput::default()
+        });
+        simulation.advance(Duration::from_millis(16));
+
+        let tower_view = query::towers(simulation.world());
+        let tower_snapshot = tower_view.iter().next().expect("tower should be placed");
+
+        simulation.handle_input(FrameInput {
+            mode_toggle: true,
+            ..FrameInput::default()
+        });
+        simulation.advance(Duration::ZERO);
+        assert_eq!(query::play_mode(simulation.world()), PlayMode::Attack);
+
+        simulation.handle_input(FrameInput {
+            cursor_world_space: Some(preview_world),
+            cursor_tile_space: Some(preview_tile),
+            ..FrameInput::default()
+        });
+
+        let mut scene = make_scene();
+        simulation.populate_scene(&mut scene);
+
+        assert_eq!(scene.hovered_tower, Some(tower_snapshot.id));
+        assert_eq!(scene.play_mode, PlayMode::Attack);
     }
 
     #[test]

@@ -555,6 +555,8 @@ pub struct Scene {
     pub projectiles: Vec<SceneProjectile>,
     /// Targeting beams emitted by towers while in attack mode.
     pub tower_targets: Vec<TowerTargetLine>,
+    /// Tower currently hovered by the cursor, if any.
+    pub hovered_tower: Option<TowerId>,
     /// Active play mode for the simulation.
     pub play_mode: PlayMode,
     /// Optional builder placement preview emitted by the simulation.
@@ -577,6 +579,7 @@ impl Scene {
         towers: Vec<SceneTower>,
         projectiles: Vec<SceneProjectile>,
         tower_targets: Vec<TowerTargetLine>,
+        hovered_tower: Option<TowerId>,
         play_mode: PlayMode,
         tower_preview: Option<TowerPreview>,
         active_tower_footprint_tiles: Option<Vec2>,
@@ -590,6 +593,7 @@ impl Scene {
             towers,
             projectiles,
             tower_targets,
+            hovered_tower,
             play_mode,
             tower_preview,
             active_tower_footprint_tiles,
@@ -821,6 +825,7 @@ mod tests {
             Vec::new(),
             Vec::new(),
             Vec::new(),
+            None,
             PlayMode::Attack,
             None,
             None,
@@ -837,6 +842,7 @@ mod tests {
         assert!(scene.towers.is_empty());
         assert!(scene.projectiles.is_empty());
         assert!(scene.tower_targets.is_empty());
+        assert!(scene.hovered_tower.is_none());
         assert!(scene.tower_feedback.is_none());
     }
 
@@ -881,6 +887,7 @@ mod tests {
             )],
             Vec::new(),
             vec![target_line],
+            None,
             PlayMode::Builder,
             Some(placement_preview),
             Some(Vec2::splat(1.0)),
@@ -929,6 +936,7 @@ mod tests {
             Vec::new(),
             Vec::new(),
             Vec::new(),
+            None,
             PlayMode::Attack,
             None,
             None,
