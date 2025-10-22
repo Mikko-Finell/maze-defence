@@ -108,7 +108,7 @@ walker so bugs always advance when a lower-distance neighbour is free.
 **Exit checks:** Movement tests cover gradient-only progress, and the planner no
 longer falls back to full-path searches.
 
-# 6) [DONE] Congestion map & side-step heuristics (`systems/movement`)
+# 6) [IN PROGRESS] Congestion map & side-step heuristics (`systems/movement`)
 
 **Goal:** Bias traffic away from saturated lanes and allow controlled lateral
 moves without oscillation.
@@ -117,20 +117,20 @@ moves without oscillation.
 
 * Build the transient congestion `Vec<u8>` each tick by following the gradient
   up to `CONGESTION_LOOKAHEAD` cells per bug, skipping their current cell.
-* Fold the congestion data into the neighbour ranking with the lexicographic
+* [TODO] Fold the congestion data into the neighbour ranking with the lexicographic
   distance-first, congestion-second comparator described in the spec.
 * Implement the flat side-step rule: allow `distance_delta == 0` moves only when
   the neighbour’s congestion is lower than the current cell and it differs from
   the two-tick `last_cell` ring buffer entry.
 * Add deterministic tests that demonstrate lane-formation behaviour and verify
   the anti-oscillation guard.
-* Replace the previous weight-based score with the lexicographic comparator so
+* [TODO] Replace the previous weight-based score with the lexicographic comparator so
   the planner drops `CONGESTION_WEIGHT` before the remaining `[TODO]` stages.
 
 **Exit checks:** System tests confirm congestion-influenced routing, and
 profiling/logging shows congestion buffers are reused between ticks.
 
-# 7) [TODO] Detour BFS fallback & reservation awareness (`systems/movement`)
+# 7) [PLANNED] Detour BFS fallback & reservation awareness (`systems/movement`)
 
 **Goal:** Teach the planner to escape jams via bounded detours while honouring
 existing reservations.
@@ -152,7 +152,7 @@ existing reservations.
 **Exit checks:** New tests cover detour success/failure, and replay traces show
 stable ordering despite BFS exploration.
 
-# 8) [TODO] Determinism harness & documentation (tests + docs)
+# 8) [PLANNED] Determinism harness & documentation (tests + docs)
 
 **Goal:** Lock in the new behaviour with replay coverage and contributor
 guidance.
