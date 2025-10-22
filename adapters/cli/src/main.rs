@@ -502,6 +502,42 @@ impl Simulation {
         self.last_advance_profile
     }
 
+    /// Returns the current interpolated position of the bug if available,
+    /// otherwise falls back to its integer cell center.
+    fn interpolated_bug_position(&self, id: BugId) -> Vec2 {
+        self.interpolated_bug_position_with_cell(id, None)
+    }
+
+    fn interpolated_bug_position_with_cell(&self, id: BugId, cell: Option<CellCoord>) -> Vec2 {
+        if let Some(motion) = self.bug_motions.get(&id) {
+            let from = Self::cell_center(motion.from);
+            let to = Self::cell_center(motion.to);
+            let progress = motion.progress(self.bug_step_duration);
+            return from + (to - from) * progress;
+        }
+
+        if let Some(cell) = cell {
+            return Self::cell_center(cell);
+        }
+
+        let occupancy = query::occupancy_view(&self.world);
+        let (columns, rows) = occupancy.dimensions();
+        for row in 0..rows {
+            for column in 0..columns {
+                let cell = CellCoord::new(column, row);
+                if occupancy.occupant(cell) == Some(id) {
+                    return Self::cell_center(cell);
+                }
+            }
+        }
+
+        Vec2::new(0.5, 0.5)
+    }
+
+    fn cell_center(cell: CellCoord) -> Vec2 {
+        Vec2::new(cell.column() as f32 + 0.5, cell.row() as f32 + 0.5)
+    }
+
     fn populate_scene(&self, scene: &mut Scene) {
         let wall_view = query::walls(&self.world);
         scene.walls.clear();
@@ -513,20 +549,9 @@ impl Simulation {
 
         let bug_view = query::bug_view(&self.world);
         scene.bugs.clear();
-        let bug_step_duration = self.bug_step_duration;
         scene.bugs.extend(bug_view.iter().map(|bug| {
             let color = bug.color;
-            let default_position = Vec2::new(bug.cell.column() as f32, bug.cell.row() as f32);
-            let position = self
-                .bug_motions
-                .get(&bug.id)
-                .map(|motion| {
-                    let from = Vec2::new(motion.from.column() as f32, motion.from.row() as f32);
-                    let to = Vec2::new(motion.to.column() as f32, motion.to.row() as f32);
-                    let progress = motion.progress(bug_step_duration);
-                    from + (to - from) * progress
-                })
-                .unwrap_or(default_position);
+            let position = self.interpolated_bug_position_with_cell(bug.id, Some(bug.cell));
             BugPresentation::new(
                 position,
                 Color::from_rgb_u8(color.red(), color.green(), color.blue()),
@@ -1029,8 +1054,8 @@ mod tests {
 
         assert_eq!(scene.bugs.len(), 1);
         let bug = scene.bugs[0];
-        let from_vec = Vec2::new(from.column() as f32, from.row() as f32);
-        let to_vec = Vec2::new(to.column() as f32, to.row() as f32);
+        let from_vec = Simulation::cell_center(from);
+        let to_vec = Simulation::cell_center(to);
         let expected_progress = if step_duration.is_zero() {
             1.0
         } else {
@@ -1039,6 +1064,32 @@ mod tests {
         let expected_position = from_vec + (to_vec - from_vec) * expected_progress;
 
         assert!((bug.position - expected_position).length() <= f32::EPSILON);
+    }
+
+    #[test]
+    fn interpolated_bug_position_returns_cell_center_without_motion() {
+        let mut simulation = new_simulation();
+        let spawner = query::bug_spawners(simulation.world())
+            .into_iter()
+            .next()
+            .expect("bug spawner available");
+
+        simulation.queued_commands.push(Command::SpawnBug {
+            spawner,
+            color: BugColor::from_rgb(64, 96, 128),
+            health: Health::new(3),
+        });
+        simulation.advance(Duration::ZERO);
+
+        let bug_view = query::bug_view(simulation.world());
+        let bug = bug_view
+            .iter()
+            .next()
+            .cloned()
+            .expect("spawned bug available");
+
+        let position = simulation.interpolated_bug_position(bug.id);
+        assert_eq!(position, Simulation::cell_center(bug.cell));
     }
 
     fn enter_builder_mode(simulation: &mut Simulation) {
