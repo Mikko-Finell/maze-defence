@@ -417,6 +417,7 @@ fn neighbors_within_field(
     buffer.into_iter().take(count).flatten()
 }
 
+/// Lexicographic comparison used during neighbor tie-break: column, then row.
 fn lexicographically_less(left: CellCoord, right: CellCoord) -> bool {
     left.column() < right.column() || (left.column() == right.column() && left.row() < right.row())
 }
@@ -493,6 +494,31 @@ mod tests {
             .prepare_workspace(3, 3, &navigation, &[target]);
 
         let bug = bug_snapshot_at(CellCoord::new(0, 0));
+        let ordered = vec![&bug];
+        movement.planner.last_cell.begin_tick(&ordered);
+        movement.planner.stalled_for.begin_tick(&ordered);
+
+        let next = movement
+            .planner
+            .plan_next_hop(0, &bug, &navigation, occupancy, &|_| false);
+
+        assert_eq!(next, Some(CellCoord::new(0, 1)));
+        assert_eq!(movement.planner.stalled_for.value(0), 0);
+    }
+
+    #[test]
+    fn plan_next_hop_breaks_ties_by_column_then_row() {
+        let mut movement = Movement::default();
+        let navigation = NavigationFieldView::from_owned(vec![5, 4, 5, 4, 5, 6, 5, 6, 7], 3, 3);
+        let target = CellCoord::new(0, 0);
+        let occupancy_cells: Vec<Option<BugId>> = vec![None; 9];
+        let occupancy = OccupancyView::new(&occupancy_cells, 3, 3);
+
+        let _ = movement
+            .planner
+            .prepare_workspace(3, 3, &navigation, &[target]);
+
+        let bug = bug_snapshot_at(CellCoord::new(1, 1));
         let ordered = vec![&bug];
         movement.planner.last_cell.begin_tick(&ordered);
         movement.planner.stalled_for.begin_tick(&ordered);
