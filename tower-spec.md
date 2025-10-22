@@ -39,7 +39,7 @@ Introduce towers as first-class, world-owned blockers that are placed/removed on
 
 **Errors**
 
-* `PlacementError = { InvalidMode, OutOfBounds, Misaligned, Occupied }`
+* `PlacementError = { InvalidMode, OutOfBounds, Misaligned, Occupied, PathBlocked }`
 * `RemovalError = { InvalidMode, MissingTower }`
 
 **Queries (read-only projections)**

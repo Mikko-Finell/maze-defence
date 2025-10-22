@@ -15,6 +15,9 @@ use std::{
 };
 
 #[cfg(any(test, feature = "tower_scaffolding"))]
+use std::collections::VecDeque;
+
+#[cfg(any(test, feature = "tower_scaffolding"))]
 mod towers;
 
 #[cfg(any(test, feature = "tower_scaffolding"))]
@@ -659,6 +662,15 @@ impl World {
             return;
         }
 
+        if !self.exit_path_remains_available(region) {
+            out_events.push(Event::TowerPlacementRejected {
+                kind,
+                origin,
+                reason: PlacementError::PathBlocked,
+            });
+            return;
+        }
+
         let id = self.towers.allocate();
         self.mark_tower_region(region, true);
         self.towers.insert(TowerState {
@@ -788,6 +800,120 @@ impl World {
             }
         }
     }
+
+    #[cfg(any(test, feature = "tower_scaffolding"))]
+    fn exit_path_remains_available(&self, candidate: CellRect) -> bool {
+        if self.targets.is_empty() {
+            return true;
+        }
+
+        let mut spawners = self.bug_spawners.iter();
+        if spawners.next().is_none() {
+            return true;
+        }
+
+        let (columns, rows) = self.occupancy.dimensions();
+        let cells_u64 = u64::from(columns) * u64::from(rows);
+        let Ok(capacity) = usize::try_from(cells_u64) else {
+            return false;
+        };
+
+        if capacity == 0 {
+            return true;
+        }
+
+        let mut visited = vec![false; capacity];
+        let mut queue = VecDeque::new();
+
+        for &start in &self.targets {
+            if self.is_cell_blocked_with_candidate(start, candidate) {
+                continue;
+            }
+
+            if let Some(index) = self.occupancy.index(start) {
+                if !visited[index] {
+                    visited[index] = true;
+                    queue.push_back(start);
+                }
+            }
+        }
+
+        if queue.is_empty() {
+            return false;
+        }
+
+        const DIRECTIONS: [Direction; 4] = [
+            Direction::North,
+            Direction::East,
+            Direction::South,
+            Direction::West,
+        ];
+
+        while let Some(cell) = queue.pop_front() {
+            if self.bug_spawners.contains(cell) {
+                return true;
+            }
+
+            for direction in DIRECTIONS {
+                if let Some(neighbor) = advance_cell(cell, direction, columns, rows) {
+                    if self.is_cell_blocked_with_candidate(neighbor, candidate) {
+                        continue;
+                    }
+
+                    if let Some(index) = self.occupancy.index(neighbor) {
+                        if !visited[index] {
+                            visited[index] = true;
+                            queue.push_back(neighbor);
+                        }
+                    }
+                }
+            }
+        }
+
+        false
+    }
+
+    #[cfg(any(test, feature = "tower_scaffolding"))]
+    fn is_cell_blocked_with_candidate(&self, cell: CellCoord, candidate: CellRect) -> bool {
+        if cell_rect_contains(candidate, cell) {
+            return true;
+        }
+
+        if self.occupancy.index(cell).is_none() {
+            return true;
+        }
+
+        if !self.occupancy.can_enter(cell) {
+            return true;
+        }
+
+        if self.walls.contains(cell) {
+            return true;
+        }
+
+        if self.tower_occupancy.contains(cell) {
+            return true;
+        }
+
+        false
+    }
+}
+
+#[cfg(any(test, feature = "tower_scaffolding"))]
+fn cell_rect_contains(region: CellRect, cell: CellCoord) -> bool {
+    let origin = region.origin();
+    let size = region.size();
+    let column = u64::from(cell.column());
+    let row = u64::from(cell.row());
+    let origin_column = u64::from(origin.column());
+    let origin_row = u64::from(origin.row());
+    let width = u64::from(size.width());
+    let height = u64::from(size.height());
+
+    column >= origin_column
+        && column < origin_column.saturating_add(width)
+        && row >= origin_row
+        && row < origin_row.saturating_add(height)
 }
 
 /// Query functions that provide read-only access to the world state.
@@ -997,19 +1123,7 @@ pub mod query {
 
     #[cfg(any(test, feature = "tower_scaffolding"))]
     fn tower_region_contains_cell(region: CellRect, cell: CellCoord) -> bool {
-        let origin = region.origin();
-        let size = region.size();
-        let column = u64::from(cell.column());
-        let row = u64::from(cell.row());
-        let origin_column = u64::from(origin.column());
-        let origin_row = u64::from(origin.row());
-        let width = u64::from(size.width());
-        let height = u64::from(size.height());
-
-        column >= origin_column
-            && column < origin_column.saturating_add(width)
-            && row >= origin_row
-            && row < origin_row.saturating_add(height)
+        super::cell_rect_contains(region, cell)
     }
 }
 
@@ -3050,6 +3164,73 @@ mod tests {
                 ),
             }]
         );
+    }
+
+    #[test]
+    fn placing_tower_rejects_when_exit_path_is_blocked() {
+        let mut world = World::new();
+        let mut events = Vec::new();
+
+        apply(
+            &mut world,
+            Command::SetPlayMode {
+                mode: PlayMode::Builder,
+            },
+            &mut events,
+        );
+        events.clear();
+
+        let cells_per_tile = world.cells_per_tile;
+        let exit_columns = exit_columns_for_tile_grid(world.tile_grid.columns(), cells_per_tile);
+        assert!(
+            !exit_columns.is_empty(),
+            "configured grid should expose at least one exit column"
+        );
+        let exit_column = exit_columns[0];
+        assert!(
+            exit_column >= 1,
+            "exit column should leave room for tower footprint towards the west"
+        );
+
+        let walkway_row = walkway_row_for_tile_grid(world.tile_grid.rows(), cells_per_tile)
+            .expect("configured grid defines walkway row");
+        assert!(
+            walkway_row >= 3,
+            "walkway row should allow a four-cell-tall footprint to sit above the wall"
+        );
+
+        let origin = CellCoord::new(exit_column.saturating_sub(1), walkway_row.saturating_sub(3));
+
+        let (columns, rows) = world.tower_occupancy.dimensions();
+        let footprint = super::footprint_for(TowerKind::Basic);
+        assert!(
+            origin.column().saturating_add(footprint.width()) <= columns,
+            "footprint must remain within grid columns"
+        );
+        assert!(
+            origin.row().saturating_add(footprint.height()) <= rows,
+            "footprint must remain within grid rows"
+        );
+
+        apply(
+            &mut world,
+            Command::PlaceTower {
+                kind: TowerKind::Basic,
+                origin,
+            },
+            &mut events,
+        );
+
+        assert_eq!(
+            events,
+            vec![Event::TowerPlacementRejected {
+                kind: TowerKind::Basic,
+                origin,
+                reason: PlacementError::PathBlocked,
+            }]
+        );
+        assert!(world.towers.is_empty());
+        assert!(!world.tower_occupancy.contains(origin));
     }
 
     #[test]
