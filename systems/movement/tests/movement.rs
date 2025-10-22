@@ -601,6 +601,336 @@ fn blocked_bugs_do_not_accumulate_extra_step_time() {
     );
 }
 
+#[test]
+fn bug_reaches_exit_when_central_tower_blocks_direct_route() {
+    let mut world = World::new();
+    let mut movement = Movement::default();
+
+    apply_and_pump(
+        &mut world,
+        &mut movement,
+        Command::ConfigureTileGrid {
+            columns: TileCoord::new(6),
+            rows: TileCoord::new(6),
+            tile_length: 1.0,
+            cells_per_tile: 1,
+        },
+    );
+
+    apply_and_pump(
+        &mut world,
+        &mut movement,
+        Command::SetPlayMode {
+            mode: PlayMode::Builder,
+        },
+    );
+
+    apply_and_pump(
+        &mut world,
+        &mut movement,
+        Command::PlaceTower {
+            kind: TowerKind::Basic,
+            origin: CellCoord::new(2, 2),
+        },
+    );
+
+    apply_and_pump(
+        &mut world,
+        &mut movement,
+        Command::SetPlayMode {
+            mode: PlayMode::Attack,
+        },
+    );
+
+    apply_and_pump(
+        &mut world,
+        &mut movement,
+        Command::SpawnBug {
+            spawner: CellCoord::new(3, 0),
+            color: BugColor::from_rgb(0x2f, 0x95, 0x32),
+            health: Health::new(1000),
+        },
+    );
+
+    let mut event_log = Vec::new();
+    let mut exited = false;
+
+    for _ in 0..200 {
+        let tick_events =
+            drive_tick_and_collect(&mut world, &mut movement, Duration::from_millis(250));
+        if tick_events.is_empty() {
+            continue;
+        }
+        if tick_events
+            .iter()
+            .any(|event| matches!(event, Event::BugExited { .. }))
+        {
+            exited = true;
+        }
+        event_log.extend(tick_events);
+        if exited {
+            break;
+        }
+    }
+
+    assert!(exited, "expected bug to reach the exit despite the detour");
+    assert!(
+        event_log.iter().any(|event| {
+            matches!(
+                event,
+                Event::BugAdvanced { from, to, .. }
+                    if from.column() != to.column()
+            )
+        }),
+        "expected bug to move sideways while navigating around the tower",
+    );
+}
+
+#[test]
+fn bug_reaches_exit_when_two_towers_force_wide_detour() {
+    let mut world = World::new();
+    let mut movement = Movement::default();
+
+    apply_and_pump(
+        &mut world,
+        &mut movement,
+        Command::ConfigureTileGrid {
+            columns: TileCoord::new(8),
+            rows: TileCoord::new(6),
+            tile_length: 1.0,
+            cells_per_tile: 1,
+        },
+    );
+
+    apply_and_pump(
+        &mut world,
+        &mut movement,
+        Command::SetPlayMode {
+            mode: PlayMode::Builder,
+        },
+    );
+
+    apply_and_pump(
+        &mut world,
+        &mut movement,
+        Command::PlaceTower {
+            kind: TowerKind::Basic,
+            origin: CellCoord::new(2, 2),
+        },
+    );
+
+    apply_and_pump(
+        &mut world,
+        &mut movement,
+        Command::PlaceTower {
+            kind: TowerKind::Basic,
+            origin: CellCoord::new(6, 3),
+        },
+    );
+
+    apply_and_pump(
+        &mut world,
+        &mut movement,
+        Command::SetPlayMode {
+            mode: PlayMode::Attack,
+        },
+    );
+
+    apply_and_pump(
+        &mut world,
+        &mut movement,
+        Command::SpawnBug {
+            spawner: CellCoord::new(4, 0),
+            color: BugColor::from_rgb(0x2f, 0x95, 0x32),
+            health: Health::new(1000),
+        },
+    );
+
+    let mut event_log = Vec::new();
+    let mut exited = false;
+
+    for _ in 0..240 {
+        let tick_events =
+            drive_tick_and_collect(&mut world, &mut movement, Duration::from_millis(250));
+        if tick_events.is_empty() {
+            continue;
+        }
+        if tick_events
+            .iter()
+            .any(|event| matches!(event, Event::BugExited { .. }))
+        {
+            exited = true;
+        }
+        event_log.extend(tick_events);
+        if exited {
+            break;
+        }
+    }
+
+    assert!(
+        exited,
+        "expected bug to reach the exit after navigating both towers",
+    );
+    assert!(
+        event_log.iter().any(|event| {
+            matches!(
+                event,
+                Event::BugAdvanced { from, to, .. }
+                    if from.column() != to.column()
+            )
+        }),
+        "expected bug to travel sideways while searching for a route",
+    );
+}
+
+#[test]
+fn corner_spawn_bug_reaches_exit_through_chicane() {
+    let mut world = World::new();
+    let mut movement = Movement::default();
+
+    apply_and_pump(
+        &mut world,
+        &mut movement,
+        Command::ConfigureTileGrid {
+            columns: TileCoord::new(8),
+            rows: TileCoord::new(6),
+            tile_length: 1.0,
+            cells_per_tile: 1,
+        },
+    );
+
+    apply_and_pump(
+        &mut world,
+        &mut movement,
+        Command::SetPlayMode {
+            mode: PlayMode::Builder,
+        },
+    );
+
+    apply_and_pump(
+        &mut world,
+        &mut movement,
+        Command::PlaceTower {
+            kind: TowerKind::Basic,
+            origin: CellCoord::new(0, 2),
+        },
+    );
+
+    apply_and_pump(
+        &mut world,
+        &mut movement,
+        Command::PlaceTower {
+            kind: TowerKind::Basic,
+            origin: CellCoord::new(4, 2),
+        },
+    );
+
+    apply_and_pump(
+        &mut world,
+        &mut movement,
+        Command::SetPlayMode {
+            mode: PlayMode::Attack,
+        },
+    );
+
+    apply_and_pump(
+        &mut world,
+        &mut movement,
+        Command::SpawnBug {
+            spawner: CellCoord::new(1, 0),
+            color: BugColor::from_rgb(0x2f, 0x95, 0x32),
+            health: Health::new(1000),
+        },
+    );
+
+    let mut event_log = Vec::new();
+    let mut exited = false;
+
+    for _ in 0..240 {
+        let tick_events =
+            drive_tick_and_collect(&mut world, &mut movement, Duration::from_millis(250));
+        if tick_events.is_empty() {
+            continue;
+        }
+        if tick_events
+            .iter()
+            .any(|event| matches!(event, Event::BugExited { .. }))
+        {
+            exited = true;
+        }
+        event_log.extend(tick_events);
+        if exited {
+            break;
+        }
+    }
+
+    assert!(
+        exited,
+        "expected bug to reach the exit after navigating the chicane",
+    );
+    assert!(
+        event_log.iter().any(|event| {
+            matches!(
+                event,
+                Event::BugAdvanced { from, to, .. }
+                    if from.column() != to.column()
+            )
+        }),
+        "expected bug to weave sideways before leaving the maze",
+    );
+}
+
+fn apply_and_pump(world: &mut World, movement: &mut Movement, command: Command) {
+    let mut events = Vec::new();
+    world::apply(world, command, &mut events);
+    pump_system(world, movement, events);
+}
+
+fn drive_tick_and_collect(world: &mut World, movement: &mut Movement, dt: Duration) -> Vec<Event> {
+    let mut pending = Vec::new();
+    world::apply(world, Command::Tick { dt }, &mut pending);
+    let mut emitted = pending.clone();
+
+    loop {
+        if pending.is_empty() {
+            break;
+        }
+
+        let bug_view = query::bug_view(world);
+        let occupancy_view = query::occupancy_view(world);
+        let targets = query::target_cells(world);
+        let navigation_view = query::navigation_field(world);
+        let reservation_ledger = query::reservation_ledger(world);
+        let mut commands = Vec::new();
+        movement.handle(
+            &pending,
+            &bug_view,
+            occupancy_view,
+            navigation_view,
+            reservation_ledger,
+            &targets,
+            |cell| query::is_cell_blocked(&*world, cell),
+            &mut commands,
+        );
+
+        if commands.is_empty() {
+            break;
+        }
+
+        pending.clear();
+        for command in commands {
+            let mut generated = Vec::new();
+            world::apply(world, command, &mut generated);
+            if !generated.is_empty() {
+                emitted.extend(generated.iter().cloned());
+                pending.extend(generated);
+            }
+        }
+    }
+
+    emitted
+}
+
 fn pump_system(world: &mut World, movement: &mut Movement, mut events: Vec<Event>) {
     loop {
         if events.is_empty() {
