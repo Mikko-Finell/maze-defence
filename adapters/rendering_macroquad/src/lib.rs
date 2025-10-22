@@ -204,10 +204,15 @@ impl RenderingBackend for MacroquadBackend {
         macroquad::Window::from_config(config, async move {
             let background = to_macroquad_color(clear_color);
             let mut fps_counter = FpsCounter::default();
+            let mut show_tower_target_lines = false;
 
             loop {
                 if is_key_pressed(KeyCode::Escape) || is_key_pressed(KeyCode::Q) {
                     break;
+                }
+
+                if is_key_pressed(KeyCode::T) {
+                    show_tower_target_lines = !show_tower_target_lines;
                 }
 
                 macroquad::window::clear_background(background);
@@ -239,7 +244,9 @@ impl RenderingBackend for MacroquadBackend {
                     draw_tower_preview(preview, &metrics);
                 }
 
-                draw_tower_targets(&scene.tower_targets, &metrics);
+                if show_tower_target_lines {
+                    draw_tower_targets(&scene.tower_targets, &metrics);
+                }
                 draw_projectiles(&scene.projectiles, &metrics);
 
                 let bug_radius = metrics.cell_step * 0.5;
@@ -524,8 +531,10 @@ fn draw_cell_walls(scene: &Scene, metrics: &SceneMetrics) {
 }
 
 fn draw_tower_targets(tower_targets: &[TowerTargetLine], metrics: &SceneMetrics) {
+    let line_color = to_macroquad_color(Color::new(0.85, 0.9, 1.0, 0.5));
+    let thickness = 0.5;
     for (start, end) in tower_target_segments(tower_targets, metrics) {
-        macroquad::shapes::draw_line(start.x, start.y, end.x, end.y, 1.0, BLACK);
+        macroquad::shapes::draw_line(start.x, start.y, end.x, end.y, thickness, line_color);
     }
 }
 
