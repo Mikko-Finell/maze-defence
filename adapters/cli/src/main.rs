@@ -80,13 +80,21 @@ pub fn push_tower_targets(scene: &mut Scene, targets: &[TowerTarget]) {
 }
 
 /// Populates the scene with projectiles derived from world snapshots.
-pub fn push_projectiles(scene: &mut Scene, projectiles: &[ProjectileSnapshot]) {
+///
+/// `target_position` resolves the current cell-space destination for each projectile
+/// using the target bug identifier and the cached half-cell fallback destination.
+pub fn push_projectiles(
+    scene: &mut Scene,
+    projectiles: &[ProjectileSnapshot],
+    mut target_position: impl FnMut(BugId, Vec2) -> Vec2,
+) {
     scene.projectiles.clear();
     scene.projectiles.reserve(projectiles.len());
 
     for snapshot in projectiles {
         let from = half_point_to_cells(snapshot.origin_half);
-        let to = half_point_to_cells(snapshot.dest_half);
+        let fallback_to = half_point_to_cells(snapshot.dest_half);
+        let to = target_position(snapshot.target, fallback_to);
 
         let progress = if snapshot.distance_half == 0 {
             1.0
@@ -99,6 +107,8 @@ pub fn push_projectiles(scene: &mut Scene, projectiles: &[ProjectileSnapshot]) {
         let position = if progress <= 0.0 {
             from
         } else if progress >= 1.0 {
+            to
+        } else if direction.length_squared() <= f32::EPSILON {
             to
         } else {
             from + direction * progress
@@ -549,14 +559,16 @@ impl Simulation {
 
         let bug_view = query::bug_view(&self.world);
         scene.bugs.clear();
-        scene.bugs.extend(bug_view.iter().map(|bug| {
+        let mut bug_positions = HashMap::new();
+        for bug in bug_view.iter() {
             let color = bug.color;
             let position = self.interpolated_bug_position_with_cell(bug.id, Some(bug.cell));
-            BugPresentation::new(
+            let _ = bug_positions.insert(bug.id, position);
+            scene.bugs.push(BugPresentation::new(
                 position,
                 Color::from_rgb_u8(color.red(), color.green(), color.blue()),
-            )
-        }));
+            ));
+        }
 
         let tower_view = query::towers(&self.world);
         scene.towers.clear();
@@ -567,7 +579,9 @@ impl Simulation {
         );
 
         push_tower_targets(scene, &self.current_targets);
-        push_projectiles(scene, &self.projectiles);
+        push_projectiles(scene, &self.projectiles, |bug, fallback| {
+            bug_positions.get(&bug).copied().unwrap_or(fallback)
+        });
 
         scene.play_mode = query::play_mode(&self.world);
         scene.tower_preview = if scene.play_mode == PlayMode::Builder {
@@ -1002,7 +1016,7 @@ mod tests {
             travelled_half: 5,
         };
 
-        push_projectiles(&mut scene, &[snapshot]);
+        push_projectiles(&mut scene, &[snapshot], |_bug, fallback| fallback);
 
         assert_eq!(scene.projectiles.len(), 1);
         let projectile = scene.projectiles[0];
@@ -1011,6 +1025,32 @@ mod tests {
         assert_eq!(projectile.to, Vec2::new(7.0, 6.0));
         assert!((projectile.progress - 0.5).abs() <= f32::EPSILON);
         assert_eq!(projectile.position, Vec2::new(5.0, 4.0));
+    }
+
+    #[test]
+    fn push_projectiles_homes_toward_dynamic_target() {
+        let mut scene = make_scene();
+        let snapshot = ProjectileSnapshot {
+            projectile: ProjectileId::new(7),
+            tower: TowerId::new(11),
+            target: BugId::new(3),
+            origin_half: CellPointHalf::new(6, 4),
+            dest_half: CellPointHalf::new(14, 12),
+            distance_half: 10,
+            travelled_half: 5,
+        };
+
+        push_projectiles(&mut scene, &[snapshot], |_bug, fallback| {
+            fallback + Vec2::new(2.0, 2.0)
+        });
+
+        let projectile = scene.projectiles[0];
+        let expected_to = Vec2::new(9.0, 8.0);
+        assert_eq!(projectile.to, expected_to);
+
+        let from = Vec2::new(3.0, 2.0);
+        let expected_position = from + (expected_to - from) * 0.5;
+        assert_eq!(projectile.position, expected_position);
     }
 
     #[test]
