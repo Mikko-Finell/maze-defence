@@ -614,26 +614,6 @@ impl TileGrid {
     }
 }
 
-/// Perimeter wall that guards the maze interior.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Wall {
-    target: Target,
-}
-
-impl Wall {
-    /// Creates a new wall containing the provided target opening.
-    #[must_use]
-    pub fn new(target: Target) -> Self {
-        Self { target }
-    }
-
-    /// Retrieves the target carved into the wall.
-    #[must_use]
-    pub const fn target(&self) -> &Target {
-        &self.target
-    }
-}
-
 /// Opening carved into the wall that bugs attempt to reach.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Target {
