@@ -561,6 +561,7 @@ impl Simulation {
             let position = self.interpolated_bug_position_with_cell(bug.id, Some(bug.cell));
             let _ = bug_positions.insert(bug.id, position);
             scene.bugs.push(BugPresentation::new(
+                bug.id,
                 position,
                 Color::from_rgb_u8(color.red(), color.green(), color.blue()),
                 BugHealthPresentation::new(bug.health.get(), bug.max_health.get()),
