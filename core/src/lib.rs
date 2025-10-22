@@ -476,8 +476,6 @@ pub struct ProjectileSnapshot {
     pub distance_half: u128,
     /// Distance already travelled by the projectile measured in half-cell units.
     pub travelled_half: u128,
-    /// Projectile speed expressed in half-cell units advanced per millisecond.
-    pub speed_half_per_ms: u32,
 }
 
 /// Unique identifier assigned to a tower.
@@ -1047,19 +1045,19 @@ impl TowerKind {
         }
     }
 
-    /// Projectile speed expressed in half-cell units advanced per millisecond.
-    #[must_use]
-    pub const fn speed_half_cells_per_ms(self) -> u32 {
-        match self {
-            Self::Basic => 12,
-        }
-    }
-
     /// Damage dealt by a projectile fired by this tower kind.
     #[must_use]
     pub const fn projectile_damage(self) -> Damage {
         match self {
             Self::Basic => Damage::new(1),
+        }
+    }
+
+    /// Time in milliseconds for a projectile to traverse the tower's maximum range.
+    #[must_use]
+    pub const fn projectile_travel_time_ms(self) -> u32 {
+        match self {
+            Self::Basic => 1_000,
         }
     }
 }
@@ -1215,7 +1213,7 @@ mod tests {
 
     #[test]
     fn tower_basic_projectile_speed_matches_specification() {
-        assert_eq!(TowerKind::Basic.speed_half_cells_per_ms(), 12);
+        assert_eq!(TowerKind::Basic.projectile_travel_time_ms(), 1_000);
     }
 
     #[test]
