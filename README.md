@@ -27,6 +27,7 @@ The CLI exposes the following arguments:
 | `--bug-step-ms MILLISECONDS` | Sets how long each bug waits before taking another step. Accepts values from `1` to `60_000`. | `250` |
 | `--bug-spawn-interval-ms MILLISECONDS` | Controls the interval between automatic spawns while in attack mode. Accepts values from `1` to `60_000`. | `1_000` |
 | `--vsync on\|off` | Requests enabling (`on`) or disabling (`off`) vertical sync. | Platform default |
+| `--show-fps on\|off` | Prints per-second frame timing metrics to stdout when set to `on`. | `off` |
 
 ## Configuring the grid size
 
@@ -84,6 +85,14 @@ The renderer requests the platform's default swap interval when no flag is provi
 
 ```bash
 cargo run --bin maze-defence -- --vsync off
+```
+
+## Displaying frame timing metrics
+
+Enable `--show-fps on` to log per-second frame timing breakdowns to the terminal. This keeps the output silent by default while still making it easy to monitor simulation and rendering performance when needed:
+
+```bash
+cargo run --bin maze-defence -- --show-fps on
 ```
 
 ## Sharing layouts via the clipboard
