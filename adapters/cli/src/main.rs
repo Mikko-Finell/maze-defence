@@ -776,7 +776,7 @@ impl Simulation {
             let color = bug.color;
             let position = self.interpolated_bug_position_with_cell(bug.id, Some(bug.cell));
             let _ = bug_positions.insert(bug.id, position);
-            scene.bugs.push(BugPresentation::new(
+            scene.bugs.push(BugPresentation::new_circle(
                 bug.id,
                 position,
                 Color::from_rgb_u8(color.red(), color.green(), color.blue()),
@@ -1417,7 +1417,7 @@ mod tests {
         };
         let expected_position = from_vec + (to_vec - from_vec) * expected_progress;
 
-        assert!((bug.position - expected_position).length() <= f32::EPSILON);
+        assert!((bug.position() - expected_position).length() <= f32::EPSILON);
     }
 
     #[test]

@@ -25,9 +25,9 @@ use macroquad::{
 };
 use maze_defence_core::{CellRect, PlayMode, TowerId, TowerKind};
 use maze_defence_rendering::{
-    BugPresentation, Color, FrameInput, FrameSimulationBreakdown, Presentation, RenderingBackend,
-    Scene, SceneProjectile, SceneTower, SceneWall, TileGridPresentation, TowerPreview,
-    TowerTargetLine,
+    BugPresentation, BugVisual, Color, FrameInput, FrameSimulationBreakdown, Presentation,
+    RenderingBackend, Scene, SceneProjectile, SceneTower, SceneWall, TileGridPresentation,
+    TowerPreview, TowerTargetLine,
 };
 use std::{
     collections::VecDeque,
@@ -585,11 +585,9 @@ fn draw_bug_health_bars(bugs: &[BugPresentation], metrics: &SceneMetrics) {
     let bar_width = metrics.cell_step;
     let bar_height = (metrics.cell_step * 0.12).max(2.0) + 2.0;
 
-    for BugPresentation {
-        position, health, ..
-    } in bugs
-    {
-        let bug_center = metrics.bug_center(*position);
+    for bug in bugs {
+        let bug_center = metrics.bug_center(bug.position());
+        let health = bug.health;
         let bar_left = bug_center.x - bar_width * 0.5;
         let bar_top = bug_center.y + bug_radius + bar_margin;
 
@@ -616,24 +614,28 @@ fn draw_bugs(bugs: &[BugPresentation], metrics: &SceneMetrics) {
     let bug_radius = metrics.cell_step * 0.5;
     let border_thickness = (bug_radius * 0.2).max(1.0);
 
-    for BugPresentation {
-        position, color, ..
-    } in bugs
-    {
-        let bug_center = metrics.bug_center(*position);
-        macroquad::shapes::draw_circle(
-            bug_center.x,
-            bug_center.y,
-            bug_radius,
-            to_macroquad_color(*color),
-        );
-        macroquad::shapes::draw_circle_lines(
-            bug_center.x,
-            bug_center.y,
-            bug_radius,
-            border_thickness,
-            BLACK,
-        );
+    for bug in bugs {
+        match bug.style {
+            BugVisual::PrimitiveCircle { color } => {
+                let bug_center = metrics.bug_center(bug.position());
+                macroquad::shapes::draw_circle(
+                    bug_center.x,
+                    bug_center.y,
+                    bug_radius,
+                    to_macroquad_color(color),
+                );
+                macroquad::shapes::draw_circle_lines(
+                    bug_center.x,
+                    bug_center.y,
+                    bug_radius,
+                    border_thickness,
+                    BLACK,
+                );
+            }
+            BugVisual::Sprite(sprite) => {
+                let _ = sprite;
+            }
+        }
     }
 }
 
@@ -809,7 +811,7 @@ fn turret_direction_for(
     if let Some(position) = bugs
         .iter()
         .find(|bug| bug.id == target_line.bug)
-        .map(|bug| bug.position)
+        .map(BugPresentation::position)
     {
         let direction = position - center_cells;
         if direction.length_squared() > f32::EPSILON {
@@ -1224,7 +1226,7 @@ mod tests {
         let bug = BugId::new(12);
         let center = Vec2::new(4.0, 4.0);
         let target_line = TowerTargetLine::new(tower, bug, center, Vec2::new(6.0, 4.0));
-        let bugs = vec![BugPresentation::new(
+        let bugs = vec![BugPresentation::new_circle(
             bug,
             Vec2::new(7.0, 4.0),
             Color::from_rgb_u8(200, 100, 50),
