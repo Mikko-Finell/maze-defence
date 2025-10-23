@@ -61,6 +61,7 @@ impl SpriteAtlas {
                     source.path.display()
                 )
             })?;
+            ensure_valid_image_data(source.format, &bytes, &source.path)?;
             let texture = Texture2D::from_file_with_format(&bytes, Some(source.format));
             texture.set_filter(FilterMode::Nearest);
             Ok(texture)
@@ -271,6 +272,32 @@ fn ensure_required_sprites(textures: &HashMap<SpriteKey, Texture2D>) -> Result<(
     Ok(())
 }
 
+fn ensure_valid_image_data(format: ImageFormat, bytes: &[u8], path: &Path) -> Result<()> {
+    const PNG_SIGNATURE: &[u8; 8] = b"\x89PNG\r\n\x1a\n";
+    const GIT_LFS_POINTER_PREFIX: &[u8] = b"version https://git-lfs.github.com/spec/v1\n";
+
+    match format {
+        ImageFormat::Png => {
+            if bytes.starts_with(GIT_LFS_POINTER_PREFIX) {
+                bail!(
+                    "sprite file {} contains a Git LFS pointer. Fetch sprite assets with `git lfs pull` or run the CLI with `--visual-style primitives`.",
+                    path.display()
+                );
+            }
+
+            if bytes.len() < PNG_SIGNATURE.len() || &bytes[..PNG_SIGNATURE.len()] != PNG_SIGNATURE {
+                bail!(
+                    "sprite file {} is not a valid PNG (missing PNG signature)",
+                    path.display()
+                );
+            }
+        }
+        _ => {}
+    }
+
+    Ok(())
+}
+
 fn parse_sprite_key(name: &str) -> Result<SpriteKey> {
     match name {
         "TowerBase" => Ok(SpriteKey::TowerBase),
@@ -384,6 +411,32 @@ mod tests {
     fn image_format_detects_png() {
         let format = image_format_for(Path::new("base.png")).unwrap();
         assert_eq!(format, ImageFormat::Png);
+    }
+
+    #[test]
+    fn ensure_valid_image_detects_git_lfs_pointer() {
+        let data = b"version https://git-lfs.github.com/spec/v1\nobject";
+        let path = Path::new("assets/sprites/towers/base.png");
+        let error = ensure_valid_image_data(ImageFormat::Png, data, path).unwrap_err();
+        let message = error.to_string();
+        assert!(message.contains("Git LFS pointer"), "{message}");
+    }
+
+    #[test]
+    fn ensure_valid_image_detects_invalid_png_signature() {
+        let data = b"not a png";
+        let path = Path::new("assets/sprites/towers/base.png");
+        let error = ensure_valid_image_data(ImageFormat::Png, data, path).unwrap_err();
+        let message = error.to_string();
+        assert!(message.contains("not a valid PNG"), "{message}");
+    }
+
+    #[test]
+    fn ensure_valid_image_accepts_png_signature() {
+        let mut data = Vec::from(&b"\x89PNG\r\n\x1a\n"[..]);
+        data.extend_from_slice(&[0, 0, 0, 0]);
+        let path = Path::new("assets/sprites/towers/base.png");
+        assert!(ensure_valid_image_data(ImageFormat::Png, &data, path).is_ok());
     }
 
     #[test]

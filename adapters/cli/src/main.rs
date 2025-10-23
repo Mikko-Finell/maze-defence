@@ -349,7 +349,9 @@ fn main() -> Result<()> {
         Some(VsyncMode::Off) => MacroquadBackend::default().with_vsync(false),
         None => MacroquadBackend::default(),
     };
-    let backend = backend.with_show_fps(show_fps);
+    let backend = backend
+        .with_show_fps(show_fps)
+        .with_sprite_loading(args.visual_style == VisualStyle::Sprites);
 
     backend.run(presentation, move |dt, input, scene| {
         simulation.handle_input(input);
@@ -1256,6 +1258,7 @@ impl Simulation {
         self.builder_preview
     }
 
+    #[cfg(test)]
     fn visual_style(&self) -> VisualStyle {
         self.visual_style
     }
