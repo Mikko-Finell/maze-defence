@@ -285,23 +285,20 @@ fn ensure_valid_image_data(format: ImageFormat, bytes: &[u8], path: &Path) -> Re
     const PNG_SIGNATURE: &[u8; 8] = b"\x89PNG\r\n\x1a\n";
     const GIT_LFS_POINTER_PREFIX: &[u8] = b"version https://git-lfs.github.com/spec/v1\n";
 
-    match format {
-        ImageFormat::Png => {
-            if bytes.starts_with(GIT_LFS_POINTER_PREFIX) {
-                bail!(
-                    "sprite file {} contains a Git LFS pointer. Fetch sprite assets with `git lfs pull` or run the CLI with `--visual-style primitives`.",
-                    path.display()
-                );
-            }
-
-            if bytes.len() < PNG_SIGNATURE.len() || &bytes[..PNG_SIGNATURE.len()] != PNG_SIGNATURE {
-                bail!(
-                    "sprite file {} is not a valid PNG (missing PNG signature)",
-                    path.display()
-                );
-            }
+    if format == ImageFormat::Png {
+        if bytes.starts_with(GIT_LFS_POINTER_PREFIX) {
+            bail!(
+                "sprite file {} contains a Git LFS pointer. Fetch sprite assets with `git lfs pull` or run the CLI with `--visual-style primitives`.",
+                path.display()
+            );
         }
-        _ => {}
+
+        if bytes.len() < PNG_SIGNATURE.len() || &bytes[..PNG_SIGNATURE.len()] != PNG_SIGNATURE {
+            bail!(
+                "sprite file {} is not a valid PNG (missing PNG signature)",
+                path.display()
+            );
+        }
     }
 
     Ok(())

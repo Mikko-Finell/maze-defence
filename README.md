@@ -106,6 +106,10 @@ cargo run --bin maze-defence -- --visual-style primitives
 
 The flag defaults to `sprites` so new artwork can land without additional configuration, while still providing an explicit escape hatch for the primitive pipeline.
 
+## Sprite assets and manifest
+
+Sprite descriptors resolve to textures declared in [`assets/manifest.toml`](assets/manifest.toml). Fetch the binary art with `git lfs pull` after cloning so the Macroquad backend can load the textures referenced by each `SpriteKey`. When running in an environment without the sprite files, launch the game with `--visual-style primitives` to fall back to the legacy rectangles-and-circles renderer. See [`assets/README.md`](assets/README.md) for guidance on adding new art and recording licence information.
+
 ## Sharing layouts via the clipboard
 
 * Provide a layout string with `--layout` to rebuild the maze before the first frame renders. The simulation validates the
