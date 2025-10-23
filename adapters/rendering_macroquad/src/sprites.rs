@@ -87,13 +87,8 @@ impl SpriteAtlas {
             .get(&key)
             .unwrap_or_else(|| panic!("missing sprite {key:?} in atlas"));
 
-        let dest_size = MacroquadVec2::new(
-            texture.width() * params.scale.x,
-            texture.height() * params.scale.y,
-        );
-
         let draw_params = DrawTextureParams {
-            dest_size: Some(dest_size),
+            dest_size: Some(params.dest_size),
             rotation: params.rotation,
             pivot: Some(params.pivot),
             ..Default::default()
@@ -114,8 +109,8 @@ impl SpriteAtlas {
 pub(crate) struct DrawParams {
     /// Destination position in pixels.
     pub position: MacroquadVec2,
-    /// Scale factor applied to the sprite width and height.
-    pub scale: MacroquadVec2,
+    /// Destination size in pixels.
+    pub dest_size: MacroquadVec2,
     /// Rotation in radians around the pivot.
     pub rotation: f32,
     /// Normalised pivot in the range 0.0..=1.0.
@@ -129,16 +124,16 @@ impl DrawParams {
     pub(crate) fn new(position: MacroquadVec2) -> Self {
         Self {
             position,
-            scale: MacroquadVec2::new(1.0, 1.0),
+            dest_size: MacroquadVec2::new(1.0, 1.0),
             rotation: 0.0,
             pivot: MacroquadVec2::new(0.5, 0.5),
             tint: WHITE,
         }
     }
 
-    /// Updates the scale applied when drawing the sprite.
-    pub(crate) fn with_scale(mut self, scale: MacroquadVec2) -> Self {
-        self.scale = scale;
+    /// Overrides the destination size applied when drawing the sprite.
+    pub(crate) fn with_dest_size(mut self, dest_size: MacroquadVec2) -> Self {
+        self.dest_size = dest_size;
         self
     }
 
@@ -341,11 +336,11 @@ fn image_format_for(path: &Path) -> Result<ImageFormat> {
 fn assert_sprite_api_references() {
     let draw_fn: fn(&SpriteAtlas, SpriteKey, DrawParams) = SpriteAtlas::draw;
     let new_fn: fn(MacroquadVec2) -> DrawParams = DrawParams::new;
-    let scale_fn: fn(DrawParams, MacroquadVec2) -> DrawParams = DrawParams::with_scale;
+    let size_fn: fn(DrawParams, MacroquadVec2) -> DrawParams = DrawParams::with_dest_size;
     let rotation_fn: fn(DrawParams, f32) -> DrawParams = DrawParams::with_rotation;
     let pivot_fn: fn(DrawParams, MacroquadVec2) -> DrawParams = DrawParams::with_pivot;
     let tint_fn: fn(DrawParams, MacroquadColor) -> DrawParams = DrawParams::with_tint;
-    let _ = (draw_fn, new_fn, scale_fn, rotation_fn, pivot_fn, tint_fn);
+    let _ = (draw_fn, new_fn, size_fn, rotation_fn, pivot_fn, tint_fn);
 }
 
 #[cfg(test)]
