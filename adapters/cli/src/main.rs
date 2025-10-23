@@ -255,7 +255,19 @@ fn main() -> Result<()> {
     let args = CliArgs::parse();
     let show_fps = args.show_fps.enabled();
 
-    let (columns, rows) = if let Some(size) = args.grid_size {
+    let layout_snapshot = args
+        .layout
+        .as_deref()
+        .map(|layout| {
+            TowerLayoutSnapshot::decode(layout)
+                .map_err(|error| anyhow!("Failed to decode layout snapshot: {error}"))
+        })
+        .transpose()
+        .with_context(|| "failed to restore layout from --layout")?;
+
+    let (columns, rows) = if let Some(snapshot) = &layout_snapshot {
+        (snapshot.columns, snapshot.rows)
+    } else if let Some(size) = args.grid_size {
         size.into_dimensions()
     } else if let (Some(width), Some(height)) = (args.width, args.height) {
         (width, height)
@@ -273,9 +285,10 @@ fn main() -> Result<()> {
         bug_step_duration,
         bug_spawn_interval,
     );
-    if let Some(layout) = args.layout.as_deref() {
+    if let Some(snapshot) = layout_snapshot.as_ref() {
         simulation
-            .apply_layout_string(layout)
+            .apply_layout_snapshot(snapshot)
+            .map_err(anyhow::Error::from)
             .with_context(|| "failed to restore layout from --layout")?;
     }
     let bootstrap = Bootstrap;
@@ -569,14 +582,6 @@ impl Simulation {
             cells_per_tile: query::cells_per_tile(&self.world),
             towers,
         }
-    }
-
-    fn apply_layout_string(&mut self, text: &str) -> Result<()> {
-        let snapshot = TowerLayoutSnapshot::decode(text)
-            .map_err(|error| anyhow!("Failed to decode layout snapshot: {error}"))?;
-        self.apply_layout_snapshot(&snapshot)
-            .map_err(|error| anyhow!(error.to_string()))?;
-        Ok(())
     }
 
     fn apply_layout_snapshot(

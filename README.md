@@ -98,9 +98,11 @@ cargo run --bin maze-defence -- --show-fps on
 ## Sharing layouts via the clipboard
 
 * Provide a layout string with `--layout` to rebuild the maze before the first frame renders. The simulation validates the
-  payload, rebuilds the maze, and propagates any structural mismatches as a CLI error. 【F:adapters/cli/src/main.rs†L114-L119】【F:adapters/cli/src/main.rs†L340-L372】
-* Layout strings begin with `maze:v1:CxR` followed by a base64 payload that records the grid configuration and every tower.
-  Share the full string (including the prefix) to reliably reproduce a layout. 【F:adapters/cli/src/layout_transfer.rs†L9-L83】
+  payload, rebuilds the maze, and the `CxR` segment overrides any CLI grid sizing so the snapshot's dimensions always win.
+  【F:adapters/cli/src/main.rs†L253-L293】
+* Layout strings begin with `maze:v2:CxR` and carry a URL-safe base64 payload containing varint-encoded grid metadata and
+  tower records; legacy `maze:v1` JSON payloads remain accepted for backwards compatibility. Share the full string
+  (including the prefix) to reliably reproduce a layout. 【F:adapters/cli/src/layout_transfer.rs†L38-L249】
 * Entering or leaving build mode automatically prints the latest layout snapshot to stdout, making it easy to capture
-  incremental edits without relying on the clipboard. 【F:adapters/cli/src/main.rs†L420-L439】
-* Whenever the process exits it prints the most recent snapshot so you can recover the layout after a run. 【F:adapters/cli/src/main.rs†L1250-L1258】
+  incremental edits without relying on the clipboard. 【F:adapters/cli/src/main.rs†L702-L714】
+* Whenever the process exits it prints the most recent snapshot so you can recover the layout after a run. 【F:adapters/cli/src/main.rs†L1270-L1272】
