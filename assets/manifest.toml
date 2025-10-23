@@ -1,0 +1,20 @@
+# Maze Defence sprite manifest
+#
+# This file maps `SpriteKey` variants to on-disk asset paths relative to the
+# repository root.  Rendering adapters load sprites deterministically at startup
+# using this manifest, so the mapping must remain stable.
+#
+# Future extensions can add metadata fields (e.g. texture format, animation
+# frames) alongside the existing paths.  Keep comments descriptive so reviewers
+# can validate that the manifest still aligns with the source art committed in
+# Git.
+
+version = 1
+
+[sprites]
+# Static tower footprint rendered beneath turrets.
+TowerBase = "sprites/towers/base.png"
+# Rotating turret sprite that shares the tower centre pivot.
+TowerTurret = "sprites/towers/turret.png"
+# Default bug body sprite.
+BugBody = "sprites/bugs/bug.png"

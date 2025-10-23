@@ -29,6 +29,7 @@ The CLI exposes the following arguments:
 | `--vsync on\|off` | Requests enabling (`on`) or disabling (`off`) vertical sync. | Platform default |
 | `--layout LAYOUT` | Restores a serialized tower layout before launching the renderer. | None |
 | `--show-fps on\|off` | Prints per-second frame timing metrics to stdout when set to `on`. | `off` |
+| `--visual-style sprites\|primitives` | Chooses between sprite-based visuals (`sprites`) and the legacy primitive renderer (`primitives`). | `sprites` |
 
 ## Configuring the grid size
 
@@ -94,6 +95,16 @@ Enable `--show-fps on` to log per-second frame timing breakdowns to the terminal
 ```bash
 cargo run --bin maze-defence -- --show-fps on
 ```
+
+## Selecting the visual style
+
+Use `--visual-style primitives` to retain the existing rectangle-and-circle renderer when smoke testing or comparing outputs:
+
+```bash
+cargo run --bin maze-defence -- --visual-style primitives
+```
+
+The flag defaults to `sprites` so new artwork can land without additional configuration, while still providing an explicit escape hatch for the primitive pipeline.
 
 ## Sharing layouts via the clipboard
 

@@ -117,6 +117,28 @@ impl SpriteInstance {
         }
     }
 
+    /// Creates a square sprite descriptor using the provided side length.
+    ///
+    /// The helper accepts a `Vec2` so callers can derive the square size from
+    /// existing rectangle math without unpacking intermediates. When the
+    /// components differ slightly due to floating-point rounding the larger
+    /// component is chosen, guaranteeing the sprite fully covers the intended
+    /// footprint while keeping the result deterministic.
+    #[must_use]
+    pub fn square(sprite: SpriteKey, size_cells: Vec2) -> Self {
+        let width = size_cells.x.abs();
+        let height = size_cells.y.abs();
+        if (width - height).abs() > f32::EPSILON {
+            debug_assert!(
+                (width - height).abs() <= f32::EPSILON,
+                "square expects equal width and height (received {width} x {height})",
+            );
+        }
+
+        let side = width.max(height);
+        Self::new(sprite, Vec2::splat(side))
+    }
+
     /// Overrides the pivot used when rotating the sprite.
     #[must_use]
     pub fn with_pivot(mut self, pivot: Vec2) -> Self {
@@ -875,9 +897,99 @@ impl fmt::Display for RenderingError {
 
 impl Error for RenderingError {}
 
+/// Helpers that construct sprite visuals in a deterministic manner.
+pub mod visuals {
+    use super::{BugVisual, CellRect, SpriteInstance, SpriteKey, TowerTargetLine, TowerVisual};
+    use glam::Vec2;
+    use std::f32::consts::PI;
+
+    /// Builds a sprite-based tower visual from a `CellRect` footprint.
+    ///
+    /// The base sprite inherits the footprint dimensions directly while the
+    /// turret sprite scales to the smaller axis so multi-cell towers retain a
+    /// centred turret.  Both sprites align around the footprint centre to keep
+    /// downstream rendering math straightforward.
+    #[must_use]
+    pub fn tower_sprite_visual(region: CellRect, heading_radians: f32) -> TowerVisual {
+        let size = region.size();
+        let base_size = Vec2::new(size.width() as f32, size.height() as f32);
+        let centre_offset = Vec2::new(base_size.x * 0.5, base_size.y * 0.5);
+
+        let base =
+            SpriteInstance::new(SpriteKey::TowerBase, base_size).with_offset(Some(centre_offset));
+
+        let turret_side = turret_side_length(base_size);
+        let turret = SpriteInstance::square(SpriteKey::TowerTurret, Vec2::splat(turret_side))
+            .with_offset(Some(centre_offset))
+            .with_rotation(normalise_radians(heading_radians));
+
+        TowerVisual::Sprite { base, turret }
+    }
+
+    /// Builds a sprite-based bug visual anchored to the bug's owning cell.
+    #[must_use]
+    pub fn bug_sprite_visual(_column: u32, _row: u32, key: SpriteKey) -> BugVisual {
+        let sprite = SpriteInstance::square(key, Vec2::splat(1.0));
+        BugVisual::Sprite(sprite)
+    }
+
+    /// Derives the turret heading from a `TowerTargetLine` using `atan2`.
+    #[must_use]
+    pub fn heading_from_target_line(line: &TowerTargetLine) -> f32 {
+        let delta = line.to - line.from;
+        if delta.length_squared() <= f32::EPSILON {
+            return 0.0;
+        }
+
+        let angle = delta.y.atan2(delta.x);
+        angle.clamp(-PI, PI)
+    }
+
+    fn normalise_radians(angle: f32) -> f32 {
+        if !angle.is_finite() {
+            return 0.0;
+        }
+
+        let two_pi = 2.0 * PI;
+        if two_pi <= f32::EPSILON {
+            return angle.clamp(-PI, PI);
+        }
+
+        let mut wrapped = angle % two_pi;
+        if wrapped > PI {
+            wrapped -= two_pi;
+        } else if wrapped < -PI {
+            wrapped += two_pi;
+        }
+
+        wrapped.clamp(-PI, PI)
+    }
+
+    fn turret_side_length(base_size: Vec2) -> f32 {
+        let width = base_size.x.abs();
+        let height = base_size.y.abs();
+
+        if width <= f32::EPSILON && height <= f32::EPSILON {
+            return 0.0;
+        }
+
+        if width <= f32::EPSILON {
+            return height;
+        }
+        if height <= f32::EPSILON {
+            return width;
+        }
+
+        width.min(height)
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use super::visuals;
     use super::*;
+    use maze_defence_core::CellRectSize;
+    use std::f32::consts::{FRAC_PI_2, PI};
 
     #[test]
     fn tile_grid_creation_accepts_positive_cells_per_tile() {
@@ -900,6 +1012,75 @@ mod tests {
         assert_eq!(bug.row, 4);
         let expected = Vec2::new(3.25, 4.75);
         assert!((bug.position() - expected).length() <= f32::EPSILON);
+    }
+
+    #[test]
+    fn sprite_instance_square_preserves_defaults() {
+        let sprite = SpriteInstance::square(SpriteKey::BugBody, Vec2::splat(1.25));
+
+        assert_eq!(sprite.sprite, SpriteKey::BugBody);
+        assert_eq!(sprite.size, Vec2::splat(1.25));
+        assert_eq!(sprite.pivot, Vec2::splat(0.5));
+        assert_eq!(sprite.rotation_radians, 0.0);
+        assert_eq!(sprite.offset, None);
+    }
+
+    #[test]
+    fn tower_sprite_visual_builds_expected_descriptors() {
+        let region = CellRect::from_origin_and_size(CellCoord::new(2, 4), CellRectSize::new(3, 2));
+        let heading = PI + FRAC_PI_2;
+
+        let visual = visuals::tower_sprite_visual(region, heading);
+        let TowerVisual::Sprite { base, turret } = visual else {
+            panic!("expected sprite visual");
+        };
+
+        assert_eq!(base.sprite, SpriteKey::TowerBase);
+        assert_eq!(base.size, Vec2::new(3.0, 2.0));
+        assert_eq!(base.offset, Some(Vec2::new(1.5, 1.0)));
+
+        assert_eq!(turret.sprite, SpriteKey::TowerTurret);
+        assert_eq!(turret.size, Vec2::splat(2.0));
+        assert_eq!(turret.offset, Some(Vec2::new(1.5, 1.0)));
+        assert!((turret.rotation_radians + FRAC_PI_2).abs() <= f32::EPSILON);
+    }
+
+    #[test]
+    fn heading_from_target_line_matches_atan2() {
+        let line = TowerTargetLine::new(
+            TowerId::new(11),
+            BugId::new(13),
+            Vec2::new(1.0, 1.0),
+            Vec2::new(3.0, 4.0),
+        );
+
+        let heading = visuals::heading_from_target_line(&line);
+        let expected = (line.to.y - line.from.y).atan2(line.to.x - line.from.x);
+
+        assert!((heading - expected).abs() <= f32::EPSILON);
+    }
+
+    #[test]
+    fn heading_from_target_line_handles_degenerate_segment() {
+        let line = TowerTargetLine::new(
+            TowerId::new(7),
+            BugId::new(9),
+            Vec2::new(2.0, 2.0),
+            Vec2::new(2.0, 2.0),
+        );
+
+        assert_eq!(visuals::heading_from_target_line(&line), 0.0);
+    }
+
+    #[test]
+    fn bug_sprite_visual_wraps_key() {
+        let visual = visuals::bug_sprite_visual(5, 6, SpriteKey::BugBody);
+        let BugVisual::Sprite(instance) = visual else {
+            panic!("expected sprite bug visual");
+        };
+
+        assert_eq!(instance.sprite, SpriteKey::BugBody);
+        assert_eq!(instance.size, Vec2::splat(1.0));
     }
 
     #[test]

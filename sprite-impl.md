@@ -33,7 +33,7 @@ primitive visuals.
 
 # 2) Descriptor helpers & orientation math (`adapters/rendering`)
 
-**Status:** TODO
+**Status:** DONE
 
 **Goal:** Provide deterministic helpers that systems/adapters can call to build
 sprite descriptors without duplicating geometry math or rotation logic.
@@ -53,7 +53,7 @@ rounding. Downstream crates still compile (helpers are additive only).
 
 # 3) Asset manifest & Git plumbing (`assets/` + repo root)
 
-**Status:** TODO
+**Status:** DONE
 
 **Goal:** Stand up the repository structure that backs `SpriteKey` values with
 on-disk assets and ensures Git handles binaries deterministically.
@@ -70,11 +70,13 @@ on-disk assets and ensures Git handles binaries deterministically.
   the manifest editing process.
 
 **Exit checks:** `git lfs track` (if used) reports the new patterns, and the repo
-builds/tests unchanged since no code depends on the manifest yet.
+builds/tests unchanged since no code depends on the manifest yet. Placeholder
+README files, a versioned manifest, and Git LFS rules now live alongside the
+asset directories so future commits can drop in art without structural churn.
 
 # 4) Visual style configuration (`adapters/cli`)
 
-**Status:** TODO
+**Status:** DONE
 
 **Goal:** Allow the CLI adapter to request either primitive or sprite visuals so
 feature flags and fallback paths stay easy to exercise.
@@ -93,7 +95,7 @@ before.
 
 # 5) Scene population upgrade (`adapters/cli::Simulation`)
 
-**Status:** TODO
+**Status:** DONE
 
 **Goal:** Emit sprite-aware visuals from the scene population path while keeping
 primitive fallbacks available.
