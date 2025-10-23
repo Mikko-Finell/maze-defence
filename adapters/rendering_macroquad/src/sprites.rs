@@ -63,7 +63,7 @@ impl SpriteAtlas {
             })?;
             ensure_valid_image_data(source.format, &bytes, &source.path)?;
             let texture = Texture2D::from_file_with_format(&bytes, Some(source.format));
-            texture.set_filter(FilterMode::Nearest);
+            texture.set_filter(FilterMode::Linear);
             Ok(texture)
         })?;
 
