@@ -107,9 +107,7 @@ pub fn push_projectiles(
         let direction = to - from;
         let position = if progress <= 0.0 {
             from
-        } else if progress >= 1.0 {
-            to
-        } else if direction.length_squared() <= f32::EPSILON {
+        } else if progress >= 1.0 || direction.length_squared() <= f32::EPSILON {
             to
         } else {
             from + direction * progress

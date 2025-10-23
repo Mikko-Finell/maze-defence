@@ -145,7 +145,7 @@ fn bugs_progress_despite_distant_blockers() {
         .find(|bug| bug.id == BugId::new(1))
         .expect("trailing bug missing");
     assert!(
-        front_bug.cell.row() >= trailing_bug.cell.row() + 1,
+        front_bug.cell.row() > trailing_bug.cell.row(),
         "expected leading bug to remain ahead"
     );
 
