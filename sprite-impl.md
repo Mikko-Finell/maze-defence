@@ -119,7 +119,7 @@ previous frames pixel-for-pixel.
 
 # 6) Macroquad sprite module & state (`adapters/rendering_macroquad`)
 
-**Status:** TODO
+**Status:** DONE
 
 **Goal:** Teach the Macroquad backend how to load sprite assets once and retain
 per-frame orientation state required for smooth turret rotation.
