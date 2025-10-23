@@ -1013,12 +1013,26 @@ fn sprite_draw_parameters(
         metrics.offset_y + anchor_cells.y * metrics.cell_step,
     );
 
-    let pivot = MacroquadVec2::new(
+    debug_assert!(
+        instance.pivot.x.is_finite() && instance.pivot.y.is_finite(),
+        "sprite pivots must be finite values"
+    );
+    debug_assert!(
+        (0.0..=1.0).contains(&instance.pivot.x) && (0.0..=1.0).contains(&instance.pivot.y),
+        "sprite pivots must be normalised (received {:?})",
+        instance.pivot
+    );
+
+    let pivot_offset = MacroquadVec2::new(
         dest_size.x * instance.pivot.x,
         dest_size.y * instance.pivot.y,
     );
 
-    let position = MacroquadVec2::new(anchor_pixels.x - pivot.x, anchor_pixels.y - pivot.y);
+    let position = MacroquadVec2::new(
+        anchor_pixels.x - pivot_offset.x,
+        anchor_pixels.y - pivot_offset.y,
+    );
+    let pivot = anchor_pixels;
     let scale = MacroquadVec2::new(dest_size.x / texture_size.x, dest_size.y / texture_size.y);
 
     if !scale.x.is_finite() || !scale.y.is_finite() {
@@ -1555,14 +1569,15 @@ mod tests {
             metrics.offset_x + anchor_cells.x * metrics.cell_step,
             metrics.offset_y + anchor_cells.y * metrics.cell_step,
         );
-        let expected_pivot = MacroquadVec2::new(
+        let pivot_offset = MacroquadVec2::new(
             dest_size.x * instance.pivot.x,
             dest_size.y * instance.pivot.y,
         );
         let expected_position = MacroquadVec2::new(
-            anchor_pixels.x - expected_pivot.x,
-            anchor_pixels.y - expected_pivot.y,
+            anchor_pixels.x - pivot_offset.x,
+            anchor_pixels.y - pivot_offset.y,
         );
+        let expected_pivot = anchor_pixels;
         let expected_scale =
             MacroquadVec2::new(dest_size.x / texture_size.x, dest_size.y / texture_size.y);
 

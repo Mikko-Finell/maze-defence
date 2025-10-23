@@ -162,7 +162,7 @@ exercise both sprite and primitive branches.
 
 # 8) Determinism, tests & documentation
 
-**Status:** TODO
+**Status:** DONE
 
 **Goal:** Lock in the new behaviour with deterministic coverage and contributor
 guidance.
