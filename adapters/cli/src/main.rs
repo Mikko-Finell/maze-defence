@@ -18,20 +18,19 @@ use std::{
     time::{Duration, Instant},
 };
 
-use anyhow::Result;
-use arboard::{Clipboard, Error as ClipboardError};
+use anyhow::{anyhow, Context, Result};
 use clap::{Parser, ValueEnum};
 use glam::Vec2;
-use layout_transfer::{TowerLayoutSnapshot, TowerLayoutTower, SNAPSHOT_HEADER_WITH_DELIMITER};
+use layout_transfer::{TowerLayoutSnapshot, TowerLayoutTower};
 use maze_defence_core::{
     BugId, CellCoord, CellPointHalf, CellRect, CellRectSize, Command, Event, PlacementError,
     PlayMode, ProjectileSnapshot, RemovalError, TileCoord, TowerCooldownView, TowerId, TowerKind,
     TowerTarget,
 };
 use maze_defence_rendering::{
-    AdapterAction, BugHealthPresentation, BugPresentation, Color, FrameInput,
-    FrameSimulationBreakdown, Presentation, RenderingBackend, Scene, SceneProjectile, SceneTower,
-    SceneWall, TileGridPresentation, TileSpacePosition, TowerInteractionFeedback, TowerPreview,
+    BugHealthPresentation, BugPresentation, Color, FrameInput, FrameSimulationBreakdown,
+    Presentation, RenderingBackend, Scene, SceneProjectile, SceneTower, SceneWall,
+    TileGridPresentation, TileSpacePosition, TowerInteractionFeedback, TowerPreview,
     TowerTargetLine,
 };
 use maze_defence_rendering_macroquad::MacroquadBackend;
@@ -177,6 +176,9 @@ struct CliArgs {
     /// Requests that the renderer either synchronise presentation with the display refresh rate or run uncapped.
     #[arg(long, value_enum, value_name = "on|off")]
     vsync: Option<VsyncMode>,
+    /// Restores the provided layout snapshot before the first frame renders.
+    #[arg(long, value_name = "LAYOUT")]
+    layout: Option<String>,
 }
 
 /// CLI argument controlling whether vertical sync is requested from the rendering backend.
@@ -250,6 +252,11 @@ fn main() -> Result<()> {
         bug_step_duration,
         bug_spawn_interval,
     );
+    if let Some(layout) = args.layout.as_deref() {
+        simulation
+            .apply_layout_string(layout)
+            .with_context(|| "failed to restore layout from --layout")?;
+    }
     let bootstrap = Bootstrap;
     let (banner, grid_scene, wall_color) = {
         let world = simulation.world();
@@ -319,7 +326,6 @@ struct Simulation {
     pending_events: Vec<Event>,
     scratch_commands: Vec<Command>,
     queued_commands: Vec<Command>,
-    pending_adapter_actions: Vec<AdapterAction>,
     pending_input: FrameInput,
     builder_preview: Option<BuilderPlacementPreview>,
     tower_feedback: Option<TowerInteractionFeedback>,
@@ -329,7 +335,7 @@ struct Simulation {
     bug_motions: HashMap<BugId, BugMotion>,
     cells_per_tile: u32,
     last_advance_profile: AdvanceProfile,
-    pending_layout_verification: Option<usize>,
+    last_announced_play_mode: PlayMode,
     #[cfg(test)]
     last_frame_events: Vec<Event>,
 }
@@ -340,6 +346,7 @@ enum LayoutImportError {
     RowMismatch { expected: u32, observed: u32 },
     CellsPerTileMismatch { expected: u32, observed: u32 },
     TileLengthMismatch { expected: f32, observed: f32 },
+    RestorationMismatch { expected: usize, observed: usize },
 }
 
 impl fmt::Display for LayoutImportError {
@@ -360,6 +367,10 @@ impl fmt::Display for LayoutImportError {
             Self::TileLengthMismatch { expected, observed } => write!(
                 f,
                 "Layout was authored with tile length {observed} but the map is configured for {expected}."
+            ),
+            Self::RestorationMismatch { expected, observed } => write!(
+                f,
+                "Restored {observed} towers but the layout specified {expected}."
             ),
         }
     }
@@ -461,6 +472,7 @@ impl Simulation {
             &mut pending_events,
         );
 
+        let initial_play_mode = query::play_mode(&world);
         let mut simulation = Self {
             world,
             builder: TowerBuilder::default(),
@@ -474,7 +486,6 @@ impl Simulation {
             pending_events,
             scratch_commands: Vec::new(),
             queued_commands: Vec::new(),
-            pending_adapter_actions: Vec::new(),
             pending_input: FrameInput::default(),
             builder_preview: None,
             tower_feedback: None,
@@ -484,13 +495,13 @@ impl Simulation {
             bug_motions: HashMap::new(),
             cells_per_tile,
             last_advance_profile: AdvanceProfile::default(),
-            pending_layout_verification: None,
+            last_announced_play_mode: initial_play_mode,
             #[cfg(test)]
             last_frame_events: Vec::new(),
         };
         let _ = simulation.process_pending_events(None, TowerBuilderInput::default());
         simulation.builder_preview = simulation.compute_builder_preview();
-        simulation.try_initial_clipboard_layout();
+        simulation.last_announced_play_mode = query::play_mode(&simulation.world);
         simulation
     }
 
@@ -499,17 +510,6 @@ impl Simulation {
     }
 
     fn handle_input(&mut self, input: FrameInput) {
-        if input.copy_tower_layout {
-            let snapshot = self.capture_layout_snapshot();
-            let encoded = snapshot.encode();
-            self.pending_adapter_actions
-                .push(AdapterAction::CopyLayout { contents: encoded });
-        }
-
-        if let Some(text) = input.paste_tower_layout_text.as_deref() {
-            self.handle_layout_paste_text(text, false);
-        }
-
         if input.mode_toggle {
             let current_mode = query::play_mode(&self.world);
             let next_mode = match current_mode {
@@ -522,12 +522,11 @@ impl Simulation {
 
         self.pending_input = FrameInput {
             mode_toggle: false,
-            copy_tower_layout: false,
-            paste_tower_layout_text: None,
             cursor_world_space: input.cursor_world_space,
             cursor_tile_space: input.cursor_tile_space,
             confirm_action: input.confirm_action,
             remove_action: input.remove_action,
+            ..FrameInput::default()
         };
     }
 
@@ -550,34 +549,29 @@ impl Simulation {
         }
     }
 
-    fn handle_layout_paste_text(&mut self, text: &str, apply_immediately: bool) {
-        let snapshot = match TowerLayoutSnapshot::decode(text) {
-            Ok(snapshot) => snapshot,
-            Err(error) => {
-                self.pending_adapter_actions
-                    .push(AdapterAction::DisplayError {
-                        message: format!("Failed to decode layout snapshot: {error}"),
-                    });
-                return;
-            }
-        };
+    fn apply_layout_string(&mut self, text: &str) -> Result<()> {
+        let snapshot = TowerLayoutSnapshot::decode(text)
+            .map_err(|error| anyhow!("Failed to decode layout snapshot: {error}"))?;
+        self.apply_layout_snapshot(&snapshot)
+            .map_err(|error| anyhow!(error.to_string()))?;
+        Ok(())
+    }
 
+    fn apply_layout_snapshot(
+        &mut self,
+        snapshot: &TowerLayoutSnapshot,
+    ) -> Result<(), LayoutImportError> {
         let expected_towers = snapshot.towers.len();
-        match self.queue_layout_import(&snapshot) {
-            Ok(()) => {
-                self.pending_layout_verification = Some(expected_towers);
-                if apply_immediately {
-                    self.process_layout_commands_immediately();
-                    self.verify_layout_import();
-                }
-            }
-            Err(error) => {
-                self.pending_adapter_actions
-                    .push(AdapterAction::DisplayError {
-                        message: error.to_string(),
-                    });
-            }
+        self.queue_layout_import(snapshot)?;
+        self.process_layout_commands_immediately();
+        let actual = query::towers(&self.world).iter().count();
+        if actual != expected_towers {
+            return Err(LayoutImportError::RestorationMismatch {
+                expected: expected_towers,
+                observed: actual,
+            });
         }
+        Ok(())
     }
 
     fn queue_layout_import(
@@ -651,43 +645,7 @@ impl Simulation {
         let events_profile = self.process_pending_events(builder_preview, builder_input);
         self.builder_preview = self.compute_builder_preview();
         self.last_advance_profile = AdvanceProfile::new(Duration::ZERO, events_profile.pathfinding);
-    }
-
-    fn verify_layout_import(&mut self) {
-        if let Some(expected) = self.pending_layout_verification.take() {
-            let actual = query::towers(&self.world).iter().count();
-            if actual != expected {
-                self.pending_adapter_actions
-                    .push(AdapterAction::DisplayError {
-                        message: format!(
-                            "Restored {actual} towers but the layout specified {expected}."
-                        ),
-                    });
-            }
-        }
-    }
-
-    fn try_initial_clipboard_layout(&mut self) {
-        let clipboard_text = match read_clipboard_text() {
-            Ok(Some(text)) => text,
-            Ok(None) => return,
-            Err(error) => {
-                self.pending_adapter_actions
-                    .push(AdapterAction::DisplayError {
-                        message: format!("Failed to access clipboard: {error}"),
-                    });
-                return;
-            }
-        };
-
-        if !clipboard_text
-            .trim_start()
-            .starts_with(SNAPSHOT_HEADER_WITH_DELIMITER)
-        {
-            return;
-        }
-
-        self.handle_layout_paste_text(clipboard_text.trim(), true);
+        self.last_announced_play_mode = query::play_mode(&self.world);
     }
 
     fn advance(&mut self, dt: Duration) {
@@ -711,7 +669,23 @@ impl Simulation {
         self.builder_preview = self.compute_builder_preview();
         self.last_advance_profile =
             AdvanceProfile::new(frame_start.elapsed(), events_profile.pathfinding);
-        self.verify_layout_import();
+        self.announce_builder_mode_if_changed();
+    }
+
+    fn announce_builder_mode_if_changed(&mut self) {
+        let current_mode = query::play_mode(&self.world);
+        if current_mode != self.last_announced_play_mode {
+            let previous_mode = self.last_announced_play_mode;
+            self.last_announced_play_mode = current_mode;
+            if cfg!(test) {
+                return;
+            }
+            if current_mode == PlayMode::Builder || previous_mode == PlayMode::Builder {
+                let snapshot = self.capture_layout_snapshot();
+                let encoded = snapshot.encode();
+                println!("{encoded}");
+            }
+        }
     }
 
     fn advance_bug_motions(&mut self, dt: Duration) {
@@ -829,9 +803,6 @@ impl Simulation {
             None
         };
         scene.tower_feedback = self.tower_feedback;
-        scene
-            .pending_adapter_actions
-            .extend(self.pending_adapter_actions.drain(..));
     }
 
     fn process_pending_events(
@@ -1260,15 +1231,6 @@ impl Simulation {
             }
             world::apply(&mut self.world, command, &mut self.pending_events);
         }
-    }
-}
-
-fn read_clipboard_text() -> Result<Option<String>, ClipboardError> {
-    let mut clipboard = Clipboard::new()?;
-    match clipboard.get_text() {
-        Ok(text) => Ok(Some(text)),
-        Err(ClipboardError::ContentNotAvailable) => Ok(None),
-        Err(error) => Err(error),
     }
 }
 

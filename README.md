@@ -27,6 +27,7 @@ The CLI exposes the following arguments:
 | `--bug-step-ms MILLISECONDS` | Sets how long each bug waits before taking another step. Accepts values from `1` to `60_000`. | `250` |
 | `--bug-spawn-interval-ms MILLISECONDS` | Controls the interval between automatic spawns while in attack mode. Accepts values from `1` to `60_000`. | `1_000` |
 | `--vsync on\|off` | Requests enabling (`on`) or disabling (`off`) vertical sync. | Platform default |
+| `--layout LAYOUT` | Restores a serialized tower layout before launching the renderer. | None |
 
 ## Configuring the grid size
 
@@ -86,15 +87,12 @@ The renderer requests the platform's default swap interval when no flag is provi
 cargo run --bin maze-defence -- --vsync off
 ```
 
-## Sharing layouts via the clipboard
+## Serialising layouts
 
-* Press <kbd>Ctrl</kbd>+<kbd>C</kbd> to serialise the current tower layout. The snapshot is written to the
-  clipboard and echoed to the terminal immediately so you can capture it even when clipboard access is unavailable. 【F:adapters/rendering_macroquad/src/lib.rs†L399-L449】【F:adapters/rendering_macroquad/src/lib.rs†L232-L246】
-* Press <kbd>Ctrl</kbd>+<kbd>V</kbd> to restore a layout from the clipboard. The simulation validates the
-  payload, rebuilds the maze, and surfaces any failures through a visible adapter error. 【F:adapters/cli/src/main.rs†L503-L583】
+* Provide a layout string with `--layout` to rebuild the maze before the first frame renders. The simulation validates the
+  payload, rebuilds the maze, and propagates any structural mismatches as a CLI error. 【F:adapters/cli/src/main.rs†L114-L119】【F:adapters/cli/src/main.rs†L340-L372】
 * Layout strings begin with `maze:v1:CxR` followed by a base64 payload that records the grid configuration and every tower.
   Share the full string (including the prefix) to reliably reproduce a layout. 【F:adapters/cli/src/layout_transfer.rs†L9-L83】
-* When the game boots it inspects the clipboard once. If the payload starts with `maze:v1:` it hydrates the maze automatically
-  before the first frame; other clipboard contents are ignored. 【F:adapters/cli/src/main.rs†L672-L693】
-* Whenever the process exits it prints the latest snapshot to stdout so you can recover the layout after a run even if you never
-  triggered a manual copy. 【F:adapters/cli/src/main.rs†L1277-L1285】
+* Entering or leaving build mode automatically prints the latest layout snapshot to stdout, making it easy to capture
+  incremental edits without relying on the clipboard. 【F:adapters/cli/src/main.rs†L420-L439】
+* Whenever the process exits it prints the most recent snapshot so you can recover the layout after a run. 【F:adapters/cli/src/main.rs†L1250-L1258】

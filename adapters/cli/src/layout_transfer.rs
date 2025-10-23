@@ -11,9 +11,6 @@ const SNAPSHOT_VERSION: &str = "v1";
 
 /// Identifier prefix emitted before the encoded snapshot payload.
 pub(crate) const SNAPSHOT_HEADER: &str = "maze:v1";
-/// Identifier prefix including the trailing delimiter for quick comparisons.
-pub(crate) const SNAPSHOT_HEADER_WITH_DELIMITER: &str = "maze:v1:";
-
 /// Delimiter used to separate the prefix, grid dimensions and payload.
 const FIELD_DELIMITER: char = ':';
 
@@ -197,7 +194,7 @@ mod tests {
         };
 
         let encoded = snapshot.encode();
-        assert!(encoded.starts_with(&format!("{SNAPSHOT_HEADER_WITH_DELIMITER}12x8:")));
+        assert!(encoded.starts_with(&format!("{SNAPSHOT_HEADER}:12x8:")));
 
         let decoded = TowerLayoutSnapshot::decode(&encoded).expect("snapshot decodes");
         assert_eq!(snapshot, decoded);
@@ -224,7 +221,7 @@ mod tests {
         };
 
         let encoded = snapshot.encode();
-        assert!(encoded.starts_with(&format!("{SNAPSHOT_HEADER_WITH_DELIMITER}20x15:")));
+        assert!(encoded.starts_with(&format!("{SNAPSHOT_HEADER}:20x15:")));
 
         let decoded = TowerLayoutSnapshot::decode(&encoded).expect("snapshot decodes");
         assert_eq!(snapshot, decoded);
