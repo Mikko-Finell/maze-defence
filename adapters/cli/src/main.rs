@@ -13,7 +13,6 @@ mod layout_transfer;
 
 use std::{
     collections::HashMap,
-    f32::consts::FRAC_PI_2,
     fmt,
     str::FromStr,
     time::{Duration, Instant},
@@ -786,7 +785,7 @@ impl Simulation {
 
     fn populate_scene(&mut self, scene: &mut Scene) {
         let use_sprite_visuals = self.visual_style == VisualStyle::Sprites;
-        const DEFAULT_TURRET_HEADING: f32 = -FRAC_PI_2;
+        const DEFAULT_TURRET_HEADING: f32 = 0.0;
 
         let wall_view = query::walls(&self.world);
         scene.walls.clear();
@@ -1326,7 +1325,6 @@ mod tests {
     use glam::Vec2;
     use maze_defence_core::{BugColor, BugId, Health, ProjectileId};
     use maze_defence_rendering::{BugVisual, SpriteKey, TowerVisual};
-    use std::f32::consts::FRAC_PI_2;
 
     fn new_simulation_with_style(style: VisualStyle) -> Simulation {
         Simulation::new(
@@ -1578,7 +1576,7 @@ mod tests {
             TowerVisual::Sprite { base, turret } => {
                 assert_eq!(base.sprite, SpriteKey::TowerBase);
                 assert_eq!(turret.sprite, SpriteKey::TowerTurret);
-                assert!((turret.rotation_radians + FRAC_PI_2).abs() <= f32::EPSILON);
+                assert!(turret.rotation_radians.abs() <= f32::EPSILON);
             }
             TowerVisual::PrimitiveRect => {
                 panic!("sprite tower visual expected when sprites enabled");

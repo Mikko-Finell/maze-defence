@@ -34,6 +34,7 @@ use maze_defence_rendering::{
 };
 use std::{
     collections::{HashMap, VecDeque},
+    f32::consts::{FRAC_PI_2, PI},
     sync::mpsc,
     time::{Duration, Instant},
 };
@@ -942,6 +943,26 @@ fn draw_primitive_tower(
     );
 }
 
+fn normalise_radians(angle: f32) -> f32 {
+    if !angle.is_finite() {
+        return 0.0;
+    }
+
+    let two_pi = 2.0 * PI;
+    if two_pi <= f32::EPSILON {
+        return angle.clamp(-PI, PI);
+    }
+
+    let mut wrapped = angle % two_pi;
+    if wrapped > PI {
+        wrapped -= two_pi;
+    } else if wrapped < -PI {
+        wrapped += two_pi;
+    }
+
+    wrapped.clamp(-PI, PI)
+}
+
 fn resolve_turret_heading(
     tower: TowerId,
     turret: &SpriteInstance,
@@ -949,11 +970,11 @@ fn resolve_turret_heading(
     turret_headings: &mut HashMap<TowerId, f32>,
 ) -> f32 {
     if let Some(line) = tower_targets.iter().find(|line| line.tower == tower) {
-        let heading = heading_from_target_line(line);
+        let heading = normalise_radians(heading_from_target_line(line) + FRAC_PI_2);
         let _ = turret_headings.insert(tower, heading);
         heading
     } else {
-        let fallback = turret.rotation_radians;
+        let fallback = normalise_radians(turret.rotation_radians);
         *turret_headings.entry(tower).or_insert(fallback)
     }
 }
@@ -1509,14 +1530,14 @@ mod tests {
         let mut cache = HashMap::new();
 
         let heading = resolve_turret_heading(tower, &turret, &[line], &mut cache);
-        let expected = heading_from_target_line(&line);
+        let expected = normalise_radians(heading_from_target_line(&line) + FRAC_PI_2);
         assert!((heading - expected).abs() <= 1e-6);
         assert_eq!(cache.get(&tower).copied(), Some(expected));
 
         let cached = resolve_turret_heading(tower, &turret, &[], &mut cache);
         assert_eq!(cached, expected);
 
-        let base_heading = -FRAC_PI_2;
+        let base_heading = 0.0;
         let oriented_turret = SpriteInstance::square(SpriteKey::TowerTurret, Vec2::splat(1.0))
             .with_rotation(base_heading);
         let fallback_tower = TowerId::new(7);
