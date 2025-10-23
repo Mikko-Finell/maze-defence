@@ -28,6 +28,7 @@ The CLI exposes the following arguments:
 | `--bug-spawn-interval-ms MILLISECONDS` | Controls the interval between automatic spawns while in attack mode. Accepts values from `1` to `60_000`. | `1_000` |
 | `--vsync on\|off` | Requests enabling (`on`) or disabling (`off`) vertical sync. | Platform default |
 | `--layout LAYOUT` | Restores a serialized tower layout before launching the renderer. | None |
+| `--show-fps on\|off` | Prints per-second frame timing metrics to stdout when set to `on`. | `off` |
 
 ## Configuring the grid size
 
@@ -86,8 +87,15 @@ The renderer requests the platform's default swap interval when no flag is provi
 ```bash
 cargo run --bin maze-defence -- --vsync off
 ```
+## Displaying frame timing metrics
 
-## Serialising layouts
+Enable `--show-fps on` to log per-second frame timing breakdowns to the terminal. This keeps the output silent by default while still making it easy to monitor simulation and rendering performance when needed:
+
+```bash
+cargo run --bin maze-defence -- --show-fps on
+```
+
+## Sharing layouts via the clipboard
 
 * Provide a layout string with `--layout` to rebuild the maze before the first frame renders. The simulation validates the
   payload, rebuilds the maze, and propagates any structural mismatches as a CLI error. 【F:adapters/cli/src/main.rs†L114-L119】【F:adapters/cli/src/main.rs†L340-L372】

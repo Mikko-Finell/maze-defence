@@ -38,6 +38,7 @@ use std::{
 #[derive(Debug, Default)]
 pub struct MacroquadBackend {
     swap_interval: Option<i32>,
+    show_fps: bool,
 }
 
 impl MacroquadBackend {
@@ -60,6 +61,13 @@ impl MacroquadBackend {
     pub fn with_vsync(self, enabled: bool) -> Self {
         let swap_interval = if enabled { Some(1) } else { Some(0) };
         self.with_swap_interval(swap_interval)
+    }
+
+    /// Configures whether the backend prints frame timing metrics once per second.
+    #[must_use]
+    pub fn with_show_fps(mut self, show: bool) -> Self {
+        self.show_fps = show;
+        self
     }
 }
 
@@ -184,6 +192,11 @@ impl RenderingBackend for MacroquadBackend {
     where
         F: FnMut(Duration, FrameInput, &mut Scene) -> FrameSimulationBreakdown + 'static,
     {
+        let Self {
+            swap_interval,
+            show_fps,
+        } = self;
+
         let Presentation {
             window_title,
             clear_color,
@@ -198,7 +211,7 @@ impl RenderingBackend for MacroquadBackend {
             window_height: 960,
             ..macroquad::window::Conf::default()
         };
-        if let Some(swap_interval) = self.swap_interval {
+        if let Some(swap_interval) = swap_interval {
             config.platform.swap_interval = Some(swap_interval);
         }
 
@@ -281,24 +294,27 @@ impl RenderingBackend for MacroquadBackend {
                     render: render_duration,
                 };
 
-                if let Some(FpsMetrics {
-                    per_second,
-                    trailing_ten_seconds,
-                    avg_simulation,
-                    avg_pathfinding,
-                    avg_scene_population,
-                    avg_render,
-                }) = fps_counter.record_frame(frame_breakdown)
-                {
-                    println!(
-                        "FPS: {:.2} (10s avg: {:.2}) | sim: {:>6.2}ms (path: {:>6.2}ms) scene: {:>6.2}ms render: {:>6.2}ms",
+                let fps_metrics = fps_counter.record_frame(frame_breakdown);
+                if show_fps {
+                    if let Some(FpsMetrics {
                         per_second,
                         trailing_ten_seconds,
-                        avg_simulation.as_secs_f64() * 1_000.0,
-                        avg_pathfinding.as_secs_f64() * 1_000.0,
-                        avg_scene_population.as_secs_f64() * 1_000.0,
-                        avg_render.as_secs_f64() * 1_000.0,
-                    );
+                        avg_simulation,
+                        avg_pathfinding,
+                        avg_scene_population,
+                        avg_render,
+                    }) = fps_metrics
+                    {
+                        println!(
+                            "FPS: {:.2} (10s avg: {:.2}) | sim: {:>6.2}ms (path: {:>6.2}ms) scene: {:>6.2}ms render: {:>6.2}ms",
+                            per_second,
+                            trailing_ten_seconds,
+                            avg_simulation.as_secs_f64() * 1_000.0,
+                            avg_pathfinding.as_secs_f64() * 1_000.0,
+                            avg_scene_population.as_secs_f64() * 1_000.0,
+                            avg_render.as_secs_f64() * 1_000.0,
+                        );
+                    }
                 }
 
                 macroquad::window::next_frame().await;

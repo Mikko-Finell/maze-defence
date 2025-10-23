@@ -179,6 +179,9 @@ struct CliArgs {
     /// Restores the provided layout snapshot before the first frame renders.
     #[arg(long, value_name = "LAYOUT")]
     layout: Option<String>,
+    /// Controls whether per-second frame timing metrics are printed to stdout.
+    #[arg(long = "show-fps", value_enum, value_name = "on|off", default_value_t = Toggle::Off)]
+    show_fps: Toggle,
 }
 
 /// CLI argument controlling whether vertical sync is requested from the rendering backend.
@@ -188,6 +191,23 @@ enum VsyncMode {
     On,
     /// Request uncapped presentation without waiting for the display refresh rate.
     Off,
+}
+
+/// Generic on/off toggle used by CLI flags.
+#[derive(Clone, Copy, Debug, ValueEnum)]
+enum Toggle {
+    /// Enable the associated behaviour.
+    On,
+    /// Disable the associated behaviour.
+    Off,
+}
+
+impl Toggle {
+    /// Returns whether the toggle requests the behaviour to be enabled.
+    #[must_use]
+    fn enabled(self) -> bool {
+        matches!(self, Self::On)
+    }
 }
 
 /// Grid dimensions parsed from a WIDTHxHEIGHT command-line argument.
@@ -233,6 +253,7 @@ impl FromStr for GridSizeArg {
 /// Entry point for the Maze Defence command-line interface.
 fn main() -> Result<()> {
     let args = CliArgs::parse();
+    let show_fps = args.show_fps.enabled();
 
     let (columns, rows) = if let Some(size) = args.grid_size {
         size.into_dimensions()
@@ -296,6 +317,7 @@ fn main() -> Result<()> {
         Some(VsyncMode::Off) => MacroquadBackend::default().with_vsync(false),
         None => MacroquadBackend::default(),
     };
+    let backend = backend.with_show_fps(show_fps);
 
     backend.run(presentation, move |dt, input, scene| {
         simulation.handle_input(input);
