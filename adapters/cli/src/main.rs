@@ -30,9 +30,9 @@ use maze_defence_core::{
 };
 use maze_defence_rendering::{
     visuals, BugHealthPresentation, BugPresentation, BugVisual, Color, FrameInput,
-    FrameSimulationBreakdown, Presentation, RenderingBackend, Scene, SceneProjectile, SceneTower,
-    SceneWall, SpriteKey, TileGridPresentation, TileSpacePosition, TowerInteractionFeedback,
-    TowerPreview, TowerTargetLine,
+    FrameSimulationBreakdown, GroundKind, GroundSpriteTiles, Presentation, RenderingBackend, Scene,
+    SceneProjectile, SceneTower, SceneWall, SpriteKey, TileGridPresentation, TileSpacePosition,
+    TowerInteractionFeedback, TowerPreview, TowerTargetLine,
 };
 use maze_defence_rendering_macroquad::MacroquadBackend;
 use maze_defence_system_bootstrap::Bootstrap;
@@ -54,6 +54,7 @@ const DEFAULT_BUG_SPAWN_INTERVAL_MS: u64 = 1_000;
 const SPAWN_RNG_SEED: u64 = 0x4d59_5df4_d0f3_3173;
 const TILE_LENGTH_TOLERANCE: f32 = 1e-3;
 const DEFAULT_BUG_HEADING: f32 = 0.0;
+const GROUND_TILE_MULTIPLIER: f32 = 4.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct PlacementRejection {
@@ -330,6 +331,7 @@ fn main() -> Result<()> {
     let mut scene = Scene::new(
         grid_scene,
         wall_color,
+        None,
         Vec::new(),
         Vec::new(),
         Vec::new(),
@@ -824,6 +826,12 @@ impl Simulation {
         let use_sprite_visuals = self.visual_style == VisualStyle::Sprites;
         const DEFAULT_TURRET_HEADING: f32 = 0.0;
 
+        scene.ground = if use_sprite_visuals {
+            self.ground_tiles()
+        } else {
+            None
+        };
+
         let wall_view = query::walls(&self.world);
         scene.walls.clear();
         scene.walls.extend(
@@ -1195,6 +1203,34 @@ impl Simulation {
         }
     }
 
+    fn ground_tiles(&self) -> Option<GroundSpriteTiles> {
+        if self.cells_per_tile == 0 {
+            return None;
+        }
+
+        let footprint = Self::tower_footprint(TowerKind::Basic);
+        if footprint.width() == 0 || footprint.height() == 0 {
+            return None;
+        }
+
+        let base_tiles = Vec2::new(
+            footprint.width() as f32 / self.cells_per_tile as f32,
+            footprint.height() as f32 / self.cells_per_tile as f32,
+        );
+
+        if base_tiles.x <= f32::EPSILON || base_tiles.y <= f32::EPSILON {
+            return None;
+        }
+
+        let span_tiles = base_tiles * GROUND_TILE_MULTIPLIER;
+        visuals::ground_sprite_tiles(
+            span_tiles,
+            self.cells_per_tile,
+            SpriteKey::GroundGrass,
+            GroundKind::Grass,
+        )
+    }
+
     fn selected_tower_footprint_tiles(&self) -> Vec2 {
         if self.cells_per_tile == 0 {
             return Vec2::ZERO;
@@ -1417,6 +1453,7 @@ mod tests {
         Scene::new(
             tile_grid,
             wall_color,
+            None,
             Vec::new(),
             Vec::new(),
             Vec::new(),
@@ -1657,6 +1694,21 @@ mod tests {
                 panic!("sprite bug visual expected when sprites enabled");
             }
         }
+
+        let ground = scene
+            .ground
+            .as_ref()
+            .expect("ground tiles expected when sprites enabled");
+        assert_eq!(ground.kind, GroundKind::Grass);
+        assert_eq!(ground.sprite.sprite, SpriteKey::GroundGrass);
+        let footprint = Simulation::tower_footprint(TowerKind::Basic);
+        let base_tiles = Vec2::new(
+            footprint.width() as f32 / simulation.cells_per_tile as f32,
+            footprint.height() as f32 / simulation.cells_per_tile as f32,
+        );
+        let expected_size = base_tiles * GROUND_TILE_MULTIPLIER * simulation.cells_per_tile as f32;
+        assert_eq!(ground.sprite.size, expected_size);
+        assert_eq!(ground.sprite.pivot, Vec2::ZERO);
     }
 
     #[test]
@@ -1705,6 +1757,8 @@ mod tests {
                 panic!("primitive bug visual expected when primitives requested");
             }
         }
+
+        assert!(scene.ground.is_none());
     }
 
     fn enter_builder_mode(simulation: &mut Simulation) {
@@ -2515,7 +2569,7 @@ mod tests {
         let second_fingerprint = scene_fingerprint(&second);
         assert_eq!(first_fingerprint, second_fingerprint);
 
-        let expected = 0x15e6_cd12_fc83_e46f;
+        let expected = 0x297f_60ca_97f3_17cf;
         assert_eq!(
             first_fingerprint, expected,
             "sprite scene fingerprint mismatch: {first_fingerprint:#x}"
@@ -2545,7 +2599,7 @@ mod tests {
         let second_fingerprint = scene_fingerprint(&second);
         assert_eq!(first_fingerprint, second_fingerprint);
 
-        let expected = 0x5dd3_46c4_5dcc_944d;
+        let expected = 0x4b62_2b4e_1616_b14f;
         assert_eq!(
             first_fingerprint, expected,
             "primitive scene fingerprint mismatch: {first_fingerprint:#x}"
@@ -2610,6 +2664,7 @@ mod tests {
     struct SceneDigest {
         tile_grid: TileGridDigest,
         wall_color: ColorDigest,
+        ground: Option<GroundSpriteTilesDigest>,
         walls: Vec<SceneWall>,
         bugs: Vec<BugDigest>,
         towers: Vec<TowerDigest>,
@@ -2627,6 +2682,7 @@ mod tests {
             Self {
                 tile_grid: TileGridDigest::from(scene.tile_grid),
                 wall_color: ColorDigest::from(scene.wall_color),
+                ground: scene.ground.as_ref().map(GroundSpriteTilesDigest::from),
                 walls: scene.walls.clone(),
                 bugs: scene.bugs.iter().map(BugDigest::from).collect(),
                 towers: scene.towers.iter().map(TowerDigest::from).collect(),
@@ -2647,6 +2703,21 @@ mod tests {
                     .active_tower_footprint_tiles
                     .map(Vec2Digest::from),
                 tower_feedback: scene.tower_feedback,
+            }
+        }
+    }
+
+    #[derive(Clone, Debug, PartialEq, Eq, Hash)]
+    struct GroundSpriteTilesDigest {
+        kind: GroundKind,
+        sprite: SpriteInstanceDigest,
+    }
+
+    impl From<&GroundSpriteTiles> for GroundSpriteTilesDigest {
+        fn from(tiles: &GroundSpriteTiles) -> Self {
+            Self {
+                kind: tiles.kind,
+                sprite: SpriteInstanceDigest::from(&tiles.sprite),
             }
         }
     }

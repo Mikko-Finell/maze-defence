@@ -101,10 +101,11 @@ impl MacroquadBackend {
 }
 
 fn scene_requests_sprites(scene: &Scene) -> bool {
-    scene
-        .towers
-        .iter()
-        .any(|tower| matches!(tower.visual, TowerVisual::Sprite { .. }))
+    scene.ground.is_some()
+        || scene
+            .towers
+            .iter()
+            .any(|tower| matches!(tower.visual, TowerVisual::Sprite { .. }))
         || scene
             .bugs
             .iter()
@@ -336,6 +337,7 @@ impl RenderingBackend for MacroquadBackend {
                 let metrics = SceneMetrics::from_scene(&scene, screen_width, screen_height);
 
                 let render_start = Instant::now();
+                draw_ground(&scene, &metrics, sprite_atlas.as_ref());
                 if scene.play_mode == PlayMode::Builder {
                     let grid_color = to_macroquad_color(tile_grid.line_color);
                     let subgrid_color = to_macroquad_color(tile_grid.line_color.lighten(0.6));
@@ -592,6 +594,60 @@ fn hovered_tower(scene: &Scene) -> Option<SceneTower> {
         .iter()
         .copied()
         .find(|tower| tower.id == hovered)
+}
+
+fn draw_ground(scene: &Scene, metrics: &SceneMetrics, sprite_atlas: Option<&SpriteAtlas>) {
+    let Some(tiles) = scene.ground.as_ref() else {
+        return;
+    };
+    let Some(atlas) = sprite_atlas else {
+        return;
+    };
+
+    if metrics.cell_step <= f32::EPSILON {
+        return;
+    }
+
+    let sprite = &tiles.sprite;
+    if sprite.size.x <= f32::EPSILON || sprite.size.y <= f32::EPSILON {
+        return;
+    }
+
+    if !atlas.contains(sprite.sprite) {
+        return;
+    }
+
+    let tile_grid = scene.tile_grid;
+    if tile_grid.cells_per_tile == 0 {
+        return;
+    }
+
+    let width_cells = (tile_grid.columns * tile_grid.cells_per_tile) as f32;
+    let height_cells = (tile_grid.rows * tile_grid.cells_per_tile) as f32;
+    if width_cells <= f32::EPSILON || height_cells <= f32::EPSILON {
+        return;
+    }
+
+    let step_x = sprite.size.x;
+    let step_y = sprite.size.y;
+    if step_x <= f32::EPSILON || step_y <= f32::EPSILON {
+        return;
+    }
+
+    let base_column = TileGridPresentation::SIDE_BORDER_CELL_LAYERS as f32;
+    let base_row = TileGridPresentation::TOP_BORDER_CELL_LAYERS as f32;
+
+    let horizontal_tiles = (width_cells / step_x).ceil().max(1.0) as u32;
+    let vertical_tiles = (height_cells / step_y).ceil().max(1.0) as u32;
+
+    for row in 0..vertical_tiles {
+        let row_base = base_row + step_y * row as f32;
+        for column in 0..horizontal_tiles {
+            let column_base = base_column + step_x * column as f32;
+            let base_position = Vec2::new(column_base, row_base);
+            draw_sprite_instance(atlas, sprite, base_position, metrics, None);
+        }
+    }
 }
 
 fn draw_subgrid(
@@ -1336,6 +1392,7 @@ mod tests {
         Scene::new(
             grid,
             wall_color,
+            None,
             Vec::new(),
             Vec::new(),
             Vec::new(),
@@ -1459,6 +1516,7 @@ mod tests {
             let scene = Scene::new(
                 tile_grid,
                 wall_color,
+                None,
                 Vec::new(),
                 Vec::new(),
                 Vec::new(),

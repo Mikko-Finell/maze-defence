@@ -83,6 +83,16 @@ pub enum SpriteKey {
     TowerTurret,
     /// Body sprite used for bugs.
     BugBody,
+    /// Large ground tile rendered beneath the maze.
+    GroundGrass,
+}
+
+impl SpriteKey {
+    /// Returns whether the sprite asset is optional when loading the atlas.
+    #[must_use]
+    pub const fn is_optional(self) -> bool {
+        matches!(self, Self::GroundGrass)
+    }
 }
 
 /// Describes a single sprite draw request expressed entirely in cell units.
@@ -185,6 +195,30 @@ pub enum BugVisual {
     },
     /// Draws a sprite instance centred on the bug position.
     Sprite(SpriteInstance),
+}
+
+/// Categories of ground tiles rendered beneath the maze.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum GroundKind {
+    /// Grass-covered ground texture.
+    Grass,
+}
+
+/// Describes a sprite used to tile the ground plane.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GroundSpriteTiles {
+    /// Logical kind of ground represented by the sprite.
+    pub kind: GroundKind,
+    /// Sprite instance repeated across the ground.
+    pub sprite: SpriteInstance,
+}
+
+impl GroundSpriteTiles {
+    /// Creates a new ground sprite descriptor.
+    #[must_use]
+    pub const fn new(kind: GroundKind, sprite: SpriteInstance) -> Self {
+        Self { kind, sprite }
+    }
 }
 
 /// Input snapshot gathered by adapters before updating the scene.
@@ -770,6 +804,8 @@ pub struct Scene {
     pub tile_grid: TileGridPresentation,
     /// Color applied to perimeter cell walls.
     pub wall_color: Color,
+    /// Optional sprite tiles rendered beneath the maze.
+    pub ground: Option<GroundSpriteTiles>,
     /// Cell-sized walls populating the maze interior.
     pub walls: Vec<SceneWall>,
     /// Bugs currently visible within the maze, positioned using deterministic cell descriptors.
@@ -799,6 +835,7 @@ impl Scene {
     pub fn new(
         tile_grid: TileGridPresentation,
         wall_color: Color,
+        ground: Option<GroundSpriteTiles>,
         walls: Vec<SceneWall>,
         bugs: Vec<BugPresentation>,
         towers: Vec<SceneTower>,
@@ -813,6 +850,7 @@ impl Scene {
         Self {
             tile_grid,
             wall_color,
+            ground,
             walls,
             bugs,
             towers,
@@ -899,7 +937,10 @@ impl Error for RenderingError {}
 
 /// Helpers that construct sprite visuals in a deterministic manner.
 pub mod visuals {
-    use super::{BugVisual, CellRect, SpriteInstance, SpriteKey, TowerTargetLine, TowerVisual};
+    use super::{
+        BugVisual, CellRect, GroundKind, GroundSpriteTiles, SpriteInstance, SpriteKey,
+        TowerTargetLine, TowerVisual,
+    };
     use glam::Vec2;
     use std::f32::consts::PI;
 
@@ -940,6 +981,36 @@ pub mod visuals {
         let sprite = SpriteInstance::square(key, Vec2::splat(1.0))
             .with_rotation(normalise_radians(rotation_radians));
         BugVisual::Sprite(sprite)
+    }
+
+    /// Builds ground sprite tiles that repeat across the maze interior.
+    #[must_use]
+    pub fn ground_sprite_tiles(
+        span_tiles: Vec2,
+        cells_per_tile: u32,
+        key: SpriteKey,
+        kind: GroundKind,
+    ) -> Option<GroundSpriteTiles> {
+        if cells_per_tile == 0 {
+            return None;
+        }
+
+        let width_tiles = span_tiles.x.abs();
+        let height_tiles = span_tiles.y.abs();
+        if width_tiles <= f32::EPSILON || height_tiles <= f32::EPSILON {
+            return None;
+        }
+
+        let cells = Vec2::new(
+            width_tiles * cells_per_tile as f32,
+            height_tiles * cells_per_tile as f32,
+        );
+        if cells.x <= f32::EPSILON || cells.y <= f32::EPSILON {
+            return None;
+        }
+
+        let sprite = SpriteInstance::new(key, cells).with_pivot(Vec2::ZERO);
+        Some(GroundSpriteTiles::new(kind, sprite))
     }
 
     /// Derives the turret heading from a `TowerTargetLine` using `atan2`.
@@ -1232,6 +1303,7 @@ mod tests {
         let scene = Scene::new(
             tile_grid,
             wall_color,
+            None,
             Vec::new(),
             bugs.clone(),
             Vec::new(),
@@ -1256,6 +1328,7 @@ mod tests {
         assert!(scene.tower_targets.is_empty());
         assert!(scene.hovered_tower.is_none());
         assert!(scene.tower_feedback.is_none());
+        assert!(scene.ground.is_none());
     }
 
     #[test]
@@ -1290,6 +1363,7 @@ mod tests {
         let scene = Scene::new(
             tile_grid,
             wall_color,
+            None,
             Vec::new(),
             vec![],
             vec![SceneTower::new(
@@ -1328,6 +1402,7 @@ mod tests {
         );
         assert_eq!(scene.tower_targets, vec![target_line]);
         assert!(scene.projectiles.is_empty());
+        assert!(scene.ground.is_none());
     }
 
     #[test]
@@ -1344,6 +1419,7 @@ mod tests {
         let scene = Scene::new(
             tile_grid,
             Color::from_rgb_u8(64, 64, 64),
+            None,
             Vec::new(),
             Vec::new(),
             Vec::new(),
@@ -1357,5 +1433,42 @@ mod tests {
         );
 
         assert_eq!(scene.total_height(), tile_grid.bordered_height());
+    }
+
+    #[test]
+    fn ground_sprite_tiles_create_expected_descriptor() {
+        let span_tiles = Vec2::splat(4.0);
+        let tiles = visuals::ground_sprite_tiles(
+            span_tiles,
+            TileGridPresentation::DEFAULT_CELLS_PER_TILE,
+            SpriteKey::GroundGrass,
+            GroundKind::Grass,
+        )
+        .expect("ground tiles should be created");
+
+        assert_eq!(tiles.kind, GroundKind::Grass);
+        assert_eq!(tiles.sprite.sprite, SpriteKey::GroundGrass);
+        assert_eq!(tiles.sprite.size, Vec2::splat(16.0));
+        assert_eq!(tiles.sprite.pivot, Vec2::ZERO);
+        assert!(tiles.sprite.offset.is_none());
+    }
+
+    #[test]
+    fn ground_sprite_tiles_reject_invalid_configuration() {
+        assert!(visuals::ground_sprite_tiles(
+            Vec2::splat(0.0),
+            TileGridPresentation::DEFAULT_CELLS_PER_TILE,
+            SpriteKey::GroundGrass,
+            GroundKind::Grass,
+        )
+        .is_none());
+
+        assert!(visuals::ground_sprite_tiles(
+            Vec2::splat(2.0),
+            0,
+            SpriteKey::GroundGrass,
+            GroundKind::Grass,
+        )
+        .is_none());
     }
 }
