@@ -127,7 +127,7 @@ pub(crate) struct DrawParams {
     pub scale: MacroquadVec2,
     /// Rotation in radians around the pivot.
     pub rotation: f32,
-    /// Normalised pivot in the range 0.0..=1.0.
+    /// Screen-space pivot around which rotation occurs.
     pub pivot: MacroquadVec2,
     /// Tint applied to the sprite.
     pub tint: MacroquadColor,
