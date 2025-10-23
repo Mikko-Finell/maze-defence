@@ -9,7 +9,6 @@ base64 = "0.21"
 clap = { version = "4.4", features = ["derive"] }
 glam = "0.24"
 serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
 maze-defence-system-bootstrap = { path = "../../systems/bootstrap" }
 maze-defence-system-builder = { path = "../../systems/builder" }
 maze-defence-system-movement = { path = "../../systems/movement" }

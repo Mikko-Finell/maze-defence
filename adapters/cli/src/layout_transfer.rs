@@ -2,19 +2,13 @@
 
 use std::{error::Error, fmt};
 
-use base64::{
-    engine::general_purpose::{STANDARD_NO_PAD, URL_SAFE_NO_PAD},
-    Engine as _,
-};
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use maze_defence_core::{CellCoord, TowerKind};
 use serde::{Deserialize, Serialize};
 
 const SNAPSHOT_DOMAIN: &str = "maze";
-const SNAPSHOT_VERSION_V1: &str = "v1";
 const SNAPSHOT_VERSION_V2: &str = "v2";
 
-/// Identifier prefix emitted before the encoded snapshot payload.
-pub(crate) const SNAPSHOT_HEADER_V1: &str = "maze:v1";
 /// Identifier prefix emitted for the compact binary snapshot payload.
 pub(crate) const SNAPSHOT_HEADER_V2: &str = "maze:v2";
 /// Delimiter used to separate the prefix, grid dimensions and payload.
@@ -55,22 +49,6 @@ impl TowerLayoutSnapshot {
         )
     }
 
-    /// Encodes the snapshot using the legacy JSON transport.
-    #[must_use]
-    pub(crate) fn encode_v1(&self) -> String {
-        let payload = SerializableSnapshot {
-            tile_length: self.tile_length,
-            cells_per_tile: self.cells_per_tile,
-            towers: self.towers.clone(),
-        };
-        let json = serde_json::to_vec(&payload).expect("layout snapshot serialization never fails");
-        let encoded = STANDARD_NO_PAD.encode(json);
-        format!(
-            "{SNAPSHOT_HEADER_V1}:{}x{}:{encoded}",
-            self.columns, self.rows
-        )
-    }
-
     /// Decodes a snapshot from the provided string representation.
     pub(crate) fn decode(value: &str) -> Result<Self, LayoutTransferError> {
         let trimmed = value.trim();
@@ -89,25 +67,11 @@ impl TowerLayoutSnapshot {
         }
 
         let (columns, rows) = parse_dimensions(dimensions)?;
-        match version {
-            SNAPSHOT_VERSION_V1 => {
-                let bytes = STANDARD_NO_PAD
-                    .decode(payload.as_bytes())
-                    .map_err(LayoutTransferError::InvalidEncoding)?;
-                let decoded: SerializableSnapshot =
-                    serde_json::from_slice(&bytes).map_err(LayoutTransferError::InvalidPayload)?;
-
-                Ok(Self {
-                    columns,
-                    rows,
-                    tile_length: decoded.tile_length,
-                    cells_per_tile: decoded.cells_per_tile,
-                    towers: decoded.towers,
-                })
-            }
-            SNAPSHOT_VERSION_V2 => decode_v2(columns, rows, payload),
-            _ => Err(LayoutTransferError::UnsupportedVersion(version.to_owned())),
+        if version != SNAPSHOT_VERSION_V2 {
+            return Err(LayoutTransferError::UnsupportedVersion(version.to_owned()));
         }
+
+        decode_v2(columns, rows, payload)
     }
 }
 
@@ -118,13 +82,6 @@ pub(crate) struct TowerLayoutTower {
     pub kind: TowerKind,
     /// Upper-left cell anchoring the tower's footprint.
     pub origin: CellCoord,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-struct SerializableSnapshot {
-    tile_length: f32,
-    cells_per_tile: u32,
-    towers: Vec<TowerLayoutTower>,
 }
 
 /// Errors that can occur while decoding layout transfer strings.
@@ -148,8 +105,6 @@ pub(crate) enum LayoutTransferError {
     InvalidDimensions(String),
     /// The base64 payload could not be decoded.
     InvalidEncoding(base64::DecodeError),
-    /// The decoded payload could not be deserialised.
-    InvalidPayload(serde_json::Error),
     /// The binary payload terminated before all fields were read.
     TruncatedBinaryPayload,
     /// The binary payload encoded a varint that exceeds the supported width.
@@ -178,9 +133,6 @@ impl fmt::Display for LayoutTransferError {
             Self::InvalidEncoding(error) => {
                 write!(f, "could not decode layout payload: {error}")
             }
-            Self::InvalidPayload(error) => {
-                write!(f, "could not parse layout payload: {error}")
-            }
             Self::TruncatedBinaryPayload => {
                 write!(f, "binary layout payload terminated unexpectedly")
             }
@@ -204,7 +156,6 @@ impl Error for LayoutTransferError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::InvalidEncoding(error) => Some(error),
-            Self::InvalidPayload(error) => Some(error),
             _ => None,
         }
     }
@@ -382,24 +333,4 @@ mod tests {
         assert_eq!(snapshot, decoded);
     }
 
-    #[test]
-    fn legacy_layouts_still_decode() {
-        let towers = vec![TowerLayoutTower {
-            kind: TowerKind::Basic,
-            origin: CellCoord::new(3, 6),
-        }];
-        let snapshot = TowerLayoutSnapshot {
-            columns: 9,
-            rows: 11,
-            tile_length: 48.0,
-            cells_per_tile: 2,
-            towers,
-        };
-
-        let legacy = snapshot.encode_v1();
-        assert!(legacy.starts_with(&format!("{SNAPSHOT_HEADER_V1}:9x11:")));
-
-        let decoded = TowerLayoutSnapshot::decode(&legacy).expect("legacy snapshot decodes");
-        assert_eq!(snapshot, decoded);
-    }
 }
