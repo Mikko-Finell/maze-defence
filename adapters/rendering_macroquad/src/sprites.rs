@@ -75,6 +75,15 @@ impl SpriteAtlas {
         self.textures.contains_key(&key)
     }
 
+    /// Returns the texture dimensions for the requested sprite key.
+    pub(crate) fn dimensions(&self, key: SpriteKey) -> MacroquadVec2 {
+        let texture = self
+            .textures
+            .get(&key)
+            .unwrap_or_else(|| panic!("missing sprite {key:?} in atlas"));
+        MacroquadVec2::new(texture.width(), texture.height())
+    }
+
     /// Returns the number of sprite textures managed by the atlas.
     pub(crate) fn len(&self) -> usize {
         self.textures.len()
@@ -340,12 +349,21 @@ fn image_format_for(path: &Path) -> Result<ImageFormat> {
 
 fn assert_sprite_api_references() {
     let draw_fn: fn(&SpriteAtlas, SpriteKey, DrawParams) = SpriteAtlas::draw;
+    let dimensions_fn: fn(&SpriteAtlas, SpriteKey) -> MacroquadVec2 = SpriteAtlas::dimensions;
     let new_fn: fn(MacroquadVec2) -> DrawParams = DrawParams::new;
     let scale_fn: fn(DrawParams, MacroquadVec2) -> DrawParams = DrawParams::with_scale;
     let rotation_fn: fn(DrawParams, f32) -> DrawParams = DrawParams::with_rotation;
     let pivot_fn: fn(DrawParams, MacroquadVec2) -> DrawParams = DrawParams::with_pivot;
     let tint_fn: fn(DrawParams, MacroquadColor) -> DrawParams = DrawParams::with_tint;
-    let _ = (draw_fn, new_fn, scale_fn, rotation_fn, pivot_fn, tint_fn);
+    let _ = (
+        draw_fn,
+        dimensions_fn,
+        new_fn,
+        scale_fn,
+        rotation_fn,
+        pivot_fn,
+        tint_fn,
+    );
 }
 
 #[cfg(test)]
