@@ -25,6 +25,8 @@ assets/
 ├── manifest.toml
 └── sprites/
     ├── README.md
+    ├── ground/
+    │   └── README.md
     ├── bugs/
     │   └── README.md
     └── towers/

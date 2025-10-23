@@ -18,3 +18,5 @@ TowerBase = "assets/sprites/towers/base.png"
 TowerTurret = "assets/sprites/towers/turret.png"
 # Default bug body sprite.
 BugBody = "assets/sprites/bugs/bug.png"
+# Optional grass ground tile repeated beneath the maze when present.
+GroundGrass = "assets/sprites/ground/grass.png"

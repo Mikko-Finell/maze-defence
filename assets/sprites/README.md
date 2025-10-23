@@ -8,6 +8,7 @@ layout and filenames in sync with that manifest.
   add subdirectories here.
 * `bugs/` — art for bug bodies.  Additional enemy types should add their own
   folders with clear naming.
+* `ground/` — tileable ground textures rendered beneath the maze.
 
 Each leaf directory contains a README describing the expected files,
 licensing/attribution notes, and any conversion steps required before the

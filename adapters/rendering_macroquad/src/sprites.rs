@@ -213,6 +213,7 @@ impl AssetManifest {
                 key,
                 path: resolved_path,
                 format,
+                optional: key.is_optional(),
             });
         }
 
@@ -225,6 +226,7 @@ struct SpriteAssetSource {
     key: SpriteKey,
     path: PathBuf,
     format: ImageFormat,
+    optional: bool,
 }
 
 fn manifest_search_paths() -> Vec<PathBuf> {
@@ -248,13 +250,20 @@ where
     let mut textures = HashMap::with_capacity(sources.len());
 
     for source in sources {
-        let texture = loader(source).with_context(|| {
-            format!(
-                "failed to load texture for {:?} from {}",
-                source.key,
-                source.path.display()
-            )
-        })?;
+        let texture = match loader(source) {
+            Ok(texture) => texture,
+            Err(error) => {
+                if source.optional && is_missing_optional_asset(&error) {
+                    continue;
+                }
+
+                return Err(error.context(format!(
+                    "failed to load texture for {:?} from {}",
+                    source.key,
+                    source.path.display()
+                )));
+            }
+        };
 
         if textures.insert(source.key, texture).is_some() {
             bail!("duplicate sprite key {:?} in manifest", source.key);
@@ -309,8 +318,19 @@ fn parse_sprite_key(name: &str) -> Result<SpriteKey> {
         "TowerBase" => Ok(SpriteKey::TowerBase),
         "TowerTurret" => Ok(SpriteKey::TowerTurret),
         "BugBody" => Ok(SpriteKey::BugBody),
+        "GroundGrass" => Ok(SpriteKey::GroundGrass),
         _ => bail!("unknown sprite key `{name}`"),
     }
+}
+
+fn is_missing_optional_asset(error: &anyhow::Error) -> bool {
+    use std::io::ErrorKind;
+
+    error.chain().any(|cause| {
+        cause
+            .downcast_ref::<std::io::Error>()
+            .map_or(false, |io| io.kind() == ErrorKind::NotFound)
+    })
 }
 
 fn resolve_sprite_path(path: &str, manifest_dir: &Path) -> PathBuf {
@@ -375,16 +395,19 @@ mod tests {
                 key: SpriteKey::TowerBase,
                 path: PathBuf::from("base.png"),
                 format: ImageFormat::Png,
+                optional: false,
             },
             SpriteAssetSource {
                 key: SpriteKey::TowerTurret,
                 path: PathBuf::from("turret.png"),
                 format: ImageFormat::Png,
+                optional: false,
             },
             SpriteAssetSource {
                 key: SpriteKey::BugBody,
                 path: PathBuf::from("bug.png"),
                 format: ImageFormat::Png,
+                optional: false,
             },
         ]
     }
@@ -470,9 +493,33 @@ mod tests {
             key: SpriteKey::TowerBase,
             path: PathBuf::from("duplicate.png"),
             format: ImageFormat::Png,
+            optional: false,
         });
 
         let result = load_textures_with(&sources, |_| Ok(Texture2D::empty()));
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn load_textures_skip_missing_optional_entries() {
+        let mut sources = dummy_sources();
+        sources.push(SpriteAssetSource {
+            key: SpriteKey::GroundGrass,
+            path: PathBuf::from("missing.png"),
+            format: ImageFormat::Png,
+            optional: true,
+        });
+
+        let result = load_textures_with(&sources, |source| {
+            if source.key == SpriteKey::GroundGrass {
+                Err(std::io::Error::new(std::io::ErrorKind::NotFound, "missing").into())
+            } else {
+                Ok(Texture2D::empty())
+            }
+        });
+
+        let textures = result.expect("optional sprite should be skipped");
+        assert_eq!(textures.len(), 3);
+        assert!(!textures.contains_key(&SpriteKey::GroundGrass));
     }
 }
