@@ -7,5 +7,6 @@ edition.workspace = true
 anyhow.workspace = true
 glam = "0.24"
 macroquad = { version = "0.3", default-features = false }
+arboard = "3.3"
 maze-defence-rendering = { path = "../rendering" }
 maze-defence-core = { path = "../../core" }

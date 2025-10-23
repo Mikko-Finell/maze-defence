@@ -76,6 +76,10 @@ fn lighten_channel(channel: f32, amount: f32) -> f32 {
 pub struct FrameInput {
     /// Whether the adapter detected a toggle press on this frame.
     pub mode_toggle: bool,
+    /// Requests copying the current tower layout to the clipboard.
+    pub copy_tower_layout: bool,
+    /// Clipboard payload captured when the user requested a paste operation.
+    pub paste_tower_layout_text: Option<String>,
     /// Cursor position expressed in world units, clamped to the playable grid bounds.
     pub cursor_world_space: Option<Vec2>,
     /// Cursor position snapped to tile coordinates with adapter-provided subdivision resolution.
@@ -84,6 +88,21 @@ pub struct FrameInput {
     pub confirm_action: bool,
     /// Whether the adapter detected a tower removal request on this frame.
     pub remove_action: bool,
+}
+
+/// Instructions emitted by the simulation that adapters must act upon.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum AdapterAction {
+    /// Copy the provided layout string to the clipboard and echo it to the terminal.
+    CopyLayout {
+        /// Encoded layout string ready for transfer via the clipboard.
+        contents: String,
+    },
+    /// Display an error message prominently in the adapter output.
+    DisplayError {
+        /// Message that should be echoed to the terminal immediately.
+        message: String,
+    },
 }
 
 /// Per-frame diagnostics emitted by simulations to help adapters report performance breakdowns.
@@ -591,6 +610,8 @@ pub struct Scene {
     pub active_tower_footprint_tiles: Option<Vec2>,
     /// Feedback about the last tower placement/removal attempt.
     pub tower_feedback: Option<TowerInteractionFeedback>,
+    /// Adapter actions queued by the simulation for immediate side effects.
+    pub pending_adapter_actions: Vec<AdapterAction>,
 }
 
 impl Scene {
@@ -624,6 +645,7 @@ impl Scene {
             tower_preview,
             active_tower_footprint_tiles,
             tower_feedback,
+            pending_adapter_actions: Vec::new(),
         }
     }
 

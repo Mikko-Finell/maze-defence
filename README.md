@@ -85,3 +85,16 @@ The renderer requests the platform's default swap interval when no flag is provi
 ```bash
 cargo run --bin maze-defence -- --vsync off
 ```
+
+## Sharing layouts via the clipboard
+
+* Press <kbd>Ctrl</kbd>+<kbd>C</kbd> to serialise the current tower layout. The snapshot is written to the
+  clipboard and echoed to the terminal immediately so you can capture it even when clipboard access is unavailable. 【F:adapters/rendering_macroquad/src/lib.rs†L399-L449】【F:adapters/rendering_macroquad/src/lib.rs†L232-L246】
+* Press <kbd>Ctrl</kbd>+<kbd>V</kbd> to restore a layout from the clipboard. The simulation validates the
+  payload, rebuilds the maze, and surfaces any failures through a visible adapter error. 【F:adapters/cli/src/main.rs†L503-L583】
+* Layout strings begin with `maze:v1:CxR` followed by a base64 payload that records the grid configuration and every tower.
+  Share the full string (including the prefix) to reliably reproduce a layout. 【F:adapters/cli/src/layout_transfer.rs†L9-L83】
+* When the game boots it inspects the clipboard once. If the payload starts with `maze:v1:` it hydrates the maze automatically
+  before the first frame; other clipboard contents are ignored. 【F:adapters/cli/src/main.rs†L672-L693】
+* Whenever the process exits it prints the latest snapshot to stdout so you can recover the layout after a run even if you never
+  triggered a manual copy. 【F:adapters/cli/src/main.rs†L1277-L1285】
