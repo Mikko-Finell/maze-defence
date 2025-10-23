@@ -29,10 +29,11 @@ use maze_defence_core::{CellRect, PlayMode, TowerId, TowerKind};
 use maze_defence_rendering::{
     BugPresentation, BugVisual, Color, FrameInput, FrameSimulationBreakdown, Presentation,
     RenderingBackend, Scene, SceneProjectile, SceneTower, SceneWall, SpriteKey,
-    TileGridPresentation, TowerPreview, TowerTargetLine,
+    TileGridPresentation, TowerPreview, TowerTargetLine, TowerVisual,
 };
 use std::{
     collections::{HashMap, VecDeque},
+    sync::mpsc,
     time::{Duration, Instant},
 };
 
@@ -45,6 +46,7 @@ pub struct MacroquadBackend {
     show_fps: bool,
     sprite_atlas: Option<SpriteAtlas>,
     turret_headings: HashMap<TowerId, f32>,
+    load_sprites: bool,
 }
 
 impl Default for MacroquadBackend {
@@ -54,6 +56,7 @@ impl Default for MacroquadBackend {
             show_fps: false,
             sprite_atlas: None,
             turret_headings: HashMap::new(),
+            load_sprites: true,
         }
     }
 }
@@ -86,6 +89,24 @@ impl MacroquadBackend {
         self.show_fps = show;
         self
     }
+
+    /// Configures whether the backend should attempt to load sprite assets.
+    #[must_use]
+    pub fn with_sprite_loading(mut self, enabled: bool) -> Self {
+        self.load_sprites = enabled;
+        self
+    }
+}
+
+fn scene_requests_sprites(scene: &Scene) -> bool {
+    scene
+        .towers
+        .iter()
+        .any(|tower| matches!(tower.visual, TowerVisual::Sprite { .. }))
+        || scene
+            .bugs
+            .iter()
+            .any(|bug| matches!(bug.style, BugVisual::Sprite(_)))
 }
 
 /// Tracks the average frames-per-second produced by the render loop.
@@ -214,6 +235,7 @@ impl RenderingBackend for MacroquadBackend {
             show_fps,
             sprite_atlas,
             turret_headings,
+            load_sprites,
         } = self;
 
         let Presentation {
@@ -221,16 +243,6 @@ impl RenderingBackend for MacroquadBackend {
             clear_color,
             scene,
         } = presentation;
-
-        let mut scene = scene;
-
-        let sprite_atlas = sprite_atlas
-            .map(Ok)
-            .unwrap_or_else(|| SpriteAtlas::new().context("failed to initialise sprite atlas"))?;
-
-        debug_assert!(sprite_atlas.contains(SpriteKey::TowerBase));
-        debug_assert!(sprite_atlas.contains(SpriteKey::TowerTurret));
-        debug_assert!(sprite_atlas.contains(SpriteKey::BugBody));
 
         let mut config = macroquad::window::Conf {
             window_title,
@@ -242,10 +254,50 @@ impl RenderingBackend for MacroquadBackend {
             config.platform.swap_interval = Some(swap_interval);
         }
 
+        let sprite_support_enabled = load_sprites;
+        let (atlas_init_sender, atlas_init_receiver) = mpsc::channel::<Result<()>>();
+
         macroquad::Window::from_config(config, async move {
-            let sprite_atlas = sprite_atlas;
+            let mut init_sender = Some(atlas_init_sender);
+            let mut scene = scene;
             let mut turret_headings = turret_headings;
-            let _ = sprite_atlas.len();
+            let mut sprite_atlas = sprite_atlas;
+
+            if sprite_support_enabled {
+                if sprite_atlas.is_none() {
+                    match SpriteAtlas::new().context("failed to initialise sprite atlas") {
+                        Ok(atlas) => {
+                            sprite_atlas = Some(atlas);
+                        }
+                        Err(error) => {
+                            if let Some(sender) = init_sender.take() {
+                                let _ = sender.send(Err(error));
+                            }
+                            return;
+                        }
+                    }
+                }
+
+                debug_assert!(sprite_atlas
+                    .as_ref()
+                    .map(|atlas| {
+                        atlas.contains(SpriteKey::TowerBase)
+                            && atlas.contains(SpriteKey::TowerTurret)
+                            && atlas.contains(SpriteKey::BugBody)
+                    })
+                    .unwrap_or(false));
+            } else {
+                sprite_atlas = None;
+            }
+
+            if let Some(sender) = init_sender.take() {
+                let _ = sender.send(Ok(()));
+            }
+
+            if let Some(atlas) = &sprite_atlas {
+                let _ = atlas.len();
+            }
+
             let background = to_macroquad_color(clear_color);
             let mut fps_counter = FpsCounter::default();
             let mut show_tower_target_lines = false;
@@ -270,6 +322,10 @@ impl RenderingBackend for MacroquadBackend {
                 let frame_input = gather_frame_input(&scene, &metrics_before);
 
                 let simulation_breakdown = update_scene(frame_dt, frame_input, &mut scene);
+
+                if !sprite_support_enabled {
+                    debug_assert!(!scene_requests_sprites(&scene));
+                }
 
                 turret_headings
                     .retain(|tower_id, _| scene.towers.iter().any(|tower| tower.id == *tower_id));
@@ -353,6 +409,8 @@ impl RenderingBackend for MacroquadBackend {
                 macroquad::window::next_frame().await;
             }
         });
+
+        atlas_init_receiver.recv().unwrap_or_else(|_| Ok(()))?;
 
         Ok(())
     }
