@@ -862,6 +862,7 @@ fn draw_towers(
                         tower,
                         base,
                         turret,
+                        bugs,
                         tower_targets,
                         metrics,
                         turret_headings,
@@ -879,6 +880,7 @@ fn draw_sprite_tower(
     tower: &SceneTower,
     base: &SpriteInstance,
     turret: &SpriteInstance,
+    bugs: &[BugPresentation],
     tower_targets: &[TowerTargetLine],
     metrics: &SceneMetrics,
     turret_headings: &mut HashMap<TowerId, f32>,
@@ -893,7 +895,18 @@ fn draw_sprite_tower(
     let base_position = Vec2::new(origin.column() as f32, origin.row() as f32);
     draw_sprite_instance(atlas, base, base_position, metrics, None);
 
-    let heading = resolve_turret_heading(tower.id, turret, tower_targets, turret_headings);
+    let Some(center_cells) = tower_region_center(region) else {
+        return;
+    };
+
+    let heading = resolve_turret_heading(
+        tower.id,
+        center_cells,
+        turret,
+        tower_targets,
+        bugs,
+        turret_headings,
+    );
     draw_sprite_instance(atlas, turret, base_position, metrics, Some(heading));
 }
 
@@ -965,12 +978,20 @@ fn normalise_radians(angle: f32) -> f32 {
 
 fn resolve_turret_heading(
     tower: TowerId,
+    center_cells: Vec2,
     turret: &SpriteInstance,
     tower_targets: &[TowerTargetLine],
+    bugs: &[BugPresentation],
     turret_headings: &mut HashMap<TowerId, f32>,
 ) -> f32 {
     if let Some(line) = tower_targets.iter().find(|line| line.tower == tower) {
-        let heading = normalise_radians(heading_from_target_line(line) + FRAC_PI_2);
+        let direction = turret_direction_for(tower, center_cells, tower_targets, bugs);
+        let heading_line = TowerTargetLine {
+            from: center_cells,
+            to: center_cells + direction,
+            ..*line
+        };
+        let heading = normalise_radians(heading_from_target_line(&heading_line) + FRAC_PI_2);
         let _ = turret_headings.insert(tower, heading);
         heading
     } else {
@@ -1527,14 +1548,27 @@ mod tests {
         let from = Vec2::new(2.5, 1.0);
         let to = Vec2::new(2.5, 4.0);
         let line = TowerTargetLine::new(tower, bug, from, to);
+        let bug_position = Vec2::new(from.x + 1.0, from.y);
+        let bugs = vec![BugPresentation::new_circle(
+            bug,
+            bug_position,
+            Color::from_rgb_u8(180, 90, 40),
+            BugHealthPresentation::new(5, 5),
+        )];
         let mut cache = HashMap::new();
 
-        let heading = resolve_turret_heading(tower, &turret, &[line], &mut cache);
-        let expected = normalise_radians(heading_from_target_line(&line) + FRAC_PI_2);
+        let heading = resolve_turret_heading(tower, from, &turret, &[line], &bugs, &mut cache);
+        let direction = turret_direction_for(tower, from, &[line], &bugs);
+        let expected_line = TowerTargetLine {
+            from,
+            to: from + direction,
+            ..line
+        };
+        let expected = normalise_radians(heading_from_target_line(&expected_line) + FRAC_PI_2);
         assert!((heading - expected).abs() <= 1e-6);
         assert_eq!(cache.get(&tower).copied(), Some(expected));
 
-        let cached = resolve_turret_heading(tower, &turret, &[], &mut cache);
+        let cached = resolve_turret_heading(tower, from, &turret, &[], &[], &mut cache);
         assert_eq!(cached, expected);
 
         let base_heading = 0.0;
@@ -1542,8 +1576,14 @@ mod tests {
             .with_rotation(base_heading);
         let fallback_tower = TowerId::new(7);
         let mut empty_cache = HashMap::new();
-        let fallback =
-            resolve_turret_heading(fallback_tower, &oriented_turret, &[], &mut empty_cache);
+        let fallback = resolve_turret_heading(
+            fallback_tower,
+            Vec2::new(0.0, 0.0),
+            &oriented_turret,
+            &[],
+            &[],
+            &mut empty_cache,
+        );
         assert!((fallback - base_heading).abs() <= 1e-6);
         assert_eq!(
             empty_cache.get(&fallback_tower).copied(),
