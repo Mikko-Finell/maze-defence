@@ -14,6 +14,12 @@ By default the grid measures **10×10 tiles**, each tile is subdivided into **fo
 
 All flags must be passed after the `--` separator so that Cargo forwards them to the game binary.
 
+## Keyboard controls
+
+* `Space` toggles between Attack and Builder modes.
+* `T` reveals or hides tower targeting lines.
+* `H` reveals or hides bug health bars, which are hidden by default.
+
 ## Command-line options
 
 The CLI exposes the following arguments:
