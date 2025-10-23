@@ -42,7 +42,7 @@ sprite descriptors without duplicating geometry math or rotation logic.
 
 * Add a `visuals` (or similar) module exporting helpers such as
   `tower_sprite_visual(region: CellRect, heading_radians: f32) -> TowerVisual`
-  and `bug_sprite_visual(column: u32, row: u32, key: SpriteKey) -> BugVisual`.
+  and `bug_sprite_visual(column: u32, row: u32, key: SpriteKey, rotation_radians: f32) -> BugVisual`.
 * Implement `SpriteInstance::square(size_cells: Vec2)` and a helper that turns a
   `TowerTargetLine` into a rotation angle using `atan2`, clamped to `[−π, π]`.
 * Document and unit-test the helpers so that pivot defaults, scaling math, and
