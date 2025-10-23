@@ -130,7 +130,7 @@ moves without oscillation.
 **Exit checks:** System tests confirm congestion-influenced routing, and
 profiling/logging shows congestion buffers are reused between ticks.
 
-# 7) [PLANNED] Detour BFS fallback & reservation awareness (`systems/movement`)
+# 7) [DONE] Detour BFS fallback & reservation awareness (`systems/movement`)
 
 **Goal:** Teach the planner to escape jams via bounded detours while honouring
 existing reservations.
