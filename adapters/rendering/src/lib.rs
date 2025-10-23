@@ -622,9 +622,45 @@ fn snap_axis_to_steps(
     let snapped_center = value_in_steps.round();
     let clamped_center = snapped_center.clamp(min_center, max_center);
     let origin = clamped_center - half_preview;
+    let max_origin = (total_steps as f32 - preview_size).max(0.0);
+    let alignment_stride = placement_alignment_stride(steps_per_tile);
 
-    let clamped_origin = origin.max(0.0).min(total_steps as f32);
+    let mut aligned_origin = if alignment_stride > 1 {
+        snap_to_alignment_stride(origin, alignment_stride)
+    } else {
+        origin
+    };
+
+    if aligned_origin > max_origin && alignment_stride > 1 {
+        let stride = alignment_stride as f32;
+        let max_stride_multiple = (max_origin / stride).floor() * stride;
+        aligned_origin = if max_stride_multiple.is_finite() {
+            max_stride_multiple
+        } else {
+            0.0
+        };
+    }
+
+    let clamped_origin = aligned_origin.max(0.0).min(max_origin);
     Some(clamped_origin.round() as u32)
+}
+
+fn placement_alignment_stride(steps_per_tile: u32) -> u32 {
+    let stride = steps_per_tile / 2;
+    if stride <= 1 {
+        1
+    } else {
+        stride
+    }
+}
+
+fn snap_to_alignment_stride(value: f32, stride: u32) -> f32 {
+    if stride <= 1 || !value.is_finite() {
+        return value;
+    }
+
+    let stride = stride as f32;
+    (value / stride).round() * stride
 }
 
 /// Bug descriptor emitted by the simulation layer.
@@ -1247,6 +1283,21 @@ mod tests {
         assert_eq!(snapped.column_steps(), 2);
         assert_eq!(snapped.row_steps(), 2);
         assert!(!snapped.is_integer_aligned());
+    }
+
+    #[test]
+    fn snap_world_to_tile_restricts_to_alignment_stride() {
+        let presentation = TileGridPresentation::new(6, 3, 24.0, 4, Color::from_rgb_u8(0, 0, 0))
+            .expect("valid grid");
+        let snapped = presentation
+            .snap_world_to_tile(Vec2::new(18.0, 30.0), Vec2::splat(1.0))
+            .expect("position inside grid should snap");
+
+        assert_eq!(snapped.steps_per_tile(), 4);
+        assert_eq!(snapped.column_steps(), 2);
+        assert_eq!(snapped.row_steps(), 4);
+        assert_eq!(snapped.column_steps() % 2, 0);
+        assert_eq!(snapped.row_steps() % 2, 0);
     }
 
     #[test]
