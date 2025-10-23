@@ -304,6 +304,7 @@ impl RenderingBackend for MacroquadBackend {
             let background = to_macroquad_color(clear_color);
             let mut fps_counter = FpsCounter::default();
             let mut show_tower_target_lines = false;
+            let mut show_bug_health_bars = false;
 
             loop {
                 if is_key_pressed(KeyCode::Escape) || is_key_pressed(KeyCode::Q) {
@@ -312,6 +313,10 @@ impl RenderingBackend for MacroquadBackend {
 
                 if is_key_pressed(KeyCode::T) {
                     show_tower_target_lines = !show_tower_target_lines;
+                }
+
+                if is_key_pressed(KeyCode::H) {
+                    show_bug_health_bars = !show_bug_health_bars;
                 }
 
                 macroquad::window::clear_background(background);
@@ -373,7 +378,9 @@ impl RenderingBackend for MacroquadBackend {
                     &mut turret_headings,
                     TowerDrawStage::Base,
                 );
-                draw_bug_health_bars(&scene.bugs, &metrics);
+                if show_bug_health_bars {
+                    draw_bug_health_bars(&scene.bugs, &metrics);
+                }
                 draw_bugs(&scene.bugs, &metrics, sprite_atlas.as_ref());
                 draw_towers(
                     &scene.towers,
