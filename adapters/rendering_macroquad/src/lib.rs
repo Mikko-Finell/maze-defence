@@ -335,12 +335,14 @@ impl RenderingBackend for MacroquadBackend {
                 let tile_grid = scene.tile_grid;
                 let metrics = SceneMetrics::from_scene(&scene, screen_width, screen_height);
 
-                let grid_color = to_macroquad_color(tile_grid.line_color);
-                let subgrid_color = to_macroquad_color(tile_grid.line_color.lighten(0.6));
-
                 let render_start = Instant::now();
-                draw_subgrid(&metrics, &tile_grid, subgrid_color);
-                draw_tile_grid(&metrics, &tile_grid, grid_color);
+                if scene.play_mode == PlayMode::Builder {
+                    let grid_color = to_macroquad_color(tile_grid.line_color);
+                    let subgrid_color = to_macroquad_color(tile_grid.line_color.lighten(0.6));
+
+                    draw_subgrid(&metrics, &tile_grid, subgrid_color);
+                    draw_tile_grid(&metrics, &tile_grid, grid_color);
+                }
                 draw_cell_walls(&scene, &metrics);
 
                 let builder_preview = active_builder_preview(&scene);
