@@ -13,8 +13,8 @@ version = 1
 
 [sprites]
 # Static tower footprint rendered beneath turrets.
-TowerBase = "sprites/towers/base.png"
+TowerBase = "assets/sprites/towers/base.png"
 # Rotating turret sprite that shares the tower centre pivot.
-TowerTurret = "sprites/towers/turret.png"
+TowerTurret = "assets/sprites/towers/turret.png"
 # Default bug body sprite.
-BugBody = "sprites/bugs/bug.png"
+BugBody = "assets/sprites/bugs/bug.png"
