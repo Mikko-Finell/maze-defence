@@ -8,7 +8,7 @@ plumbing exist.
 
 # 1) Rendering contract scaffolding (`adapters/rendering`)
 
-**Status:** TODO
+**Status:** DONE
 
 **Goal:** Extend the shared rendering crate with sprite-aware descriptors while
 keeping all existing call sites compiling.
