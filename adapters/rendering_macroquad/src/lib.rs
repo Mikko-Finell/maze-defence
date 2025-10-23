@@ -16,7 +16,10 @@
 //! in by enabling `macroquad/audio` in their own `Cargo.toml` dependency
 //! specification.
 
-use anyhow::Result;
+mod sprites;
+
+pub use self::sprites::{DrawParams, SpriteAtlas};
+use anyhow::{Error, Result};
 use glam::Vec2;
 use macroquad::math::Vec2 as MacroquadVec2;
 use macroquad::{
@@ -30,7 +33,9 @@ use maze_defence_rendering::{
     TowerPreview, TowerTargetLine,
 };
 use std::{
-    collections::VecDeque,
+    cell::RefCell,
+    collections::{HashMap, VecDeque},
+    rc::Rc,
     time::{Duration, Instant},
 };
 
@@ -39,6 +44,8 @@ use std::{
 pub struct MacroquadBackend {
     swap_interval: Option<i32>,
     show_fps: bool,
+    sprite_atlas: Option<SpriteAtlas>,
+    turret_headings: HashMap<TowerId, f32>,
 }
 
 impl MacroquadBackend {
@@ -67,6 +74,13 @@ impl MacroquadBackend {
     #[must_use]
     pub fn with_show_fps(mut self, show: bool) -> Self {
         self.show_fps = show;
+        self
+    }
+
+    /// Injects a preloaded sprite atlas, primarily used in tests.
+    #[must_use]
+    pub fn with_sprite_atlas(mut self, sprite_atlas: SpriteAtlas) -> Self {
+        self.sprite_atlas = Some(sprite_atlas);
         self
     }
 }
@@ -195,6 +209,8 @@ impl RenderingBackend for MacroquadBackend {
         let Self {
             swap_interval,
             show_fps,
+            sprite_atlas,
+            turret_headings,
         } = self;
 
         let Presentation {
@@ -215,10 +231,27 @@ impl RenderingBackend for MacroquadBackend {
             config.platform.swap_interval = Some(swap_interval);
         }
 
+        let error_slot: Rc<RefCell<Option<Error>>> = Rc::new(RefCell::new(None));
+        let error_slot_clone = Rc::clone(&error_slot);
+
         macroquad::Window::from_config(config, async move {
             let background = to_macroquad_color(clear_color);
             let mut fps_counter = FpsCounter::default();
             let mut show_tower_target_lines = false;
+
+            let sprite_atlas = match sprite_atlas {
+                Some(atlas) => atlas,
+                None => match SpriteAtlas::from_default_manifest() {
+                    Ok(atlas) => atlas,
+                    Err(error) => {
+                        *error_slot_clone.borrow_mut() = Some(error);
+                        return;
+                    }
+                },
+            };
+            let mut turret_headings = turret_headings;
+            turret_headings.reserve(0);
+            let _ = sprite_atlas.texture_count();
 
             loop {
                 if is_key_pressed(KeyCode::Escape) || is_key_pressed(KeyCode::Q) {
@@ -321,7 +354,16 @@ impl RenderingBackend for MacroquadBackend {
             }
         });
 
-        Ok(())
+        match Rc::try_unwrap(error_slot) {
+            Ok(cell) => {
+                if let Some(error) = cell.into_inner() {
+                    Err(error)
+                } else {
+                    Ok(())
+                }
+            }
+            Err(_) => Err(Error::msg("render loop failed to release error slot")),
+        }
     }
 }
 
