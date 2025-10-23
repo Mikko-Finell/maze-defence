@@ -17,17 +17,20 @@
 //! specification.
 
 use anyhow::Result;
+use arboard::{Clipboard, Error as ClipboardError};
 use glam::Vec2;
 use macroquad::math::Vec2 as MacroquadVec2;
 use macroquad::{
     color::BLACK,
-    input::{is_key_pressed, is_mouse_button_pressed, mouse_position, KeyCode, MouseButton},
+    input::{
+        is_key_down, is_key_pressed, is_mouse_button_pressed, mouse_position, KeyCode, MouseButton,
+    },
 };
 use maze_defence_core::{CellRect, PlayMode, TowerId, TowerKind};
 use maze_defence_rendering::{
-    BugPresentation, Color, FrameInput, FrameSimulationBreakdown, Presentation, RenderingBackend,
-    Scene, SceneProjectile, SceneTower, SceneWall, TileGridPresentation, TowerPreview,
-    TowerTargetLine,
+    AdapterAction, BugPresentation, Color, FrameInput, FrameSimulationBreakdown, Presentation,
+    RenderingBackend, Scene, SceneProjectile, SceneTower, SceneWall, TileGridPresentation,
+    TowerPreview, TowerTargetLine,
 };
 use std::{
     collections::VecDeque,
@@ -228,6 +231,21 @@ impl RenderingBackend for MacroquadBackend {
 
                 let simulation_breakdown = update_scene(frame_dt, frame_input, &mut scene);
 
+                let pending_actions = std::mem::take(&mut scene.pending_adapter_actions);
+                for action in pending_actions {
+                    match action {
+                        AdapterAction::CopyLayout { contents } => {
+                            if let Err(error) = write_clipboard_text(&contents) {
+                                eprintln!("failed to write layout to clipboard: {error}");
+                            }
+                            println!("{contents}");
+                        }
+                        AdapterAction::DisplayError { message } => {
+                            eprintln!("{message}");
+                        }
+                    }
+                }
+
                 let tile_grid = scene.tile_grid;
                 let metrics = SceneMetrics::from_scene(&scene, screen_width, screen_height);
 
@@ -384,6 +402,20 @@ fn gather_frame_input(scene: &Scene, metrics: &SceneMetrics) -> FrameInput {
     let confirm_click = is_mouse_button_pressed(MouseButton::Left);
     let remove_click = is_mouse_button_pressed(MouseButton::Right);
     let delete_pressed = is_key_pressed(KeyCode::Delete);
+    let control_held = is_key_down(KeyCode::LeftControl) || is_key_down(KeyCode::RightControl);
+    let copy_shortcut = control_held && is_key_pressed(KeyCode::C);
+    let paste_shortcut = control_held && is_key_pressed(KeyCode::V);
+    let paste_clipboard_text = if paste_shortcut {
+        match read_clipboard_text() {
+            Ok(text) => text,
+            Err(error) => {
+                eprintln!("failed to read clipboard: {error}");
+                None
+            }
+        }
+    } else {
+        None
+    };
 
     gather_frame_input_from_observations(
         scene,
@@ -393,6 +425,8 @@ fn gather_frame_input(scene: &Scene, metrics: &SceneMetrics) -> FrameInput {
         confirm_click,
         remove_click,
         delete_pressed,
+        copy_shortcut,
+        paste_clipboard_text,
     )
 }
 
@@ -404,9 +438,13 @@ fn gather_frame_input_from_observations(
     confirm_click: bool,
     remove_click: bool,
     delete_pressed: bool,
+    copy_shortcut: bool,
+    paste_clipboard_text: Option<String>,
 ) -> FrameInput {
     let mut input = FrameInput {
         mode_toggle,
+        copy_tower_layout: copy_shortcut,
+        paste_tower_layout_text: paste_clipboard_text,
         ..FrameInput::default()
     };
 
@@ -445,6 +483,20 @@ fn gather_frame_input_from_observations(
     input.remove_action = remove_click || delete_pressed;
 
     input
+}
+
+fn read_clipboard_text() -> Result<Option<String>, ClipboardError> {
+    let mut clipboard = Clipboard::new()?;
+    match clipboard.get_text() {
+        Ok(text) => Ok(Some(text)),
+        Err(ClipboardError::ContentNotAvailable) => Ok(None),
+        Err(error) => Err(error),
+    }
+}
+
+fn write_clipboard_text(contents: &str) -> Result<(), ClipboardError> {
+    let mut clipboard = Clipboard::new()?;
+    clipboard.set_text(contents.to_owned())
 }
 
 fn active_builder_preview(scene: &Scene) -> Option<TowerPreview> {
@@ -1042,6 +1094,8 @@ mod tests {
             true,
             false,
             false,
+            false,
+            None,
         );
         assert!(
             inside_input.confirm_action,
@@ -1057,6 +1111,8 @@ mod tests {
             true,
             false,
             false,
+            false,
+            None,
         );
         assert!(
             outside_input.cursor_tile_space.is_none(),
@@ -1080,7 +1136,7 @@ mod tests {
             metrics.grid_offset_y + metrics.grid_height_scaled - 1.0,
         );
         let input = gather_frame_input_from_observations(
-            &scene, &metrics, cursor, false, false, false, false,
+            &scene, &metrics, cursor, false, false, false, false, false, None,
         );
 
         let tile = input

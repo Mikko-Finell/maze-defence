@@ -9,24 +9,29 @@
 
 //! Command-line adapter that boots the Maze Defence experience.
 
+mod layout_transfer;
+
 use std::{
     collections::HashMap,
+    fmt,
     str::FromStr,
     time::{Duration, Instant},
 };
 
 use anyhow::Result;
+use arboard::{Clipboard, Error as ClipboardError};
 use clap::{Parser, ValueEnum};
 use glam::Vec2;
+use layout_transfer::{TowerLayoutSnapshot, TowerLayoutTower, SNAPSHOT_HEADER_WITH_DELIMITER};
 use maze_defence_core::{
     BugId, CellCoord, CellPointHalf, CellRect, CellRectSize, Command, Event, PlacementError,
     PlayMode, ProjectileSnapshot, RemovalError, TileCoord, TowerCooldownView, TowerId, TowerKind,
     TowerTarget,
 };
 use maze_defence_rendering::{
-    BugHealthPresentation, BugPresentation, Color, FrameInput, FrameSimulationBreakdown,
-    Presentation, RenderingBackend, Scene, SceneProjectile, SceneTower, SceneWall,
-    TileGridPresentation, TileSpacePosition, TowerInteractionFeedback, TowerPreview,
+    AdapterAction, BugHealthPresentation, BugPresentation, Color, FrameInput,
+    FrameSimulationBreakdown, Presentation, RenderingBackend, Scene, SceneProjectile, SceneTower,
+    SceneWall, TileGridPresentation, TileSpacePosition, TowerInteractionFeedback, TowerPreview,
     TowerTargetLine,
 };
 use maze_defence_rendering_macroquad::MacroquadBackend;
@@ -47,6 +52,7 @@ const DEFAULT_TILE_LENGTH: f32 = 100.0;
 const DEFAULT_BUG_STEP_MS: u64 = 250;
 const DEFAULT_BUG_SPAWN_INTERVAL_MS: u64 = 1_000;
 const SPAWN_RNG_SEED: u64 = 0x4d59_5df4_d0f3_3173;
+const TILE_LENGTH_TOLERANCE: f32 = 1e-3;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct PlacementRejection {
@@ -315,6 +321,7 @@ struct Simulation {
     pending_events: Vec<Event>,
     scratch_commands: Vec<Command>,
     queued_commands: Vec<Command>,
+    pending_adapter_actions: Vec<AdapterAction>,
     pending_input: FrameInput,
     builder_preview: Option<BuilderPlacementPreview>,
     tower_feedback: Option<TowerInteractionFeedback>,
@@ -324,9 +331,43 @@ struct Simulation {
     bug_motions: HashMap<BugId, BugMotion>,
     cells_per_tile: u32,
     last_advance_profile: AdvanceProfile,
+    pending_layout_verification: Option<usize>,
     #[cfg(test)]
     last_frame_events: Vec<Event>,
 }
+
+#[derive(Debug)]
+enum LayoutImportError {
+    ColumnMismatch { expected: u32, observed: u32 },
+    RowMismatch { expected: u32, observed: u32 },
+    CellsPerTileMismatch { expected: u32, observed: u32 },
+    TileLengthMismatch { expected: f32, observed: f32 },
+}
+
+impl fmt::Display for LayoutImportError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::ColumnMismatch { expected, observed } => write!(
+                f,
+                "Layout uses {observed} columns but the current map expects {expected}."
+            ),
+            Self::RowMismatch { expected, observed } => write!(
+                f,
+                "Layout uses {observed} rows but the current map expects {expected}."
+            ),
+            Self::CellsPerTileMismatch { expected, observed } => write!(
+                f,
+                "Layout was authored with {observed} cells per tile but the map is configured for {expected}."
+            ),
+            Self::TileLengthMismatch { expected, observed } => write!(
+                f,
+                "Layout was authored with tile length {observed} but the map is configured for {expected}."
+            ),
+        }
+    }
+}
+
+impl std::error::Error for LayoutImportError {}
 
 #[derive(Clone, Copy, Debug, Default)]
 struct AdvanceProfile {
@@ -435,6 +476,7 @@ impl Simulation {
             pending_events,
             scratch_commands: Vec::new(),
             queued_commands: Vec::new(),
+            pending_adapter_actions: Vec::new(),
             pending_input: FrameInput::default(),
             builder_preview: None,
             tower_feedback: None,
@@ -444,11 +486,13 @@ impl Simulation {
             bug_motions: HashMap::new(),
             cells_per_tile,
             last_advance_profile: AdvanceProfile::default(),
+            pending_layout_verification: None,
             #[cfg(test)]
             last_frame_events: Vec::new(),
         };
         let _ = simulation.process_pending_events(None, TowerBuilderInput::default());
         simulation.builder_preview = simulation.compute_builder_preview();
+        simulation.try_initial_clipboard_layout();
         simulation
     }
 
@@ -457,6 +501,17 @@ impl Simulation {
     }
 
     fn handle_input(&mut self, input: FrameInput) {
+        if input.copy_tower_layout {
+            let snapshot = self.capture_layout_snapshot();
+            let encoded = snapshot.encode();
+            self.pending_adapter_actions
+                .push(AdapterAction::CopyLayout { contents: encoded });
+        }
+
+        if let Some(text) = input.paste_tower_layout_text.as_deref() {
+            self.handle_layout_paste_text(text, false);
+        }
+
         if input.mode_toggle {
             let current_mode = query::play_mode(&self.world);
             let next_mode = match current_mode {
@@ -469,11 +524,172 @@ impl Simulation {
 
         self.pending_input = FrameInput {
             mode_toggle: false,
+            copy_tower_layout: false,
+            paste_tower_layout_text: None,
             cursor_world_space: input.cursor_world_space,
             cursor_tile_space: input.cursor_tile_space,
             confirm_action: input.confirm_action,
             remove_action: input.remove_action,
         };
+    }
+
+    fn capture_layout_snapshot(&self) -> TowerLayoutSnapshot {
+        let tile_grid = query::tile_grid(&self.world);
+        let towers = query::towers(&self.world);
+        let towers = towers
+            .iter()
+            .map(|tower| TowerLayoutTower {
+                kind: tower.kind,
+                origin: tower.region.origin(),
+            })
+            .collect();
+        TowerLayoutSnapshot {
+            columns: tile_grid.columns().get(),
+            rows: tile_grid.rows().get(),
+            tile_length: tile_grid.tile_length(),
+            cells_per_tile: query::cells_per_tile(&self.world),
+            towers,
+        }
+    }
+
+    fn handle_layout_paste_text(&mut self, text: &str, apply_immediately: bool) {
+        let snapshot = match TowerLayoutSnapshot::decode(text) {
+            Ok(snapshot) => snapshot,
+            Err(error) => {
+                self.pending_adapter_actions
+                    .push(AdapterAction::DisplayError {
+                        message: format!("Failed to decode layout snapshot: {error}"),
+                    });
+                return;
+            }
+        };
+
+        let expected_towers = snapshot.towers.len();
+        match self.queue_layout_import(&snapshot) {
+            Ok(()) => {
+                self.pending_layout_verification = Some(expected_towers);
+                if apply_immediately {
+                    self.process_layout_commands_immediately();
+                    self.verify_layout_import();
+                }
+            }
+            Err(error) => {
+                self.pending_adapter_actions
+                    .push(AdapterAction::DisplayError {
+                        message: error.to_string(),
+                    });
+            }
+        }
+    }
+
+    fn queue_layout_import(
+        &mut self,
+        snapshot: &TowerLayoutSnapshot,
+    ) -> Result<(), LayoutImportError> {
+        let tile_grid = query::tile_grid(&self.world);
+        if tile_grid.columns().get() != snapshot.columns {
+            return Err(LayoutImportError::ColumnMismatch {
+                expected: tile_grid.columns().get(),
+                observed: snapshot.columns,
+            });
+        }
+
+        if tile_grid.rows().get() != snapshot.rows {
+            return Err(LayoutImportError::RowMismatch {
+                expected: tile_grid.rows().get(),
+                observed: snapshot.rows,
+            });
+        }
+
+        let cells_per_tile = query::cells_per_tile(&self.world);
+        if cells_per_tile != snapshot.cells_per_tile {
+            return Err(LayoutImportError::CellsPerTileMismatch {
+                expected: cells_per_tile,
+                observed: snapshot.cells_per_tile,
+            });
+        }
+
+        let tile_length = tile_grid.tile_length();
+        if (tile_length - snapshot.tile_length).abs() > TILE_LENGTH_TOLERANCE {
+            return Err(LayoutImportError::TileLengthMismatch {
+                expected: tile_length,
+                observed: snapshot.tile_length,
+            });
+        }
+
+        let current_mode = query::play_mode(&self.world);
+        if current_mode != PlayMode::Builder {
+            self.queued_commands.push(Command::SetPlayMode {
+                mode: PlayMode::Builder,
+            });
+        }
+
+        let towers = query::towers(&self.world);
+        for tower in towers.iter() {
+            self.queued_commands
+                .push(Command::RemoveTower { tower: tower.id });
+        }
+
+        for layout_tower in &snapshot.towers {
+            self.queued_commands.push(Command::PlaceTower {
+                kind: layout_tower.kind,
+                origin: layout_tower.origin,
+            });
+        }
+
+        if current_mode != PlayMode::Builder {
+            self.queued_commands
+                .push(Command::SetPlayMode { mode: current_mode });
+        }
+
+        Ok(())
+    }
+
+    fn process_layout_commands_immediately(&mut self) {
+        let builder_preview = self.compute_builder_preview();
+        let builder_input = TowerBuilderInput::default();
+        self.pending_events.clear();
+        self.flush_queued_commands();
+        let events_profile = self.process_pending_events(builder_preview, builder_input);
+        self.builder_preview = self.compute_builder_preview();
+        self.last_advance_profile = AdvanceProfile::new(Duration::ZERO, events_profile.pathfinding);
+    }
+
+    fn verify_layout_import(&mut self) {
+        if let Some(expected) = self.pending_layout_verification.take() {
+            let actual = query::towers(&self.world).iter().count();
+            if actual != expected {
+                self.pending_adapter_actions
+                    .push(AdapterAction::DisplayError {
+                        message: format!(
+                            "Restored {actual} towers but the layout specified {expected}."
+                        ),
+                    });
+            }
+        }
+    }
+
+    fn try_initial_clipboard_layout(&mut self) {
+        let clipboard_text = match read_clipboard_text() {
+            Ok(Some(text)) => text,
+            Ok(None) => return,
+            Err(error) => {
+                self.pending_adapter_actions
+                    .push(AdapterAction::DisplayError {
+                        message: format!("Failed to access clipboard: {error}"),
+                    });
+                return;
+            }
+        };
+
+        if !clipboard_text
+            .trim_start()
+            .starts_with(SNAPSHOT_HEADER_WITH_DELIMITER)
+        {
+            return;
+        }
+
+        self.handle_layout_paste_text(clipboard_text.trim(), true);
     }
 
     fn advance(&mut self, dt: Duration) {
@@ -497,6 +713,7 @@ impl Simulation {
         self.builder_preview = self.compute_builder_preview();
         self.last_advance_profile =
             AdvanceProfile::new(frame_start.elapsed(), events_profile.pathfinding);
+        self.verify_layout_import();
     }
 
     fn advance_bug_motions(&mut self, dt: Duration) {
@@ -544,7 +761,7 @@ impl Simulation {
         Vec2::new(cell.column() as f32 + 0.5, cell.row() as f32 + 0.5)
     }
 
-    fn populate_scene(&self, scene: &mut Scene) {
+    fn populate_scene(&mut self, scene: &mut Scene) {
         let wall_view = query::walls(&self.world);
         scene.walls.clear();
         scene.walls.extend(
@@ -614,6 +831,9 @@ impl Simulation {
             None
         };
         scene.tower_feedback = self.tower_feedback;
+        scene
+            .pending_adapter_actions
+            .extend(self.pending_adapter_actions.drain(..));
     }
 
     fn process_pending_events(
@@ -1045,6 +1265,27 @@ impl Simulation {
     }
 }
 
+fn read_clipboard_text() -> Result<Option<String>, ClipboardError> {
+    let mut clipboard = Clipboard::new()?;
+    match clipboard.get_text() {
+        Ok(text) => Ok(Some(text)),
+        Err(ClipboardError::ContentNotAvailable) => Ok(None),
+        Err(error) => Err(error),
+    }
+}
+
+impl Drop for Simulation {
+    fn drop(&mut self) {
+        if cfg!(test) {
+            return;
+        }
+
+        let snapshot = self.capture_layout_snapshot();
+        let encoded = snapshot.encode();
+        println!("{encoded}");
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1244,6 +1485,7 @@ mod tests {
             cursor_tile_space: Some(first_tile),
             confirm_action: false,
             remove_action: false,
+            ..FrameInput::default()
         });
 
         assert_eq!(
@@ -1267,6 +1509,7 @@ mod tests {
             cursor_tile_space: Some(second_tile),
             confirm_action: false,
             remove_action: false,
+            ..FrameInput::default()
         });
 
         assert_eq!(
@@ -1295,6 +1538,7 @@ mod tests {
             cursor_tile_space: Some(initial_tile),
             confirm_action: false,
             remove_action: false,
+            ..FrameInput::default()
         });
 
         simulation.advance(Duration::ZERO);
@@ -1307,6 +1551,7 @@ mod tests {
             cursor_tile_space: Some(preview_tile),
             confirm_action: false,
             remove_action: false,
+            ..FrameInput::default()
         });
 
         let mut scene = make_scene();
