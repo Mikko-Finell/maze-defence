@@ -71,6 +71,100 @@ fn lighten_channel(channel: f32, amount: f32) -> f32 {
     channel + (1.0 - channel) * amount
 }
 
+/// Identifiers of sprite assets bundled with the game.
+///
+/// Sprite keys are stable across runs so that asset lookups remain deterministic
+/// when loading textures at startup or replaying a render sequence.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum SpriteKey {
+    /// Static base for a tower footprint.
+    TowerBase,
+    /// Rotating turret rendered above the tower base.
+    TowerTurret,
+    /// Body sprite used for bugs.
+    BugBody,
+}
+
+/// Describes a single sprite draw request expressed entirely in cell units.
+///
+/// Rendering backends consume these descriptors to calculate texture lookups
+/// without consulting global state or random number generators, keeping sprite
+/// presentation deterministic.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SpriteInstance {
+    /// Asset identifier that resolves to a concrete texture.
+    pub sprite: SpriteKey,
+    /// Desired size of the sprite expressed in cell units.
+    pub size: Vec2,
+    /// Pivot expressed in normalised texture coordinates (`0.0..=1.0`).
+    pub pivot: Vec2,
+    /// Rotation applied to the sprite in radians around the pivot.
+    pub rotation_radians: f32,
+    /// Optional cell-space offset applied after positioning by column/row.
+    pub offset: Option<Vec2>,
+}
+
+impl SpriteInstance {
+    /// Creates a sprite descriptor scaled to the provided cell-space size.
+    #[must_use]
+    pub fn new(sprite: SpriteKey, size: Vec2) -> Self {
+        Self {
+            sprite,
+            size,
+            pivot: Vec2::splat(0.5),
+            rotation_radians: 0.0,
+            offset: None,
+        }
+    }
+
+    /// Overrides the pivot used when rotating the sprite.
+    #[must_use]
+    pub fn with_pivot(mut self, pivot: Vec2) -> Self {
+        self.pivot = pivot;
+        self
+    }
+
+    /// Overrides the rotation applied to the sprite.
+    #[must_use]
+    pub fn with_rotation(mut self, rotation_radians: f32) -> Self {
+        self.rotation_radians = rotation_radians;
+        self
+    }
+
+    /// Sets an optional offset expressed in cell units.
+    #[must_use]
+    pub fn with_offset(mut self, offset: Option<Vec2>) -> Self {
+        self.offset = offset;
+        self
+    }
+}
+
+/// Visual style used when drawing a tower in the scene.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum TowerVisual {
+    /// Retains the existing primitive rectangle representation.
+    PrimitiveRect,
+    /// Requests sprite rendering using the provided base and turret descriptors.
+    Sprite {
+        /// Axis-aligned base sprite occupying the tower footprint.
+        base: SpriteInstance,
+        /// Turret sprite that rotates to track active targets.
+        turret: SpriteInstance,
+    },
+}
+
+/// Visual style used when drawing a bug in the scene.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum BugVisual {
+    /// Draws a primitive circle using the supplied fill colour.
+    PrimitiveCircle {
+        /// Fill colour used for the bug body.
+        color: Color,
+    },
+    /// Draws a sprite instance centred on the bug position.
+    Sprite(SpriteInstance),
+}
+
 /// Input snapshot gathered by adapters before updating the scene.
 #[derive(Clone, Debug, PartialEq, Default)]
 pub struct FrameInput {
@@ -196,7 +290,7 @@ impl TileSpacePosition {
 }
 
 /// Immutable snapshot describing a tower placed within the scene.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SceneTower {
     /// Identifier allocated to the tower by the world.
     pub id: TowerId,
@@ -204,13 +298,27 @@ pub struct SceneTower {
     pub kind: TowerKind,
     /// Region of cells occupied by the tower.
     pub region: CellRect,
+    /// Visual style requested for this tower.
+    pub visual: TowerVisual,
 }
 
 impl SceneTower {
     /// Creates a new scene tower descriptor.
     #[must_use]
     pub const fn new(id: TowerId, kind: TowerKind, region: CellRect) -> Self {
-        Self { id, kind, region }
+        Self {
+            id,
+            kind,
+            region,
+            visual: TowerVisual::PrimitiveRect,
+        }
+    }
+
+    /// Returns a new descriptor with the provided visual style applied.
+    #[must_use]
+    pub const fn with_visual(mut self, visual: TowerVisual) -> Self {
+        self.visual = visual;
+        self
     }
 }
 
@@ -463,33 +571,102 @@ fn snap_axis_to_steps(
     Some(clamped_origin.round() as u32)
 }
 
-/// In-game bug rendered as a filled circle scaled to a single cell.
+/// Bug descriptor emitted by the simulation layer.
 ///
-/// Bug coordinates are expressed in cell units derived from the tile grid's
-/// [`cells_per_tile`](TileGridPresentation::cells_per_tile) configuration.
+/// Bug coordinates are expressed in cell units and decomposed into a base cell
+/// (`column`, `row`) and an offset inside that cell.  Rendering backends should
+/// rely solely on these deterministic values when positioning sprites or
+/// primitives.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct BugPresentation {
     /// Identifier allocated to the bug by the world.
     pub id: BugId,
-    /// Bug position expressed in cell-space coordinates.
-    pub position: Vec2,
-    /// Fill color of the bug's body.
-    pub color: Color,
+    /// Zero-based column containing the bug's anchor position.
+    pub column: u32,
+    /// Zero-based row containing the bug's anchor position.
+    pub row: u32,
+    /// Offset from the cell origin expressed in cell units.
+    pub offset: Vec2,
+    /// Visual style requested for the bug.
+    pub style: BugVisual,
     /// Health configuration used to draw the bug's health bar.
     pub health: BugHealthPresentation,
 }
 
 impl BugPresentation {
-    /// Creates a new bug presentation descriptor.
+    /// Creates a bug descriptor that requests primitive circle rendering.
     #[must_use]
-    pub fn new(id: BugId, position: Vec2, color: Color, health: BugHealthPresentation) -> Self {
+    pub fn new_circle(
+        id: BugId,
+        position: Vec2,
+        color: Color,
+        health: BugHealthPresentation,
+    ) -> Self {
+        Self::from_parts(id, position, BugVisual::PrimitiveCircle { color }, health)
+    }
+
+    /// Creates a bug descriptor that requests sprite rendering.
+    #[must_use]
+    pub fn new_sprite(
+        id: BugId,
+        position: Vec2,
+        sprite: SpriteInstance,
+        health: BugHealthPresentation,
+    ) -> Self {
+        Self::from_parts(id, position, BugVisual::Sprite(sprite), health)
+    }
+
+    fn from_parts(
+        id: BugId,
+        position: Vec2,
+        style: BugVisual,
+        health: BugHealthPresentation,
+    ) -> Self {
+        let column = decompose_axis(position.x);
+        let row = decompose_axis(position.y);
+        let offset = Vec2::new(
+            offset_within_cell(position.x, column),
+            offset_within_cell(position.y, row),
+        );
+
         Self {
             id,
-            position,
-            color,
+            column,
+            row,
+            offset,
+            style,
             health,
         }
     }
+
+    /// Returns the bug position expressed in cell units.
+    #[must_use]
+    pub fn position(&self) -> Vec2 {
+        Vec2::new(self.column as f32, self.row as f32) + self.offset
+    }
+}
+
+fn decompose_axis(value: f32) -> u32 {
+    if value.is_nan() {
+        return 0;
+    }
+
+    if value.is_sign_negative() {
+        0
+    } else if value >= u32::MAX as f32 {
+        u32::MAX
+    } else {
+        value.floor() as u32
+    }
+}
+
+fn offset_within_cell(value: f32, cell_origin: u32) -> f32 {
+    if value.is_nan() {
+        return 0.0;
+    }
+
+    let raw = value - cell_origin as f32;
+    raw.clamp(0.0, 1.0)
 }
 
 /// Health values required to render a bug's health bar.
@@ -573,7 +750,7 @@ pub struct Scene {
     pub wall_color: Color,
     /// Cell-sized walls populating the maze interior.
     pub walls: Vec<SceneWall>,
-    /// Bugs currently visible within the maze, positioned using cell coordinates.
+    /// Bugs currently visible within the maze, positioned using deterministic cell descriptors.
     pub bugs: Vec<BugPresentation>,
     /// Towers currently visible within the maze.
     pub towers: Vec<SceneTower>,
@@ -711,6 +888,21 @@ mod tests {
     }
 
     #[test]
+    fn bug_presentation_preserves_position_via_offset() {
+        let bug = BugPresentation::new_circle(
+            BugId::new(7),
+            Vec2::new(3.25, 4.75),
+            Color::from_rgb_u8(255, 0, 0),
+            BugHealthPresentation::new(2, 3),
+        );
+
+        assert_eq!(bug.column, 3);
+        assert_eq!(bug.row, 4);
+        let expected = Vec2::new(3.25, 4.75);
+        assert!((bug.position() - expected).length() <= f32::EPSILON);
+    }
+
+    #[test]
     fn tile_grid_creation_rejects_zero_cells_per_tile_without_panicking() {
         let error = TileGridPresentation::new(10, 5, 32.0, 0, Color::from_rgb_u8(0, 0, 0))
             .expect_err("zero cells_per_tile must be rejected");
@@ -838,7 +1030,7 @@ mod tests {
         )
         .expect("default cells_per_tile is valid");
         let wall_color = Color::from_rgb_u8(128, 128, 128);
-        let bugs = vec![BugPresentation::new(
+        let bugs = vec![BugPresentation::new_circle(
             BugId::new(3),
             Vec2::new(2.0, 3.0),
             Color::from_rgb_u8(255, 0, 0),
@@ -930,6 +1122,7 @@ mod tests {
         assert_eq!(scene.tower_preview, Some(placement_preview));
         assert_eq!(scene.active_tower_footprint_tiles, Some(Vec2::splat(1.0)));
         assert_eq!(scene.towers.len(), 1);
+        assert!(matches!(scene.towers[0].visual, TowerVisual::PrimitiveRect));
         assert_eq!(scene.tile_grid, tile_grid);
         assert_eq!(scene.wall_color, wall_color);
         assert!(scene.walls.is_empty());
