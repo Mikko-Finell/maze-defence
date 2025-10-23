@@ -927,9 +927,18 @@ pub mod visuals {
     }
 
     /// Builds a sprite-based bug visual anchored to the bug's owning cell.
+    ///
+    /// The provided rotation is normalised to keep downstream rendering
+    /// calculations numerically stable.
     #[must_use]
-    pub fn bug_sprite_visual(_column: u32, _row: u32, key: SpriteKey) -> BugVisual {
-        let sprite = SpriteInstance::square(key, Vec2::splat(1.0));
+    pub fn bug_sprite_visual(
+        _column: u32,
+        _row: u32,
+        key: SpriteKey,
+        rotation_radians: f32,
+    ) -> BugVisual {
+        let sprite = SpriteInstance::square(key, Vec2::splat(1.0))
+            .with_rotation(normalise_radians(rotation_radians));
         BugVisual::Sprite(sprite)
     }
 
@@ -1074,13 +1083,15 @@ mod tests {
 
     #[test]
     fn bug_sprite_visual_wraps_key() {
-        let visual = visuals::bug_sprite_visual(5, 6, SpriteKey::BugBody);
+        let rotation = FRAC_PI_2 * 0.5;
+        let visual = visuals::bug_sprite_visual(5, 6, SpriteKey::BugBody, rotation);
         let BugVisual::Sprite(instance) = visual else {
             panic!("expected sprite bug visual");
         };
 
         assert_eq!(instance.sprite, SpriteKey::BugBody);
         assert_eq!(instance.size, Vec2::splat(1.0));
+        assert!((instance.rotation_radians - rotation).abs() <= f32::EPSILON);
     }
 
     #[test]

@@ -13,6 +13,7 @@ mod layout_transfer;
 
 use std::{
     collections::HashMap,
+    f32::consts::{FRAC_PI_2, PI},
     fmt,
     str::FromStr,
     time::{Duration, Instant},
@@ -52,6 +53,7 @@ const DEFAULT_BUG_STEP_MS: u64 = 250;
 const DEFAULT_BUG_SPAWN_INTERVAL_MS: u64 = 1_000;
 const SPAWN_RNG_SEED: u64 = 0x4d59_5df4_d0f3_3173;
 const TILE_LENGTH_TOLERANCE: f32 = 1e-3;
+const DEFAULT_BUG_HEADING: f32 = 0.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct PlacementRejection {
@@ -388,6 +390,7 @@ struct Simulation {
     last_removal_rejection: Option<RemovalRejection>,
     bug_step_duration: Duration,
     bug_motions: HashMap<BugId, BugMotion>,
+    bug_headings: HashMap<BugId, f32>,
     cells_per_tile: u32,
     visual_style: VisualStyle,
     last_advance_profile: AdvanceProfile,
@@ -551,6 +554,7 @@ impl Simulation {
             last_removal_rejection: None,
             bug_step_duration: bug_step,
             bug_motions: HashMap::new(),
+            bug_headings: HashMap::new(),
             cells_per_tile,
             visual_style,
             last_advance_profile: AdvanceProfile::default(),
@@ -780,6 +784,42 @@ impl Simulation {
         Vec2::new(cell.column() as f32 + 0.5, cell.row() as f32 + 0.5)
     }
 
+    fn bug_heading_from_cells(from: CellCoord, to: CellCoord) -> Option<f32> {
+        if from == to {
+            return None;
+        }
+
+        let from_center = Self::cell_center(from);
+        let to_center = Self::cell_center(to);
+        let delta = to_center - from_center;
+        if delta.length_squared() <= f32::EPSILON {
+            return None;
+        }
+
+        let heading = delta.y.atan2(delta.x) + FRAC_PI_2;
+        Some(Self::normalise_radians(heading))
+    }
+
+    fn normalise_radians(angle: f32) -> f32 {
+        if !angle.is_finite() {
+            return DEFAULT_BUG_HEADING;
+        }
+
+        let two_pi = 2.0 * PI;
+        if two_pi <= f32::EPSILON {
+            return angle.clamp(-PI, PI);
+        }
+
+        let mut wrapped = angle % two_pi;
+        if wrapped > PI {
+            wrapped -= two_pi;
+        } else if wrapped < -PI {
+            wrapped += two_pi;
+        }
+
+        wrapped.clamp(-PI, PI)
+    }
+
     fn populate_scene(&mut self, scene: &mut Scene) {
         let use_sprite_visuals = self.visual_style == VisualStyle::Sprites;
         const DEFAULT_TURRET_HEADING: f32 = 0.0;
@@ -802,10 +842,20 @@ impl Simulation {
             let health = BugHealthPresentation::new(bug.health.get(), bug.max_health.get());
 
             let presentation = if use_sprite_visuals {
+                let stored_heading = self.bug_headings.get(&bug.id).copied();
+                let heading = stored_heading
+                    .or_else(|| {
+                        self.bug_motions
+                            .get(&bug.id)
+                            .and_then(|motion| Self::bug_heading_from_cells(motion.from, motion.to))
+                    })
+                    .unwrap_or(DEFAULT_BUG_HEADING);
+                let _ = self.bug_headings.entry(bug.id).or_insert(heading);
                 let sprite_visual = visuals::bug_sprite_visual(
                     bug.cell.column(),
                     bug.cell.row(),
                     SpriteKey::BugBody,
+                    heading,
                 );
                 let BugVisual::Sprite(sprite) = sprite_visual else {
                     unreachable!("bug sprite helper should return sprite visuals");
@@ -980,15 +1030,25 @@ impl Simulation {
             match event {
                 Event::BugAdvanced { bug_id, from, to } => {
                     let _ = self.bug_motions.insert(*bug_id, BugMotion::new(*from, *to));
+                    if let Some(heading) = Self::bug_heading_from_cells(*from, *to) {
+                        let _ = self.bug_headings.insert(*bug_id, heading);
+                    }
                 }
-                Event::BugSpawned { bug_id, .. } | Event::BugExited { bug_id, .. } => {
+                Event::BugSpawned { bug_id, .. } => {
                     let _ = self.bug_motions.remove(bug_id);
+                    let _ = self.bug_headings.insert(*bug_id, DEFAULT_BUG_HEADING);
+                }
+                Event::BugExited { bug_id, .. } => {
+                    let _ = self.bug_motions.remove(bug_id);
+                    let _ = self.bug_headings.remove(bug_id);
                 }
                 Event::BugDied { bug } => {
                     let _ = self.bug_motions.remove(bug);
+                    let _ = self.bug_headings.remove(bug);
                 }
                 Event::PlayModeChanged { mode } if *mode == PlayMode::Builder => {
                     self.bug_motions.clear();
+                    self.bug_headings.clear();
                 }
                 _ => {}
             }
@@ -1502,6 +1562,9 @@ mod tests {
         match bug.style {
             BugVisual::Sprite(sprite) => {
                 assert_eq!(sprite.sprite, SpriteKey::BugBody);
+                let expected_heading =
+                    Simulation::bug_heading_from_cells(from, to).unwrap_or(DEFAULT_BUG_HEADING);
+                assert!((sprite.rotation_radians - expected_heading).abs() <= f32::EPSILON);
             }
             BugVisual::PrimitiveCircle { .. } => {
                 panic!("sprite visual expected when sprites enabled");
