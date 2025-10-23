@@ -348,8 +348,9 @@ fn main() -> Result<()> {
         Some(VsyncMode::On) => MacroquadBackend::default().with_vsync(true),
         Some(VsyncMode::Off) => MacroquadBackend::default().with_vsync(false),
         None => MacroquadBackend::default(),
-    };
-    let backend = backend.with_show_fps(show_fps);
+    }
+    .with_sprite_rendering(args.visual_style == VisualStyle::Sprites)
+    .with_show_fps(show_fps);
 
     backend.run(presentation, move |dt, input, scene| {
         simulation.handle_input(input);
