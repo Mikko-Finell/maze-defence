@@ -1,0 +1,2 @@
+# Binary sprite assets are stored in Git LFS to keep the repository lightweight.
+*.png filter=lfs diff=lfs merge=lfs -text

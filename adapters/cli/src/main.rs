@@ -13,6 +13,7 @@ mod layout_transfer;
 
 use std::{
     collections::HashMap,
+    f32::consts::FRAC_PI_2,
     fmt,
     str::FromStr,
     time::{Duration, Instant},
@@ -28,10 +29,10 @@ use maze_defence_core::{
     TowerTarget,
 };
 use maze_defence_rendering::{
-    BugHealthPresentation, BugPresentation, Color, FrameInput, FrameSimulationBreakdown,
-    Presentation, RenderingBackend, Scene, SceneProjectile, SceneTower, SceneWall,
-    TileGridPresentation, TileSpacePosition, TowerInteractionFeedback, TowerPreview,
-    TowerTargetLine,
+    visuals, BugHealthPresentation, BugPresentation, BugVisual, Color, FrameInput,
+    FrameSimulationBreakdown, Presentation, RenderingBackend, Scene, SceneProjectile, SceneTower,
+    SceneWall, SpriteKey, TileGridPresentation, TileSpacePosition, TowerInteractionFeedback,
+    TowerPreview, TowerTargetLine,
 };
 use maze_defence_rendering_macroquad::MacroquadBackend;
 use maze_defence_system_bootstrap::Bootstrap;
@@ -182,6 +183,14 @@ struct CliArgs {
     /// Controls whether per-second frame timing metrics are printed to stdout.
     #[arg(long = "show-fps", value_enum, value_name = "on|off", default_value_t = Toggle::Off)]
     show_fps: Toggle,
+    /// Selects whether sprites or primitive shapes render towers and bugs.
+    #[arg(
+        long = "visual-style",
+        value_enum,
+        value_name = "sprites|primitives",
+        default_value_t = VisualStyle::Sprites
+    )]
+    visual_style: VisualStyle,
 }
 
 /// CLI argument controlling whether vertical sync is requested from the rendering backend.
@@ -200,6 +209,15 @@ enum Toggle {
     On,
     /// Disable the associated behaviour.
     Off,
+}
+
+/// Rendering styles offered by the CLI adapter.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+enum VisualStyle {
+    /// Render towers and bugs using sprite assets.
+    Sprites,
+    /// Render towers and bugs using primitive shapes.
+    Primitives,
 }
 
 impl Toggle {
@@ -284,6 +302,7 @@ fn main() -> Result<()> {
         args.cells_per_tile,
         bug_step_duration,
         bug_spawn_interval,
+        args.visual_style,
     );
     if let Some(snapshot) = layout_snapshot.as_ref() {
         simulation
@@ -369,6 +388,7 @@ struct Simulation {
     bug_step_duration: Duration,
     bug_motions: HashMap<BugId, BugMotion>,
     cells_per_tile: u32,
+    visual_style: VisualStyle,
     last_advance_profile: AdvanceProfile,
     last_announced_play_mode: PlayMode,
     #[cfg(test)]
@@ -486,6 +506,7 @@ impl Simulation {
         cells_per_tile: u32,
         bug_step: Duration,
         bug_spawn_interval: Duration,
+        visual_style: VisualStyle,
     ) -> Self {
         let mut world = World::new();
         let mut pending_events = Vec::new();
@@ -529,6 +550,7 @@ impl Simulation {
             bug_step_duration: bug_step,
             bug_motions: HashMap::new(),
             cells_per_tile,
+            visual_style,
             last_advance_profile: AdvanceProfile::default(),
             last_announced_play_mode: initial_play_mode,
             #[cfg(test)]
@@ -761,6 +783,9 @@ impl Simulation {
     }
 
     fn populate_scene(&mut self, scene: &mut Scene) {
+        let use_sprite_visuals = self.visual_style == VisualStyle::Sprites;
+        const DEFAULT_TURRET_HEADING: f32 = -FRAC_PI_2;
+
         let wall_view = query::walls(&self.world);
         scene.walls.clear();
         scene.walls.extend(
@@ -776,21 +801,41 @@ impl Simulation {
             let color = bug.color;
             let position = self.interpolated_bug_position_with_cell(bug.id, Some(bug.cell));
             let _ = bug_positions.insert(bug.id, position);
-            scene.bugs.push(BugPresentation::new_circle(
-                bug.id,
-                position,
-                Color::from_rgb_u8(color.red(), color.green(), color.blue()),
-                BugHealthPresentation::new(bug.health.get(), bug.max_health.get()),
-            ));
+            let health = BugHealthPresentation::new(bug.health.get(), bug.max_health.get());
+
+            let presentation = if use_sprite_visuals {
+                let sprite_visual = visuals::bug_sprite_visual(
+                    bug.cell.column(),
+                    bug.cell.row(),
+                    SpriteKey::BugBody,
+                );
+                let BugVisual::Sprite(sprite) = sprite_visual else {
+                    unreachable!("bug sprite helper should return sprite visuals");
+                };
+                BugPresentation::new_sprite(bug.id, position, sprite, health)
+            } else {
+                BugPresentation::new_circle(
+                    bug.id,
+                    position,
+                    Color::from_rgb_u8(color.red(), color.green(), color.blue()),
+                    health,
+                )
+            };
+
+            scene.bugs.push(presentation);
         }
 
         let tower_view = query::towers(&self.world);
         scene.towers.clear();
-        scene.towers.extend(
-            tower_view
-                .iter()
-                .map(|tower| SceneTower::new(tower.id, tower.kind, tower.region)),
-        );
+        scene.towers.extend(tower_view.iter().map(|tower| {
+            let descriptor = SceneTower::new(tower.id, tower.kind, tower.region);
+            if use_sprite_visuals {
+                let visual = visuals::tower_sprite_visual(tower.region, DEFAULT_TURRET_HEADING);
+                descriptor.with_visual(visual)
+            } else {
+                descriptor
+            }
+        }));
 
         push_tower_targets(scene, &self.current_targets);
         push_projectiles(scene, &self.projectiles, |bug, fallback| {
@@ -1211,6 +1256,10 @@ impl Simulation {
         self.builder_preview
     }
 
+    fn visual_style(&self) -> VisualStyle {
+        self.visual_style
+    }
+
     #[cfg(test)]
     fn bug_step_duration(&self) -> Duration {
         self.bug_step_duration
@@ -1278,8 +1327,10 @@ mod tests {
     use super::*;
     use glam::Vec2;
     use maze_defence_core::{BugColor, BugId, Health, ProjectileId};
+    use maze_defence_rendering::{BugVisual, SpriteKey, TowerVisual};
+    use std::f32::consts::FRAC_PI_2;
 
-    fn new_simulation() -> Simulation {
+    fn new_simulation_with_style(style: VisualStyle) -> Simulation {
         Simulation::new(
             4,
             3,
@@ -1287,7 +1338,12 @@ mod tests {
             TileGridPresentation::DEFAULT_CELLS_PER_TILE,
             Duration::from_millis(200),
             Duration::from_secs(1),
+            style,
         )
+    }
+
+    fn new_simulation() -> Simulation {
+        new_simulation_with_style(VisualStyle::Sprites)
     }
 
     fn make_scene() -> Scene {
@@ -1315,6 +1371,34 @@ mod tests {
             None,
             None,
         )
+    }
+
+    #[test]
+    fn cli_args_default_to_sprite_visuals() {
+        let args =
+            CliArgs::try_parse_from(["maze-defence"]).expect("default arguments should parse");
+        assert_eq!(args.visual_style, VisualStyle::Sprites);
+    }
+
+    #[test]
+    fn cli_args_allow_primitive_visuals() {
+        let args = CliArgs::try_parse_from(["maze-defence", "--visual-style", "primitives"])
+            .expect("primitive visuals should parse");
+        assert_eq!(args.visual_style, VisualStyle::Primitives);
+    }
+
+    #[test]
+    fn simulation_records_requested_visual_style() {
+        let simulation = Simulation::new(
+            4,
+            3,
+            32.0,
+            TileGridPresentation::DEFAULT_CELLS_PER_TILE,
+            Duration::from_millis(200),
+            Duration::from_secs(1),
+            VisualStyle::Primitives,
+        );
+        assert_eq!(simulation.visual_style(), VisualStyle::Primitives);
     }
 
     #[test]
@@ -1418,6 +1502,14 @@ mod tests {
         let expected_position = from_vec + (to_vec - from_vec) * expected_progress;
 
         assert!((bug.position() - expected_position).length() <= f32::EPSILON);
+        match bug.style {
+            BugVisual::Sprite(sprite) => {
+                assert_eq!(sprite.sprite, SpriteKey::BugBody);
+            }
+            BugVisual::PrimitiveCircle { .. } => {
+                panic!("sprite visual expected when sprites enabled");
+            }
+        }
     }
 
     #[test]
@@ -1444,6 +1536,115 @@ mod tests {
 
         let position = simulation.interpolated_bug_position_with_cell(bug.id, Some(bug.cell));
         assert_eq!(position, Simulation::cell_center(bug.cell));
+    }
+
+    #[test]
+    fn populate_scene_sets_sprite_visuals_when_selected() {
+        let mut simulation = new_simulation();
+
+        simulation.queued_commands.push(Command::SetPlayMode {
+            mode: PlayMode::Builder,
+        });
+        simulation.advance(Duration::ZERO);
+
+        let placement_tile = TileSpacePosition::from_indices(1, 1);
+        let origin = simulation.tile_position_to_cell(placement_tile);
+        simulation.queued_commands.push(Command::PlaceTower {
+            kind: TowerKind::Basic,
+            origin,
+        });
+        simulation.advance(Duration::ZERO);
+
+        simulation.queued_commands.push(Command::SetPlayMode {
+            mode: PlayMode::Attack,
+        });
+        simulation.advance(Duration::ZERO);
+
+        let spawner = query::bug_spawners(simulation.world())
+            .into_iter()
+            .next()
+            .expect("bug spawner available");
+        simulation.queued_commands.push(Command::SpawnBug {
+            spawner,
+            color: BugColor::from_rgb(200, 100, 50),
+            health: Health::new(3),
+        });
+        simulation.advance(Duration::ZERO);
+
+        let mut scene = make_scene();
+        simulation.populate_scene(&mut scene);
+
+        assert_eq!(scene.towers.len(), 1);
+        let tower = scene.towers[0];
+        match tower.visual {
+            TowerVisual::Sprite { base, turret } => {
+                assert_eq!(base.sprite, SpriteKey::TowerBase);
+                assert_eq!(turret.sprite, SpriteKey::TowerTurret);
+                assert!((turret.rotation_radians + FRAC_PI_2).abs() <= f32::EPSILON);
+            }
+            TowerVisual::PrimitiveRect => {
+                panic!("sprite tower visual expected when sprites enabled");
+            }
+        }
+
+        assert_eq!(scene.bugs.len(), 1);
+        let bug = scene.bugs[0];
+        match bug.style {
+            BugVisual::Sprite(sprite) => {
+                assert_eq!(sprite.sprite, SpriteKey::BugBody);
+            }
+            BugVisual::PrimitiveCircle { .. } => {
+                panic!("sprite bug visual expected when sprites enabled");
+            }
+        }
+    }
+
+    #[test]
+    fn populate_scene_preserves_primitives_when_requested() {
+        let mut simulation = new_simulation_with_style(VisualStyle::Primitives);
+
+        simulation.queued_commands.push(Command::SetPlayMode {
+            mode: PlayMode::Builder,
+        });
+        simulation.advance(Duration::ZERO);
+
+        let placement_tile = TileSpacePosition::from_indices(1, 1);
+        let origin = simulation.tile_position_to_cell(placement_tile);
+        simulation.queued_commands.push(Command::PlaceTower {
+            kind: TowerKind::Basic,
+            origin,
+        });
+        simulation.advance(Duration::ZERO);
+
+        simulation.queued_commands.push(Command::SetPlayMode {
+            mode: PlayMode::Attack,
+        });
+        simulation.advance(Duration::ZERO);
+
+        let spawner = query::bug_spawners(simulation.world())
+            .into_iter()
+            .next()
+            .expect("bug spawner available");
+        simulation.queued_commands.push(Command::SpawnBug {
+            spawner,
+            color: BugColor::from_rgb(128, 64, 32),
+            health: Health::new(3),
+        });
+        simulation.advance(Duration::ZERO);
+
+        let mut scene = make_scene();
+        simulation.populate_scene(&mut scene);
+
+        assert_eq!(scene.towers.len(), 1);
+        assert_eq!(scene.towers[0].visual, TowerVisual::PrimitiveRect);
+
+        assert_eq!(scene.bugs.len(), 1);
+        match scene.bugs[0].style {
+            BugVisual::PrimitiveCircle { .. } => {}
+            BugVisual::Sprite(_) => {
+                panic!("primitive bug visual expected when primitives requested");
+            }
+        }
     }
 
     fn enter_builder_mode(simulation: &mut Simulation) {
