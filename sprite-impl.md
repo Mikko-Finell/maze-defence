@@ -141,7 +141,7 @@ compile after wiring the new struct fields.
 
 # 7) Drawing integration & runtime switching (`adapters/rendering_macroquad`)
 
-**Status:** TODO
+**Status:** DONE
 
 **Goal:** Render the new visuals while keeping the primitive code path intact
 for fallback mode.

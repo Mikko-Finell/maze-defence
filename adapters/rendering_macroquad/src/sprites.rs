@@ -81,10 +81,7 @@ impl SpriteAtlas {
 
     /// Draws the requested sprite using the supplied draw parameters.
     pub(crate) fn draw(&self, key: SpriteKey, params: DrawParams) {
-        let texture = self
-            .textures
-            .get(&key)
-            .unwrap_or_else(|| panic!("missing sprite {key:?} in atlas"));
+        let texture = self.texture(key);
 
         let dest_size = MacroquadVec2::new(
             texture.width() * params.scale.x,
@@ -105,6 +102,18 @@ impl SpriteAtlas {
             params.tint,
             draw_params,
         );
+    }
+
+    /// Returns the native pixel dimensions of the sprite referenced by `key`.
+    pub(crate) fn dimensions(&self, key: SpriteKey) -> MacroquadVec2 {
+        let texture = self.texture(key);
+        MacroquadVec2::new(texture.width(), texture.height())
+    }
+
+    fn texture(&self, key: SpriteKey) -> &Texture2D {
+        self.textures
+            .get(&key)
+            .unwrap_or_else(|| panic!("missing sprite {:?} in atlas", key))
     }
 }
 
