@@ -1,95 +1,73 @@
-# Movement and Pathing Implementation Plan
+# Movement and Pathing Overview
 
-## Goals and Constraints
-- Enable bugs to traverse the maze grid toward the wall target using four-directional (N/E/S/W) moves on grid cells.
-- Maintain deterministic behaviour that respects the architectural rules in `AGENTS.md` (pure systems, single mutation point in the world, message-based coordination).
-- Ensure multiple bugs can move concurrently without overlapping; re-plan paths whenever the intended next cell becomes occupied.
-- Keep execution performant for many bugs by minimising redundant path computations and avoiding unnecessary allocations.
+## Spec alignment
+The crowd planner is defined in [`path-spec.md`](path-spec.md). Read it in full before
+changing code or constants. The system crate simply translates that contract into
+code: bugs consume the static navigation gradient provided by the world, bias
+neighbour choices using congestion sampling, and fall back to a bounded detour
+BFS when a local move cannot make progress.
 
-## Message Surface Changes (`core` crate)
-1. [DONE] Extend `Command` with discrete mutations instead of embedding movement logic inside systems:
-   - `Command::Tick { dt: Duration }` – issued by adapters each frame to request that the world advance the simulation clock.
-   - `Command::StepBug { bug_id: BugId, direction: Direction }` – proposals for one-cell moves emitted after a tick makes a bug ready to advance.
-2. [DONE] Introduce a new `Event` enum so the world can broadcast state transitions for systems to react to deterministically:
-   - `Event::TimeAdvanced { dt: Duration }` emitted from `World::apply` after handling `Command::Tick`, preserving the “command in, event out” contract.
-   - `Event::BugAdvanced { bug_id: BugId, from: CellCoord, to: CellCoord }` emitted after the world accepts a `StepBug` command during reservation resolution.
-3. [DONE] Document the message contracts and update adapter/system wiring so adapters only send commands, the world only mutates through `apply`, and systems consume event streams while returning command batches.
+## Planner building blocks
+### Static navigation field
+`world` constructs a Manhattan-distance field that treats tower footprints and
+walls as hard blockers while keeping the virtual exit row at distance zero. The
+movement system only ever sees the read-only view exposed by
+`query::navigation_field`, so every decision is deterministic once the field is
+rebuilt after structural edits.【F:world/src/lib.rs†L1115-L1169】
 
-## World State Authoritative Changes (`world` crate)
-1. [DONE] Replace the immutable `Bug` data with a stateful struct tracking navigation:
-   - Keep immutable presentation fields (`id`, `color`).
-   - Store current cell and accumulated fractional time toward the next step.
-2. [DONE] Maintain an occupancy map for fast lookup:
-   - Use a dense `Vec<Option<BugId>>` sized to the grid (`width * height`) for cache-friendly O(1) membership.
-   - Provide helper methods for translating `(row, column)` to indices; keep a `HashSet` fallback only if extremely sparse maps emerge in future use-cases.
-   - Update occupancy atomically when bugs move.
-3. [DONE] Track wall target cells as `CellCoord` equivalents:
-   - Convert `TargetCell` values into traversable `CellCoord` nodes, treating the derived exit row (`rows * cells_per_tile + 1`) as a valid node outside the wall.
-   - Maintain adjacency information to connect interior edge cells to the target cell so A* can path to it.
-4. [DONE] Update `apply` logic:
-   - `Tick` accumulates time on each bug and emits `Event::TimeAdvanced { dt }`.
-   - `StepBug` commands enter a **reservation phase**: collect all requests for the tick, sort by `BugId`, and for each verify the move stays within the grid or valid exit column. If the destination cell is free in the dense occupancy buffer, commit the move, update occupancy, subtract one second from the accumulator, and emit `Event::BugAdvanced`. Invalid moves simply fail without mutating state so the system can re-plan on the next tick.
-5. [DONE] Expose new queries for systems:
-   - `query::bug_view(world) -> BugView` returning read-only DTOs that contain bug ids, cells, and readiness flags.
-   - `query::occupancy_view(world) -> OccupancyView` with immutable access to the dense grid buffer (and helper iterators for free target cells).
-   - Helper query to expose target cells (`query::target_cells`).
-6. [DONE] Ensure determinism:
-   - Use fixed ordering when iterating bugs (e.g., ascending `BugId`).
-   - Avoid floating-point drift by storing time as `FixedU32` microseconds or `Duration` accumulators and subtract exactly one-second quanta.
+### Congestion map and lexical ranking
+Each tick the planner orders bugs by `BugId`, clears a scratch congestion buffer,
+and walks a short gradient lookahead for every bug. Candidate neighbours are
+ranked lexicographically on `(distance, congestion, cell order)` so progress is
+monotonic while still allowing traffic to flow around jams without oscillation.
+The side-step guard and per-bug `last_cell` ring buffer come directly from the
+spec and are implemented inside `CrowdPlanner::emit_step_commands`.【F:systems/movement/src/lib.rs†L189-L330】
 
-## Movement System (`systems/movement` crate)
-1. [DONE] Create a new pure system crate that listens for events and produces commands:
-   - Public API: `Movement::handle(events: &[Event], bug_view: BugView, occupancy_view: OccupancyView, targets: &[CellCoord], out: &mut Vec<Command>)` – systems receive DTOs, never the world itself.
-   - Respond to `Event::TimeAdvanced` by scanning `bug_view` for bugs whose readiness flag is true (one-second quantum accrued).
-   - For each ready bug, compute the next hop toward the closest exit using A* and emit a `StepBug` command when the destination cell is available.
-2. [DONE] Keep computation efficient:
-   - Cache wall target cells once per handler call.
-   - A* pathfinding on a per-bug basis using `BinaryHeap` for the frontier, Manhattan heuristic, and hashing grid coordinates.
-   - Re-use allocation buffers (e.g., `Vec<CellCoord>`) via scratch workspace passed into helper functions to avoid repeated allocations on each tick.
-3. [DONE] Respect non-overlap rule and reservation outcomes:
-   - Before emitting `StepBug`, consult `occupancy_view` to ensure target cell is free (ignoring the bug's current cell).
-   - Systems do not loop on failed reservations; unsuccessful moves simply leave the bug in place so the next tick can trigger a fresh plan.
-4. [DONE] Determine the nearest target cell:
-   - Cache wall target cells derived from `Target::cells()` once the workspace dimensions are known.
-   - Break ties deterministically (lowest manhattan distance, then lowest column/row) to maintain reproducibility while allowing
-     exit cells to remain always enterable.
+### Detour BFS and reservation awareness
+When no immediate neighbour improves the gradient, the planner launches a
+radius-limited BFS that honours the reservation ledger populated by earlier
+`BugId`s. The first hop of the best candidate path becomes a `Command::StepBug`,
+and stalled counters ensure bugs retry as soon as space opens rather than
+waiting multiple ticks.【F:systems/movement/src/lib.rs†L331-L602】
 
-## Pathfinding Implementation Details
-1. [DONE] Grid Model:
-   - Graph nodes are `CellCoord` values inside the maze plus the `Target` exit nodes.
-   - Legal moves: four directions; when on the interior cell adjacent to the target, allow moving into the target node.
-2. [DONE] A* Mechanics:
-   - Reconstruct only the first hop from the computed path so the system can emit a single `StepBug` command per tick.
-   - Occupancy map excludes the moving bug’s current cell; treat other bugs as static obstacles during the search.
-   - Abort and return empty path when no exit cell reachable.
-3. [DONE] Performance Considerations:
-   - Limit search bounds to the grid plus the single extra row of exit cells.
-   - Pre-allocate visited map sized to `columns * (rows + 1)`.
-   - Avoid heap churn during neighbour enumeration by using a fixed-size stack buffer (`NeighborIter`).
+## Deterministic replay harness
+`systems/movement/tests/deterministic_replay.rs` locks the behaviour in place.
+The helper `assert_stable_replay` replays a scripted command log twice and
+hashes the final bug snapshots, event log, and navigation field. The suite now
+covers the dense scenarios called out in the spec:
 
-## Tests (`tests/` harness)
-1. [DONE] Add deterministic replay test covering multiple ticks:
-   - Scripted commands: configure grid, emit `Command::Tick` pulses, and pass resulting events through the movement system using captured DTO snapshots.
-   - Assert final positions hash equals expected snapshot and document that, given `(initial world + ordered commands + fixed RNG seed)`, replay yields **bit-identical** state/events enforced by CI’s deterministic replay test.
-2. Scenario tests:
-   - Two bugs starting on same column path toward exit verifying they queue without overlap.
-   - Bug encountering newly occupied cell triggers replanning (simulate by positioning another bug in its path before next tick).
-   - Validation that the nearest available target cell is selected when one is already reserved.
-3. Unit tests:
-   - A* pathfinding returns Manhattan-shortest path on simple grids and respects obstacles.
-   - `World::apply` rejects invalid `StepBug` commands (wrong direction or occupied target).
-4. Ensure tests avoid floating-point nondeterminism by using integer durations and verifying states via queries only.
+- **Baseline walk** – regression safety net for the single-bug happy path.
+- **Dense corridor queue** – six bugs jam a one-wide lane and must keep sliding
+  forward until the front blocker touches the wall.【F:systems/movement/tests/deterministic_replay.rs†L17-L94】
+- **Side hallway diversion** – towers constrict the main corridor and the crowd
+  must route through the side channel instead of waiting indefinitely.【F:systems/movement/tests/deterministic_replay.rs†L96-L149】
+- **Original stall regression** – reproduces the historic failure where a bug
+  refused to advance despite an open neighbour because another bug sat further
+  down the corridor.【F:systems/movement/tests/deterministic_replay.rs†L151-L190】
 
-## Adapter and Bootstrap Considerations
-- Update runners/adapters to emit `Command::Tick { dt }` each frame, call `world.apply()` once per tick, capture the resulting DTO queries (`BugView`, `OccupancyView`), and feed those immutable snapshots into the movement system before submitting any follow-up commands.
-- Extend bootstrap queries if presentation requires bug velocity/path information (e.g., expose next hop or progress for rendering interpolation).
+Run the harness with:
 
-## Rollout Steps Summary
-1. [DONE] Update `core` crate with new commands/events/direction enum + docs.
-2. [DONE] Refactor `world` crate bug representation, occupancy tracking, and `apply` logic; add queries.
-3. [DONE] Implement A* utilities (likely under `world::navigation` or shared helper module) with tests.
-4. [DONE] Build `systems/movement` crate for deterministic path planning and command emission.
-5. [DONE] Wire movement system into existing execution path (tests/adapters).
-   - Added a CLI simulation driver that pumps world ticks through the movement system before updating presentation state.
-   - Extended the rendering adapter contract so backends refresh the scene each frame, allowing playtesters to observe live bug movement.
-6. Author comprehensive tests ensuring deterministic, collision-free behaviour for multi-bug scenarios.
+```
+cargo test -p maze_defence_system_movement --test deterministic_replay
+```
+
+The fingerprints in those tests are the canonical baseline; update them only
+when the replay log is intentionally changed.
+
+## Tuning constants and guard workflow
+`maze_defence_core` owns the tuning knobs the planner consumes:
+`CONGESTION_LOOKAHEAD` bounds the sampling window and `DETOUR_RADIUS` caps BFS
+exploration. Any modification must re-run the deterministic scenarios above in
+addition to the full guard set:
+
+```
+cargo fmt --check
+cargo clippy --workspace --all-targets --all-features -- -D warnings
+cargo test
+cargo hack check --each-feature
+cargo +nightly udeps
+```
+
+The combination of replay coverage and guard rails ensures congestion tweaks or
+reservation changes remain deterministic and message-driven across the entire
+engine.【F:core/src/lib.rs†L50-L120】

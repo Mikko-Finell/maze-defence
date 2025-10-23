@@ -1251,7 +1251,7 @@ fn compute_projectile_travel_time(
     }
 
     let scaled = base_time_ms.saturating_mul(distance_half);
-    let time = (scaled + max_range_half - 1) / max_range_half;
+    let time = scaled.div_ceil(max_range_half);
     time.max(1)
 }
 
@@ -2058,7 +2058,7 @@ mod tests {
         assert!(walkway_distance < interior_distance);
 
         let blocked_column = (0..expected_columns)
-            .find(|column| !exit_columns.contains(&column))
+            .find(|column| !exit_columns.contains(column))
             .expect("non-exit column should exist");
         let blocked_cell = CellCoord::new(blocked_column, visible_wall_row);
         assert_eq!(

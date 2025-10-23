@@ -24,6 +24,7 @@ pub struct Movement {
 
 impl Movement {
     /// Consumes world events and immutable views to emit movement commands.
+    #[allow(clippy::too_many_arguments)]
     pub fn handle<F>(
         &mut self,
         events: &[Event],
@@ -82,7 +83,7 @@ impl Default for Movement {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 struct CrowdPlanner {
     targets: Vec<CellCoord>,
     prepared_dimensions: Option<(u32, u32)>,
@@ -195,8 +196,8 @@ impl CrowdPlanner {
     ) where
         F: Fn(CellCoord) -> bool,
     {
-        self.last_cell.begin_tick(&ordered);
-        self.stalled_for.begin_tick(&ordered);
+        self.last_cell.begin_tick(ordered);
+        self.stalled_for.begin_tick(ordered);
 
         for (index, bug) in ordered.iter().enumerate() {
             let bug = *bug;
@@ -247,6 +248,7 @@ impl CrowdPlanner {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn plan_next_hop<F>(
         &mut self,
         bug_index: usize,
@@ -316,7 +318,7 @@ impl CrowdPlanner {
 
             if distance_delta == 0
                 && neighbor_congestion < current_congestion
-                && last_cell.map_or(true, |last| last != neighbor)
+                && (last_cell != Some(neighbor))
             {
                 let candidate = Candidate {
                     cell: neighbor,
@@ -356,6 +358,7 @@ impl CrowdPlanner {
         None
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn search_detour<F>(
         &mut self,
         bug: &BugSnapshot,
@@ -534,11 +537,7 @@ impl CrowdPlanner {
         occupancy_columns: u32,
         occupancy_rows: u32,
     ) -> bool {
-        if self
-            .reserved_destinations
-            .iter()
-            .any(|reserved| *reserved == cell)
-        {
+        if self.reserved_destinations.contains(&cell) {
             return true;
         }
 
@@ -702,22 +701,6 @@ fn step_cell(cell: CellCoord, direction: Direction, columns: u32, rows: u32) -> 
     }
 }
 
-impl Default for CrowdPlanner {
-    fn default() -> Self {
-        Self {
-            targets: Vec::new(),
-            prepared_dimensions: None,
-            congestion: Vec::new(),
-            detour_queue: Vec::new(),
-            detour_marks: Vec::new(),
-            detour_generation: 0,
-            reserved_destinations: Vec::new(),
-            last_cell: LastCellRing::default(),
-            stalled_for: StallCounter::default(),
-        }
-    }
-}
-
 #[derive(Debug, Default)]
 struct LastCellRing {
     history: Vec<[Option<CellCoord>; 2]>,
@@ -748,7 +731,7 @@ impl LastCellRing {
     fn last(&self, index: usize) -> Option<CellCoord> {
         self.history
             .get(index)
-            .and_then(|entry| entry.get(0))
+            .and_then(|entry| entry.first())
             .copied()
             .flatten()
     }

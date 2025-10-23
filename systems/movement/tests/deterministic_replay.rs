@@ -6,20 +6,38 @@ use std::{
 
 use maze_defence_core::{
     BugColor, BugSnapshot, CellCoord, Command, Event, Health, NavigationFieldView, PlayMode,
-    TileCoord,
+    TileCoord, TowerKind,
 };
 use maze_defence_system_movement::Movement;
 use maze_defence_world::{self as world, query, World};
 
 #[test]
 fn deterministic_replay_produces_expected_snapshot() {
-    let first = replay(scripted_commands());
-    let second = replay(scripted_commands());
+    assert_stable_replay(baseline_commands(), 0x3ad8_7a70_83dd_22f1);
+}
+
+#[test]
+fn dense_corridor_replay_is_stable() {
+    assert_stable_replay(dense_corridor_commands(), 0x2473_1168_725c_c528);
+}
+
+#[test]
+fn side_hallway_diversion_replay_is_stable() {
+    assert_stable_replay(side_hallway_diversion_commands(), 0x2d37_4a61_07c0_2d2c);
+}
+
+#[test]
+fn stall_regression_replay_is_stable() {
+    assert_stable_replay(stall_regression_commands(), 0x6ae9_e252_97d5_406b);
+}
+
+fn assert_stable_replay(commands: Vec<Command>, expected: u64) {
+    let first = replay(commands.clone());
+    let second = replay(commands);
 
     assert_eq!(first, second, "replay diverged between runs");
 
     let fingerprint = first.fingerprint();
-    let expected = 0x3ad8_7a70_83dd_22f1;
     assert_eq!(
         fingerprint, expected,
         "fingerprint mismatch: {fingerprint:#x}"
@@ -102,7 +120,7 @@ fn record_events(events: &[Event], log: &mut Vec<EventRecord>) {
     log.extend(events.iter().map(EventRecord::from));
 }
 
-fn scripted_commands() -> Vec<Command> {
+fn baseline_commands() -> Vec<Command> {
     vec![
         Command::ConfigureTileGrid {
             columns: TileCoord::new(5),
@@ -131,6 +149,132 @@ fn scripted_commands() -> Vec<Command> {
             dt: Duration::from_secs(1),
         },
     ]
+}
+
+fn dense_corridor_commands() -> Vec<Command> {
+    let mut commands = vec![Command::ConfigureTileGrid {
+        columns: TileCoord::new(1),
+        rows: TileCoord::new(8),
+        tile_length: 1.0,
+        cells_per_tile: 1,
+    }];
+
+    let palette = [
+        (0x2f, 0x70, 0x32),
+        (0x2f, 0x78, 0x32),
+        (0x2f, 0x80, 0x32),
+        (0x2f, 0x88, 0x32),
+        (0x2f, 0x90, 0x32),
+        (0x2f, 0x98, 0x32),
+    ];
+
+    for &(red, green, blue) in &palette {
+        commands.push(Command::SpawnBug {
+            spawner: CellCoord::new(0, 0),
+            color: BugColor::from_rgb(red, green, blue),
+            health: Health::new(3),
+        });
+        commands.push(Command::Tick {
+            dt: Duration::from_millis(250),
+        });
+    }
+
+    for _ in 0..24 {
+        commands.push(Command::Tick {
+            dt: Duration::from_millis(250),
+        });
+    }
+
+    commands
+}
+
+fn side_hallway_diversion_commands() -> Vec<Command> {
+    let mut commands = vec![
+        Command::ConfigureTileGrid {
+            columns: TileCoord::new(8),
+            rows: TileCoord::new(6),
+            tile_length: 1.0,
+            cells_per_tile: 1,
+        },
+        Command::SetPlayMode {
+            mode: PlayMode::Builder,
+        },
+        Command::PlaceTower {
+            kind: TowerKind::Basic,
+            origin: CellCoord::new(2, 2),
+        },
+        Command::PlaceTower {
+            kind: TowerKind::Basic,
+            origin: CellCoord::new(6, 3),
+        },
+        Command::SetPlayMode {
+            mode: PlayMode::Attack,
+        },
+    ];
+
+    let palette = [
+        (0x48, 0x70, 0x90),
+        (0x48, 0x78, 0x90),
+        (0x48, 0x80, 0x90),
+        (0x48, 0x88, 0x90),
+        (0x48, 0x90, 0x90),
+        (0x48, 0x98, 0x90),
+    ];
+
+    for &(red, green, blue) in &palette {
+        commands.push(Command::SpawnBug {
+            spawner: CellCoord::new(4, 0),
+            color: BugColor::from_rgb(red, green, blue),
+            health: Health::new(5),
+        });
+        commands.push(Command::Tick {
+            dt: Duration::from_millis(250),
+        });
+    }
+
+    for _ in 0..48 {
+        commands.push(Command::Tick {
+            dt: Duration::from_millis(250),
+        });
+    }
+
+    commands
+}
+
+fn stall_regression_commands() -> Vec<Command> {
+    let mut commands = vec![
+        Command::ConfigureTileGrid {
+            columns: TileCoord::new(1),
+            rows: TileCoord::new(6),
+            tile_length: 1.0,
+            cells_per_tile: 1,
+        },
+        Command::SpawnBug {
+            spawner: CellCoord::new(0, 0),
+            color: BugColor::from_rgb(0x9a, 0x4c, 0x2f),
+            health: Health::new(3),
+        },
+    ];
+
+    for _ in 0..6 {
+        commands.push(Command::Tick {
+            dt: Duration::from_millis(250),
+        });
+    }
+
+    commands.push(Command::SpawnBug {
+        spawner: CellCoord::new(0, 0),
+        color: BugColor::from_rgb(0x2f, 0x8c, 0xc0),
+        health: Health::new(3),
+    });
+
+    for _ in 0..18 {
+        commands.push(Command::Tick {
+            dt: Duration::from_millis(250),
+        });
+    }
+
+    commands
 }
 
 #[test]
@@ -287,6 +431,11 @@ enum EventRecord {
         color: (u8, u8, u8),
         health: Health,
     },
+    TowerPlaced {
+        tower: maze_defence_core::TowerId,
+        kind: TowerKind,
+        region: maze_defence_core::CellRect,
+    },
 }
 
 impl From<&Event> for EventRecord {
@@ -316,8 +465,16 @@ impl From<&Event> for EventRecord {
                 color: (color.red(), color.green(), color.blue()),
                 health: *health,
             },
-            Event::TowerPlaced { .. }
-            | Event::TowerRemoved { .. }
+            Event::TowerPlaced {
+                tower,
+                kind,
+                region,
+            } => Self::TowerPlaced {
+                tower: *tower,
+                kind: *kind,
+                region: *region,
+            },
+            Event::TowerRemoved { .. }
             | Event::TowerPlacementRejected { .. }
             | Event::TowerRemovalRejected { .. }
             | Event::ProjectileFired { .. }
