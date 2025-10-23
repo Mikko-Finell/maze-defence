@@ -397,6 +397,7 @@ struct Simulation {
 }
 
 #[derive(Debug)]
+#[allow(clippy::enum_variant_names)]
 enum LayoutImportError {
     ColumnMismatch { expected: u32, observed: u32 },
     RowMismatch { expected: u32, observed: u32 },
@@ -580,11 +581,7 @@ impl Simulation {
 
         self.pending_input = FrameInput {
             mode_toggle: false,
-            cursor_world_space: input.cursor_world_space,
-            cursor_tile_space: input.cursor_tile_space,
-            confirm_action: input.confirm_action,
-            remove_action: input.remove_action,
-            ..FrameInput::default()
+            ..input
         };
     }
 
@@ -1324,7 +1321,11 @@ mod tests {
     use super::*;
     use glam::Vec2;
     use maze_defence_core::{BugColor, BugId, Health, ProjectileId};
-    use maze_defence_rendering::{BugVisual, SpriteKey, TowerVisual};
+    use maze_defence_rendering::{BugVisual, SpriteInstance, SpriteKey, TowerVisual};
+    use std::{
+        collections::hash_map::DefaultHasher,
+        hash::{Hash, Hasher},
+    };
 
     fn new_simulation_with_style(style: VisualStyle) -> Simulation {
         Simulation::new(
@@ -1667,8 +1668,6 @@ mod tests {
             mode_toggle: true,
             cursor_world_space: Some(first_world),
             cursor_tile_space: Some(first_tile),
-            confirm_action: false,
-            remove_action: false,
             ..FrameInput::default()
         });
 
@@ -1691,8 +1690,6 @@ mod tests {
             mode_toggle: false,
             cursor_world_space: Some(second_world),
             cursor_tile_space: Some(second_tile),
-            confirm_action: false,
-            remove_action: false,
             ..FrameInput::default()
         });
 
@@ -1720,8 +1717,6 @@ mod tests {
             mode_toggle: true,
             cursor_world_space: Some(Vec2::new(16.0, 48.0)),
             cursor_tile_space: Some(initial_tile),
-            confirm_action: false,
-            remove_action: false,
             ..FrameInput::default()
         });
 
@@ -1733,8 +1728,6 @@ mod tests {
             mode_toggle: false,
             cursor_world_space: Some(Vec2::new(96.0, 64.0)),
             cursor_tile_space: Some(preview_tile),
-            confirm_action: false,
-            remove_action: false,
             ..FrameInput::default()
         });
 
@@ -2437,5 +2430,376 @@ mod tests {
                 .any(|event| matches!(event, Event::TowerPlaced { .. })),
             "confirming placement should emit TowerPlaced"
         );
+    }
+
+    #[test]
+    fn sprite_scene_population_is_deterministic() {
+        let first = capture_scripted_scene(VisualStyle::Sprites);
+        let second = capture_scripted_scene(VisualStyle::Sprites);
+
+        assert_eq!(first, second, "sprite scenes diverged between runs");
+        assert!(
+            !first.towers.is_empty() && !first.bugs.is_empty(),
+            "scripted scene should contain at least one tower and bug"
+        );
+        assert_eq!(
+            first.tower_targets.len(),
+            1,
+            "expected a single tower target"
+        );
+
+        let first_fingerprint = scene_fingerprint(&first);
+        let second_fingerprint = scene_fingerprint(&second);
+        assert_eq!(first_fingerprint, second_fingerprint);
+
+        let expected = 0x15e6_cd12_fc83_e46f;
+        assert_eq!(
+            first_fingerprint, expected,
+            "sprite scene fingerprint mismatch: {first_fingerprint:#x}"
+        );
+
+        assert!(matches!(first.towers[0].visual, TowerVisual::Sprite { .. }));
+        assert!(matches!(first.bugs[0].style, BugVisual::Sprite(_)));
+    }
+
+    #[test]
+    fn primitive_scene_population_is_deterministic() {
+        let first = capture_scripted_scene(VisualStyle::Primitives);
+        let second = capture_scripted_scene(VisualStyle::Primitives);
+
+        assert_eq!(first, second, "primitive scenes diverged between runs");
+        assert!(
+            !first.towers.is_empty() && !first.bugs.is_empty(),
+            "scripted scene should contain at least one tower and bug"
+        );
+        assert_eq!(
+            first.tower_targets.len(),
+            1,
+            "expected a single tower target"
+        );
+
+        let first_fingerprint = scene_fingerprint(&first);
+        let second_fingerprint = scene_fingerprint(&second);
+        assert_eq!(first_fingerprint, second_fingerprint);
+
+        let expected = 0x5dd3_46c4_5dcc_944d;
+        assert_eq!(
+            first_fingerprint, expected,
+            "primitive scene fingerprint mismatch: {first_fingerprint:#x}"
+        );
+
+        assert!(matches!(first.towers[0].visual, TowerVisual::PrimitiveRect));
+        match first.bugs[0].style {
+            BugVisual::PrimitiveCircle { .. } => {}
+            BugVisual::Sprite(_) => {
+                panic!("primitive style should emit circle visuals");
+            }
+        }
+    }
+
+    fn capture_scripted_scene(style: VisualStyle) -> Scene {
+        let mut simulation = new_simulation_with_style(style);
+        let spawner = query::bug_spawners(simulation.world())
+            .into_iter()
+            .next()
+            .expect("bug spawner available");
+
+        simulation.queued_commands.push(Command::SetPlayMode {
+            mode: PlayMode::Builder,
+        });
+        simulation.advance(Duration::ZERO);
+
+        let placement_tile = TileSpacePosition::from_indices(1, 1);
+        let origin = simulation.tile_position_to_cell(placement_tile);
+        simulation.queued_commands.push(Command::PlaceTower {
+            kind: TowerKind::Basic,
+            origin,
+        });
+        simulation.advance(Duration::ZERO);
+
+        simulation.queued_commands.push(Command::SetPlayMode {
+            mode: PlayMode::Attack,
+        });
+        simulation.advance(Duration::ZERO);
+
+        simulation.queued_commands.push(Command::SpawnBug {
+            spawner,
+            color: BugColor::from_rgb(160, 120, 80),
+            health: Health::new(3),
+        });
+        simulation.advance(Duration::ZERO);
+
+        simulation.advance(Duration::from_millis(16));
+
+        let mut scene = make_scene();
+        simulation.populate_scene(&mut scene);
+        scene
+    }
+
+    fn scene_fingerprint(scene: &Scene) -> u64 {
+        let digest = SceneDigest::from(scene);
+        let mut hasher = DefaultHasher::new();
+        digest.hash(&mut hasher);
+        hasher.finish()
+    }
+
+    #[derive(Clone, Debug, PartialEq, Eq, Hash)]
+    struct SceneDigest {
+        tile_grid: TileGridDigest,
+        wall_color: ColorDigest,
+        walls: Vec<SceneWall>,
+        bugs: Vec<BugDigest>,
+        towers: Vec<TowerDigest>,
+        projectiles: Vec<ProjectileDigest>,
+        tower_targets: Vec<TowerTargetDigest>,
+        hovered_tower: Option<TowerId>,
+        play_mode: PlayMode,
+        tower_preview: Option<TowerPreview>,
+        active_tower_footprint_tiles: Option<Vec2Digest>,
+        tower_feedback: Option<TowerInteractionFeedback>,
+    }
+
+    impl From<&Scene> for SceneDigest {
+        fn from(scene: &Scene) -> Self {
+            Self {
+                tile_grid: TileGridDigest::from(scene.tile_grid),
+                wall_color: ColorDigest::from(scene.wall_color),
+                walls: scene.walls.clone(),
+                bugs: scene.bugs.iter().map(BugDigest::from).collect(),
+                towers: scene.towers.iter().map(TowerDigest::from).collect(),
+                projectiles: scene
+                    .projectiles
+                    .iter()
+                    .map(ProjectileDigest::from)
+                    .collect(),
+                tower_targets: scene
+                    .tower_targets
+                    .iter()
+                    .map(TowerTargetDigest::from)
+                    .collect(),
+                hovered_tower: scene.hovered_tower,
+                play_mode: scene.play_mode,
+                tower_preview: scene.tower_preview,
+                active_tower_footprint_tiles: scene
+                    .active_tower_footprint_tiles
+                    .map(Vec2Digest::from),
+                tower_feedback: scene.tower_feedback,
+            }
+        }
+    }
+
+    #[derive(Clone, Debug, PartialEq, Eq, Hash)]
+    struct TileGridDigest {
+        columns: u32,
+        rows: u32,
+        tile_length: u32,
+        cells_per_tile: u32,
+        line_color: ColorDigest,
+    }
+
+    impl From<TileGridPresentation> for TileGridDigest {
+        fn from(grid: TileGridPresentation) -> Self {
+            Self {
+                columns: grid.columns,
+                rows: grid.rows,
+                tile_length: grid.tile_length.to_bits(),
+                cells_per_tile: grid.cells_per_tile,
+                line_color: ColorDigest::from(grid.line_color),
+            }
+        }
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+    struct ColorDigest {
+        red: u32,
+        green: u32,
+        blue: u32,
+        alpha: u32,
+    }
+
+    impl From<Color> for ColorDigest {
+        fn from(color: Color) -> Self {
+            Self {
+                red: color.red.to_bits(),
+                green: color.green.to_bits(),
+                blue: color.blue.to_bits(),
+                alpha: color.alpha.to_bits(),
+            }
+        }
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+    struct Vec2Digest {
+        x: u32,
+        y: u32,
+    }
+
+    impl From<Vec2> for Vec2Digest {
+        fn from(value: Vec2) -> Self {
+            Self {
+                x: value.x.to_bits(),
+                y: value.y.to_bits(),
+            }
+        }
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+    struct CellRectDigest {
+        origin_column: u32,
+        origin_row: u32,
+        width: u32,
+        height: u32,
+    }
+
+    impl From<CellRect> for CellRectDigest {
+        fn from(rect: CellRect) -> Self {
+            Self {
+                origin_column: rect.origin().column(),
+                origin_row: rect.origin().row(),
+                width: rect.size().width(),
+                height: rect.size().height(),
+            }
+        }
+    }
+
+    #[derive(Clone, Debug, PartialEq, Eq, Hash)]
+    struct SpriteInstanceDigest {
+        sprite: SpriteKey,
+        size: Vec2Digest,
+        pivot: Vec2Digest,
+        rotation: u32,
+        offset: Option<Vec2Digest>,
+    }
+
+    impl From<&SpriteInstance> for SpriteInstanceDigest {
+        fn from(instance: &SpriteInstance) -> Self {
+            Self {
+                sprite: instance.sprite,
+                size: Vec2Digest::from(instance.size),
+                pivot: Vec2Digest::from(instance.pivot),
+                rotation: instance.rotation_radians.to_bits(),
+                offset: instance.offset.map(Vec2Digest::from),
+            }
+        }
+    }
+
+    #[derive(Clone, Debug, PartialEq, Eq, Hash)]
+    enum TowerVisualDigest {
+        PrimitiveRect,
+        Sprite {
+            base: SpriteInstanceDigest,
+            turret: SpriteInstanceDigest,
+        },
+    }
+
+    impl From<&TowerVisual> for TowerVisualDigest {
+        fn from(visual: &TowerVisual) -> Self {
+            match visual {
+                TowerVisual::PrimitiveRect => Self::PrimitiveRect,
+                TowerVisual::Sprite { base, turret } => Self::Sprite {
+                    base: SpriteInstanceDigest::from(base),
+                    turret: SpriteInstanceDigest::from(turret),
+                },
+            }
+        }
+    }
+
+    #[derive(Clone, Debug, PartialEq, Eq, Hash)]
+    struct TowerDigest {
+        id: TowerId,
+        kind: TowerKind,
+        region: CellRectDigest,
+        visual: TowerVisualDigest,
+    }
+
+    impl From<&SceneTower> for TowerDigest {
+        fn from(tower: &SceneTower) -> Self {
+            Self {
+                id: tower.id,
+                kind: tower.kind,
+                region: CellRectDigest::from(tower.region),
+                visual: TowerVisualDigest::from(&tower.visual),
+            }
+        }
+    }
+
+    #[derive(Clone, Debug, PartialEq, Eq, Hash)]
+    enum BugVisualDigest {
+        PrimitiveCircle { color: ColorDigest },
+        Sprite(SpriteInstanceDigest),
+    }
+
+    impl From<&BugVisual> for BugVisualDigest {
+        fn from(visual: &BugVisual) -> Self {
+            match visual {
+                BugVisual::PrimitiveCircle { color } => Self::PrimitiveCircle {
+                    color: ColorDigest::from(*color),
+                },
+                BugVisual::Sprite(instance) => Self::Sprite(SpriteInstanceDigest::from(instance)),
+            }
+        }
+    }
+
+    #[derive(Clone, Debug, PartialEq, Eq, Hash)]
+    struct BugDigest {
+        id: BugId,
+        column: u32,
+        row: u32,
+        offset: Vec2Digest,
+        style: BugVisualDigest,
+        health: (u32, u32),
+    }
+
+    impl From<&BugPresentation> for BugDigest {
+        fn from(bug: &BugPresentation) -> Self {
+            Self {
+                id: bug.id,
+                column: bug.column,
+                row: bug.row,
+                offset: Vec2Digest::from(bug.offset),
+                style: BugVisualDigest::from(&bug.style),
+                health: (bug.health.current, bug.health.maximum),
+            }
+        }
+    }
+
+    #[derive(Clone, Debug, PartialEq, Eq, Hash)]
+    struct ProjectileDigest {
+        id: ProjectileId,
+        from: Vec2Digest,
+        to: Vec2Digest,
+        position: Vec2Digest,
+        progress: u32,
+    }
+
+    impl From<&SceneProjectile> for ProjectileDigest {
+        fn from(projectile: &SceneProjectile) -> Self {
+            Self {
+                id: projectile.id,
+                from: Vec2Digest::from(projectile.from),
+                to: Vec2Digest::from(projectile.to),
+                position: Vec2Digest::from(projectile.position),
+                progress: projectile.progress.to_bits(),
+            }
+        }
+    }
+
+    #[derive(Clone, Debug, PartialEq, Eq, Hash)]
+    struct TowerTargetDigest {
+        tower: TowerId,
+        bug: BugId,
+        from: Vec2Digest,
+        to: Vec2Digest,
+    }
+
+    impl From<&TowerTargetLine> for TowerTargetDigest {
+        fn from(line: &TowerTargetLine) -> Self {
+            Self {
+                tower: line.tower,
+                bug: line.bug,
+                from: Vec2Digest::from(line.from),
+                to: Vec2Digest::from(line.to),
+            }
+        }
     }
 }

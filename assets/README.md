@@ -36,6 +36,10 @@ Backend loaders combine the manifest with this layout to locate the files synchr
 
 ## Git LFS configuration
 
-`*.png` files are tracked via Git LFS (see the repository `.gitattributes`).  
-Run `git lfs track` after adding new binary patterns to verify they are captured.  
+`*.png` files are tracked via Git LFS (see the repository `.gitattributes`).
+Run `git lfs track` after adding new binary patterns to verify they are captured.
 Always commit the updated `.gitattributes` file alongside any new asset types so CI and other contributors pull the same filters.
+
+## Fetching textures and fallbacks
+
+Run `git lfs pull` after cloning so the sprite textures referenced by the manifest are available locally. Adapters fall back to primitive rendering when the assets are missing; the CLI exposes `--visual-style primitives` to force that mode when testing without the binary art.

@@ -875,6 +875,7 @@ fn draw_towers(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn draw_sprite_tower(
     atlas: &SpriteAtlas,
     tower: &SceneTower,
@@ -1609,13 +1610,13 @@ mod tests {
             .with_rotation(0.35);
         let base_position = Vec2::new(3.0, 4.0);
         let texture_size = MacroquadVec2::new(128.0, 96.0);
-        let rotation_override = Some(1.2);
+        let rotation_override = 1.2;
 
         let (position, scale, pivot, rotation) = sprite_draw_parameters(
             &instance,
             base_position,
             &metrics,
-            rotation_override,
+            Some(rotation_override),
             texture_size,
         )
         .expect("expected sprite parameters");
@@ -1645,7 +1646,7 @@ mod tests {
         assert_macroquad_vec2_close(position, expected_position);
         assert_macroquad_vec2_close(scale, expected_scale);
         assert_macroquad_vec2_close(pivot, expected_pivot);
-        assert!((rotation - rotation_override.unwrap()).abs() <= 1e-6);
+        assert!((rotation - rotation_override).abs() <= 1e-6);
 
         let (_, _, _, default_rotation) =
             sprite_draw_parameters(&instance, base_position, &metrics, None, texture_size)
@@ -1662,6 +1663,70 @@ mod tests {
             expected,
             actual
         );
+    }
+
+    #[test]
+    fn sprite_draw_parameters_reject_zero_cell_step() {
+        let instance = SpriteInstance::new(SpriteKey::TowerBase, Vec2::splat(1.0));
+        let base_position = Vec2::new(1.0, 2.0);
+        let metrics = SceneMetrics {
+            scale: 1.0,
+            offset_x: 0.0,
+            offset_y: 0.0,
+            grid_offset_x: 0.0,
+            grid_offset_y: 0.0,
+            grid_width_scaled: 0.0,
+            grid_height_scaled: 0.0,
+            bordered_grid_width_scaled: 0.0,
+            bordered_grid_height_scaled: 0.0,
+            tile_step: 0.0,
+            cell_step: 0.0,
+        };
+        let texture_size = MacroquadVec2::new(64.0, 64.0);
+
+        assert!(
+            sprite_draw_parameters(&instance, base_position, &metrics, None, texture_size)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn sprite_draw_parameters_reject_degenerate_inputs() {
+        let scene = base_scene(PlayMode::Attack, None);
+        let metrics = SceneMetrics::from_scene(&scene, 960.0, 960.0);
+        let base_position = Vec2::new(2.0, 3.0);
+        let instance = SpriteInstance::new(SpriteKey::TowerBase, Vec2::splat(1.0));
+
+        let zero_texture_width = MacroquadVec2::new(0.0, 64.0);
+        assert!(sprite_draw_parameters(
+            &instance,
+            base_position,
+            &metrics,
+            None,
+            zero_texture_width
+        )
+        .is_none());
+
+        let zero_texture_height = MacroquadVec2::new(64.0, 0.0);
+        assert!(sprite_draw_parameters(
+            &instance,
+            base_position,
+            &metrics,
+            None,
+            zero_texture_height
+        )
+        .is_none());
+
+        let zero_size_instance = SpriteInstance::new(SpriteKey::TowerBase, Vec2::ZERO);
+        let valid_texture = MacroquadVec2::new(64.0, 64.0);
+        assert!(sprite_draw_parameters(
+            &zero_size_instance,
+            base_position,
+            &metrics,
+            None,
+            valid_texture,
+        )
+        .is_none());
     }
 
     #[test]
