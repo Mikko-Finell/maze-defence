@@ -1259,11 +1259,6 @@ impl Simulation {
     }
 
     #[cfg(test)]
-    fn visual_style(&self) -> VisualStyle {
-        self.visual_style
-    }
-
-    #[cfg(test)]
     fn bug_step_duration(&self) -> Duration {
         self.bug_step_duration
     }
@@ -1401,7 +1396,7 @@ mod tests {
             Duration::from_secs(1),
             VisualStyle::Primitives,
         );
-        assert_eq!(simulation.visual_style(), VisualStyle::Primitives);
+        assert_eq!(simulation.visual_style, VisualStyle::Primitives);
     }
 
     #[test]
