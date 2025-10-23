@@ -80,6 +80,15 @@ impl SpriteAtlas {
         self.textures.len()
     }
 
+    /// Returns the raw texture dimensions in pixels for the provided sprite key.
+    pub(crate) fn texture_dimensions(&self, key: SpriteKey) -> MacroquadVec2 {
+        let texture = self
+            .textures
+            .get(&key)
+            .unwrap_or_else(|| panic!("missing sprite {key:?} in atlas"));
+        MacroquadVec2::new(texture.width(), texture.height())
+    }
+
     /// Draws the requested sprite using the supplied draw parameters.
     pub(crate) fn draw(&self, key: SpriteKey, params: DrawParams) {
         let texture = self
