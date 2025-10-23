@@ -360,6 +360,15 @@ impl RenderingBackend for MacroquadBackend {
                     );
                 }
 
+                draw_towers(
+                    &scene.towers,
+                    &scene.bugs,
+                    &scene.tower_targets,
+                    &metrics,
+                    sprite_atlas.as_ref(),
+                    &mut turret_headings,
+                    TowerDrawStage::Base,
+                );
                 draw_bug_health_bars(&scene.bugs, &metrics);
                 draw_bugs(&scene.bugs, &metrics, sprite_atlas.as_ref());
                 draw_towers(
@@ -369,6 +378,7 @@ impl RenderingBackend for MacroquadBackend {
                     &metrics,
                     sprite_atlas.as_ref(),
                     &mut turret_headings,
+                    TowerDrawStage::Turret,
                 );
 
                 if let Some(preview) = builder_preview {
@@ -806,6 +816,12 @@ struct TowerPalette {
     turret: macroquad::color::Color,
 }
 
+#[derive(Clone, Copy)]
+enum TowerDrawStage {
+    Base,
+    Turret,
+}
+
 fn tower_palette() -> TowerPalette {
     let base_color = Color::from_rgb_u8(78, 52, 128);
     let outline_color = base_color.lighten(0.35);
@@ -840,6 +856,7 @@ fn draw_towers(
     metrics: &SceneMetrics,
     sprite_atlas: Option<&SpriteAtlas>,
     turret_headings: &mut HashMap<TowerId, f32>,
+    stage: TowerDrawStage,
 ) {
     if metrics.cell_step <= f32::EPSILON {
         return;
@@ -850,7 +867,7 @@ fn draw_towers(
     for tower in towers {
         match tower.visual {
             TowerVisual::PrimitiveRect => {
-                draw_primitive_tower(tower, bugs, tower_targets, metrics, &palette);
+                draw_primitive_tower(tower, bugs, tower_targets, metrics, &palette, stage);
             }
             TowerVisual::Sprite {
                 ref base,
@@ -866,9 +883,10 @@ fn draw_towers(
                         tower_targets,
                         metrics,
                         turret_headings,
+                        stage,
                     );
                 } else {
-                    draw_primitive_tower(tower, bugs, tower_targets, metrics, &palette);
+                    draw_primitive_tower(tower, bugs, tower_targets, metrics, &palette, stage);
                 }
             }
         }
@@ -885,6 +903,7 @@ fn draw_sprite_tower(
     tower_targets: &[TowerTargetLine],
     metrics: &SceneMetrics,
     turret_headings: &mut HashMap<TowerId, f32>,
+    stage: TowerDrawStage,
 ) {
     let region = tower.region;
     let size = region.size();
@@ -894,21 +913,26 @@ fn draw_sprite_tower(
 
     let origin = region.origin();
     let base_position = Vec2::new(origin.column() as f32, origin.row() as f32);
-    draw_sprite_instance(atlas, base, base_position, metrics, None);
+    match stage {
+        TowerDrawStage::Base => {
+            draw_sprite_instance(atlas, base, base_position, metrics, None);
+        }
+        TowerDrawStage::Turret => {
+            let Some(center_cells) = tower_region_center(region) else {
+                return;
+            };
 
-    let Some(center_cells) = tower_region_center(region) else {
-        return;
-    };
-
-    let heading = resolve_turret_heading(
-        tower.id,
-        center_cells,
-        turret,
-        tower_targets,
-        bugs,
-        turret_headings,
-    );
-    draw_sprite_instance(atlas, turret, base_position, metrics, Some(heading));
+            let heading = resolve_turret_heading(
+                tower.id,
+                center_cells,
+                turret,
+                tower_targets,
+                bugs,
+                turret_headings,
+            );
+            draw_sprite_instance(atlas, turret, base_position, metrics, Some(heading));
+        }
+    }
 }
 
 fn draw_primitive_tower(
@@ -917,6 +941,7 @@ fn draw_primitive_tower(
     tower_targets: &[TowerTargetLine],
     metrics: &SceneMetrics,
     palette: &TowerPalette,
+    stage: TowerDrawStage,
 ) {
     let region = tower.region;
     let size = region.size();
@@ -924,37 +949,42 @@ fn draw_primitive_tower(
         return;
     }
 
-    let origin = region.origin();
-    let x = metrics.offset_x + origin.column() as f32 * metrics.cell_step;
-    let y = metrics.offset_y + origin.row() as f32 * metrics.cell_step;
-    let width = size.width() as f32 * metrics.cell_step;
-    let height = size.height() as f32 * metrics.cell_step;
-    let outline_thickness = (metrics.cell_step * 0.12).max(1.0);
+    match stage {
+        TowerDrawStage::Base => {
+            let origin = region.origin();
+            let x = metrics.offset_x + origin.column() as f32 * metrics.cell_step;
+            let y = metrics.offset_y + origin.row() as f32 * metrics.cell_step;
+            let width = size.width() as f32 * metrics.cell_step;
+            let height = size.height() as f32 * metrics.cell_step;
+            let outline_thickness = (metrics.cell_step * 0.12).max(1.0);
 
-    macroquad::shapes::draw_rectangle(x, y, width, height, palette.fill);
-    macroquad::shapes::draw_rectangle_lines(
-        x,
-        y,
-        width,
-        height,
-        outline_thickness,
-        palette.outline,
-    );
+            macroquad::shapes::draw_rectangle(x, y, width, height, palette.fill);
+            macroquad::shapes::draw_rectangle_lines(
+                x,
+                y,
+                width,
+                height,
+                outline_thickness,
+                palette.outline,
+            );
+        }
+        TowerDrawStage::Turret => {
+            let Some(center_cells) = tower_region_center(region) else {
+                return;
+            };
 
-    let Some(center_cells) = tower_region_center(region) else {
-        return;
-    };
-
-    let max_dimension = size.width().max(size.height()) as f32;
-    let half_length_cells = max_dimension * 0.5;
-    let direction = turret_direction_for(tower.id, center_cells, tower_targets, bugs);
-    draw_turret(
-        center_cells,
-        direction,
-        half_length_cells,
-        metrics,
-        palette.turret,
-    );
+            let max_dimension = size.width().max(size.height()) as f32;
+            let half_length_cells = max_dimension * 0.5;
+            let direction = turret_direction_for(tower.id, center_cells, tower_targets, bugs);
+            draw_turret(
+                center_cells,
+                direction,
+                half_length_cells,
+                metrics,
+                palette.turret,
+            );
+        }
+    }
 }
 
 fn normalise_radians(angle: f32) -> f32 {
