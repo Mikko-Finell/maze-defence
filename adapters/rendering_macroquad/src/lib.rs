@@ -16,7 +16,9 @@
 //! in by enabling `macroquad/audio` in their own `Cargo.toml` dependency
 //! specification.
 
-use anyhow::Result;
+mod sprites;
+
+use anyhow::{Context, Result};
 use glam::Vec2;
 use macroquad::math::Vec2 as MacroquadVec2;
 use macroquad::{
@@ -26,19 +28,34 @@ use macroquad::{
 use maze_defence_core::{CellRect, PlayMode, TowerId, TowerKind};
 use maze_defence_rendering::{
     BugPresentation, BugVisual, Color, FrameInput, FrameSimulationBreakdown, Presentation,
-    RenderingBackend, Scene, SceneProjectile, SceneTower, SceneWall, TileGridPresentation,
-    TowerPreview, TowerTargetLine,
+    RenderingBackend, Scene, SceneProjectile, SceneTower, SceneWall, SpriteKey,
+    TileGridPresentation, TowerPreview, TowerTargetLine,
 };
 use std::{
-    collections::VecDeque,
+    collections::{HashMap, VecDeque},
     time::{Duration, Instant},
 };
 
+use self::sprites::SpriteAtlas;
+
 /// Rendering backend implemented on top of macroquad.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct MacroquadBackend {
     swap_interval: Option<i32>,
     show_fps: bool,
+    sprite_atlas: Option<SpriteAtlas>,
+    turret_headings: HashMap<TowerId, f32>,
+}
+
+impl Default for MacroquadBackend {
+    fn default() -> Self {
+        Self {
+            swap_interval: None,
+            show_fps: false,
+            sprite_atlas: None,
+            turret_headings: HashMap::new(),
+        }
+    }
 }
 
 impl MacroquadBackend {
@@ -195,6 +212,8 @@ impl RenderingBackend for MacroquadBackend {
         let Self {
             swap_interval,
             show_fps,
+            sprite_atlas,
+            turret_headings,
         } = self;
 
         let Presentation {
@@ -204,6 +223,14 @@ impl RenderingBackend for MacroquadBackend {
         } = presentation;
 
         let mut scene = scene;
+
+        let sprite_atlas = sprite_atlas
+            .map(Ok)
+            .unwrap_or_else(|| SpriteAtlas::new().context("failed to initialise sprite atlas"))?;
+
+        debug_assert!(sprite_atlas.contains(SpriteKey::TowerBase));
+        debug_assert!(sprite_atlas.contains(SpriteKey::TowerTurret));
+        debug_assert!(sprite_atlas.contains(SpriteKey::BugBody));
 
         let mut config = macroquad::window::Conf {
             window_title,
@@ -216,6 +243,9 @@ impl RenderingBackend for MacroquadBackend {
         }
 
         macroquad::Window::from_config(config, async move {
+            let sprite_atlas = sprite_atlas;
+            let mut turret_headings = turret_headings;
+            let _ = sprite_atlas.len();
             let background = to_macroquad_color(clear_color);
             let mut fps_counter = FpsCounter::default();
             let mut show_tower_target_lines = false;
@@ -240,6 +270,9 @@ impl RenderingBackend for MacroquadBackend {
                 let frame_input = gather_frame_input(&scene, &metrics_before);
 
                 let simulation_breakdown = update_scene(frame_dt, frame_input, &mut scene);
+
+                turret_headings
+                    .retain(|tower_id, _| scene.towers.iter().any(|tower| tower.id == *tower_id));
 
                 let tile_grid = scene.tile_grid;
                 let metrics = SceneMetrics::from_scene(&scene, screen_width, screen_height);
