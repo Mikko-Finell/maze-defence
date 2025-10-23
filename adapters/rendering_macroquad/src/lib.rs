@@ -27,22 +27,23 @@ use macroquad::{
 };
 use maze_defence_core::{CellRect, PlayMode, TowerId, TowerKind};
 use maze_defence_rendering::{
-    BugPresentation, BugVisual, Color, FrameInput, FrameSimulationBreakdown, Presentation,
-    RenderingBackend, Scene, SceneProjectile, SceneTower, SceneWall, SpriteKey,
-    TileGridPresentation, TowerPreview, TowerTargetLine,
+    visuals, BugPresentation, BugVisual, Color, FrameInput, FrameSimulationBreakdown, Presentation,
+    RenderingBackend, Scene, SceneProjectile, SceneTower, SceneWall, SpriteInstance, SpriteKey,
+    TileGridPresentation, TowerPreview, TowerTargetLine, TowerVisual,
 };
 use std::{
     collections::{HashMap, VecDeque},
     time::{Duration, Instant},
 };
 
-use self::sprites::SpriteAtlas;
+use self::sprites::{DrawParams, SpriteAtlas};
 
 /// Rendering backend implemented on top of macroquad.
 #[derive(Debug)]
 pub struct MacroquadBackend {
     swap_interval: Option<i32>,
     show_fps: bool,
+    sprites_enabled: bool,
     sprite_atlas: Option<SpriteAtlas>,
     turret_headings: HashMap<TowerId, f32>,
 }
@@ -52,6 +53,7 @@ impl Default for MacroquadBackend {
         Self {
             swap_interval: None,
             show_fps: false,
+            sprites_enabled: true,
             sprite_atlas: None,
             turret_headings: HashMap::new(),
         }
@@ -84,6 +86,14 @@ impl MacroquadBackend {
     #[must_use]
     pub fn with_show_fps(mut self, show: bool) -> Self {
         self.show_fps = show;
+        self
+    }
+
+    /// Configures whether sprite rendering is enabled. When disabled the backend keeps using
+    /// primitive visuals even if sprite descriptors are emitted.
+    #[must_use]
+    pub fn with_sprite_rendering(mut self, enabled: bool) -> Self {
+        self.sprites_enabled = enabled;
         self
     }
 }
@@ -212,6 +222,7 @@ impl RenderingBackend for MacroquadBackend {
         let Self {
             swap_interval,
             show_fps,
+            sprites_enabled,
             sprite_atlas,
             turret_headings,
         } = self;
@@ -224,13 +235,18 @@ impl RenderingBackend for MacroquadBackend {
 
         let mut scene = scene;
 
-        let sprite_atlas = sprite_atlas
-            .map(Ok)
-            .unwrap_or_else(|| SpriteAtlas::new().context("failed to initialise sprite atlas"))?;
+        let sprite_atlas = if sprites_enabled {
+            let atlas = sprite_atlas.map(Ok).unwrap_or_else(|| {
+                SpriteAtlas::new().context("failed to initialise sprite atlas")
+            })?;
 
-        debug_assert!(sprite_atlas.contains(SpriteKey::TowerBase));
-        debug_assert!(sprite_atlas.contains(SpriteKey::TowerTurret));
-        debug_assert!(sprite_atlas.contains(SpriteKey::BugBody));
+            debug_assert!(atlas.contains(SpriteKey::TowerBase));
+            debug_assert!(atlas.contains(SpriteKey::TowerTurret));
+            debug_assert!(atlas.contains(SpriteKey::BugBody));
+            Some(atlas)
+        } else {
+            None
+        };
 
         let mut config = macroquad::window::Conf {
             window_title,
@@ -245,7 +261,9 @@ impl RenderingBackend for MacroquadBackend {
         macroquad::Window::from_config(config, async move {
             let sprite_atlas = sprite_atlas;
             let mut turret_headings = turret_headings;
-            let _ = sprite_atlas.len();
+            if let Some(atlas) = sprite_atlas.as_ref() {
+                let _ = atlas.len();
+            }
             let background = to_macroquad_color(clear_color);
             let mut fps_counter = FpsCounter::default();
             let mut show_tower_target_lines = false;
@@ -303,8 +321,15 @@ impl RenderingBackend for MacroquadBackend {
                 }
 
                 draw_bug_health_bars(&scene.bugs, &metrics);
-                draw_bugs(&scene.bugs, &metrics);
+                draw_bugs(&scene.bugs, &metrics, sprite_atlas.as_ref());
                 draw_tower_bases(&scene.towers, &metrics);
+                draw_sprite_towers(
+                    &scene.towers,
+                    &scene.tower_targets,
+                    &metrics,
+                    sprite_atlas.as_ref(),
+                    &mut turret_headings,
+                );
 
                 if let Some(preview) = builder_preview {
                     draw_tower_preview(preview, &metrics);
@@ -639,7 +664,7 @@ fn draw_bug_health_bars(bugs: &[BugPresentation], metrics: &SceneMetrics) {
     }
 }
 
-fn draw_bugs(bugs: &[BugPresentation], metrics: &SceneMetrics) {
+fn draw_bugs(bugs: &[BugPresentation], metrics: &SceneMetrics, sprite_atlas: Option<&SpriteAtlas>) {
     if metrics.cell_step <= f32::EPSILON {
         return;
     }
@@ -666,10 +691,31 @@ fn draw_bugs(bugs: &[BugPresentation], metrics: &SceneMetrics) {
                 );
             }
             BugVisual::Sprite(sprite) => {
-                let _ = sprite;
+                let atlas = sprite_atlas.expect("sprite bug visual requires sprite atlas");
+                draw_bug_sprite(bug, sprite, metrics, atlas);
             }
         }
     }
+}
+
+fn draw_bug_sprite(
+    bug: &BugPresentation,
+    sprite: SpriteInstance,
+    metrics: &SceneMetrics,
+    atlas: &SpriteAtlas,
+) {
+    let position = sprite_pivot_position(bug.position(), &sprite, metrics);
+    let texture_dimensions = atlas.dimensions(sprite.sprite);
+    let scale = sprite_scale(texture_dimensions, sprite.size, metrics.cell_step);
+    let pivot = MacroquadVec2::new(sprite.pivot.x, sprite.pivot.y);
+
+    atlas.draw(
+        sprite.sprite,
+        DrawParams::new(position)
+            .with_scale(scale)
+            .with_rotation(sprite.rotation_radians)
+            .with_pivot(pivot),
+    );
 }
 
 fn draw_projectiles(projectiles: &[SceneProjectile], metrics: &SceneMetrics) {
@@ -770,6 +816,10 @@ fn draw_tower_bases(towers: &[SceneTower], metrics: &SceneMetrics) {
     let outline_thickness = (metrics.cell_step * 0.12).max(1.0);
 
     for tower in towers {
+        if !matches!(tower.visual, TowerVisual::PrimitiveRect) {
+            continue;
+        }
+
         let region = tower.region;
         let size = region.size();
         if size.width() == 0 || size.height() == 0 {
@@ -794,6 +844,91 @@ fn draw_tower_bases(towers: &[SceneTower], metrics: &SceneMetrics) {
     }
 }
 
+fn draw_sprite_towers(
+    towers: &[SceneTower],
+    tower_targets: &[TowerTargetLine],
+    metrics: &SceneMetrics,
+    sprite_atlas: Option<&SpriteAtlas>,
+    turret_headings: &mut HashMap<TowerId, f32>,
+) {
+    let Some(atlas) = sprite_atlas else {
+        debug_assert!(
+            towers
+                .iter()
+                .all(|tower| !matches!(tower.visual, TowerVisual::Sprite { .. })),
+            "sprite towers require a sprite atlas"
+        );
+        return;
+    };
+
+    if metrics.cell_step <= f32::EPSILON {
+        return;
+    }
+
+    for tower in towers {
+        let TowerVisual::Sprite { base, turret } = tower.visual else {
+            continue;
+        };
+
+        draw_tower_base_sprite(tower.region, base, metrics, atlas);
+        let heading = resolve_turret_heading(tower.id, &turret, tower_targets, turret_headings);
+        draw_tower_turret_sprite(tower.region, &turret, heading, metrics, atlas);
+    }
+}
+
+fn draw_tower_base_sprite(
+    region: CellRect,
+    base: SpriteInstance,
+    metrics: &SceneMetrics,
+    atlas: &SpriteAtlas,
+) {
+    let size = region.size();
+    if size.width() == 0 || size.height() == 0 {
+        return;
+    }
+
+    let anchor = tower_region_origin_vec(region);
+    let position = sprite_pivot_position(anchor, &base, metrics);
+    let texture_dimensions = atlas.dimensions(base.sprite);
+    let scale = sprite_scale(texture_dimensions, base.size, metrics.cell_step);
+    let pivot = MacroquadVec2::new(base.pivot.x, base.pivot.y);
+
+    atlas.draw(
+        base.sprite,
+        DrawParams::new(position)
+            .with_scale(scale)
+            .with_rotation(base.rotation_radians)
+            .with_pivot(pivot),
+    );
+}
+
+fn draw_tower_turret_sprite(
+    region: CellRect,
+    turret: &SpriteInstance,
+    heading: f32,
+    metrics: &SceneMetrics,
+    atlas: &SpriteAtlas,
+) {
+    let size = region.size();
+    if size.width() == 0 || size.height() == 0 {
+        return;
+    }
+
+    let anchor = tower_region_origin_vec(region);
+    let position = sprite_pivot_position(anchor, turret, metrics);
+    let texture_dimensions = atlas.dimensions(turret.sprite);
+    let scale = sprite_scale(texture_dimensions, turret.size, metrics.cell_step);
+    let pivot = MacroquadVec2::new(turret.pivot.x, turret.pivot.y);
+
+    atlas.draw(
+        turret.sprite,
+        DrawParams::new(position)
+            .with_scale(scale)
+            .with_rotation(heading)
+            .with_pivot(pivot),
+    );
+}
+
 fn draw_turrets(
     towers: &[SceneTower],
     bugs: &[BugPresentation],
@@ -807,6 +942,10 @@ fn draw_turrets(
     let palette = tower_palette();
 
     for tower in towers {
+        if !matches!(tower.visual, TowerVisual::PrimitiveRect) {
+            continue;
+        }
+
         let region = tower.region;
         let size = region.size();
         if size.width() == 0 || size.height() == 0 {
@@ -827,6 +966,24 @@ fn draw_turrets(
             metrics,
             palette.turret,
         );
+    }
+}
+
+fn resolve_turret_heading(
+    tower_id: TowerId,
+    turret: &SpriteInstance,
+    tower_targets: &[TowerTargetLine],
+    turret_headings: &mut HashMap<TowerId, f32>,
+) -> f32 {
+    if let Some(line) = tower_targets.iter().find(|line| line.tower == tower_id) {
+        let heading = visuals::heading_from_target_line(line);
+        let _ = turret_headings.insert(tower_id, heading);
+        heading
+    } else {
+        turret_headings
+            .get(&tower_id)
+            .copied()
+            .unwrap_or(turret.rotation_radians)
     }
 }
 
@@ -918,6 +1075,42 @@ fn draw_turret(
     );
 }
 
+fn sprite_scale(dimensions: MacroquadVec2, sprite_size: Vec2, cell_step: f32) -> MacroquadVec2 {
+    if cell_step <= f32::EPSILON {
+        return MacroquadVec2::new(0.0, 0.0);
+    }
+
+    let size = sprite_size.abs();
+    let desired_width = size.x * cell_step;
+    let desired_height = size.y * cell_step;
+
+    let scale_x = if dimensions.x <= f32::EPSILON {
+        0.0
+    } else {
+        desired_width / dimensions.x
+    };
+    let scale_y = if dimensions.y <= f32::EPSILON {
+        0.0
+    } else {
+        desired_height / dimensions.y
+    };
+
+    MacroquadVec2::new(scale_x, scale_y)
+}
+
+fn sprite_pivot_position(
+    anchor: Vec2,
+    sprite: &SpriteInstance,
+    metrics: &SceneMetrics,
+) -> MacroquadVec2 {
+    let offset = sprite.offset.unwrap_or(Vec2::ZERO);
+    let pivot_cells = anchor + offset;
+    MacroquadVec2::new(
+        metrics.offset_x + pivot_cells.x * metrics.cell_step,
+        metrics.offset_y + pivot_cells.y * metrics.cell_step,
+    )
+}
+
 fn draw_tower_range_indicator(
     kind: TowerKind,
     region: CellRect,
@@ -962,6 +1155,11 @@ fn tower_region_center(region: CellRect) -> Option<Vec2> {
         origin.column() as f32 + size.width() as f32 * 0.5,
         origin.row() as f32 + size.height() as f32 * 0.5,
     ))
+}
+
+fn tower_region_origin_vec(region: CellRect) -> Vec2 {
+    let origin = region.origin();
+    Vec2::new(origin.column() as f32, origin.row() as f32)
 }
 
 fn draw_tower_preview(preview: TowerPreview, metrics: &SceneMetrics) {
@@ -1030,7 +1228,7 @@ mod tests {
         BugId, CellCoord, CellRect, CellRectSize, ProjectileId, TowerId, TowerKind,
     };
     use maze_defence_rendering::BugHealthPresentation;
-    use std::time::Duration;
+    use std::{collections::HashMap, f32::consts::FRAC_PI_2, time::Duration};
 
     fn base_scene(play_mode: PlayMode, placement_preview: Option<TowerPreview>) -> Scene {
         let grid = TileGridPresentation::new(
@@ -1403,5 +1601,86 @@ mod tests {
                 assert!(metrics.is_none());
             }
         }
+    }
+
+    #[test]
+    fn resolve_turret_heading_updates_cache() {
+        let turret = SpriteInstance::square(SpriteKey::TowerTurret, Vec2::splat(1.0));
+        let tower = TowerId::new(31);
+        let line = TowerTargetLine::new(
+            tower,
+            BugId::new(9),
+            Vec2::new(1.0, 1.0),
+            Vec2::new(4.0, 3.0),
+        );
+        let mut cache = HashMap::new();
+
+        let heading = resolve_turret_heading(tower, &turret, &[line], &mut cache);
+
+        let cached = cache
+            .get(&tower)
+            .copied()
+            .expect("heading should be cached");
+        assert!((heading - cached).abs() <= f32::EPSILON);
+    }
+
+    #[test]
+    fn resolve_turret_heading_uses_cache_when_available() {
+        let turret = SpriteInstance::square(SpriteKey::TowerTurret, Vec2::splat(1.0));
+        let tower = TowerId::new(37);
+        let mut cache = HashMap::new();
+        let _ = cache.insert(tower, 1.25);
+
+        let heading = resolve_turret_heading(tower, &turret, &[], &mut cache);
+
+        assert!((heading - 1.25).abs() <= f32::EPSILON);
+    }
+
+    #[test]
+    fn resolve_turret_heading_falls_back_to_instance_rotation() {
+        let turret = SpriteInstance::square(SpriteKey::TowerTurret, Vec2::splat(1.0))
+            .with_rotation(-FRAC_PI_2);
+        let tower = TowerId::new(43);
+        let mut cache = HashMap::new();
+
+        let heading = resolve_turret_heading(tower, &turret, &[], &mut cache);
+
+        assert!((heading + FRAC_PI_2).abs() <= f32::EPSILON);
+    }
+
+    #[test]
+    fn sprite_scale_matches_cell_units() {
+        let texture_dimensions = MacroquadVec2::new(32.0, 64.0);
+        let sprite_size = Vec2::new(2.0, 1.0);
+        let scale = sprite_scale(texture_dimensions, sprite_size, 16.0);
+
+        assert!((scale.x - 1.0).abs() <= f32::EPSILON);
+        assert!((scale.y - 0.25).abs() <= f32::EPSILON);
+    }
+
+    #[test]
+    fn sprite_scale_handles_zero_dimensions() {
+        let texture_dimensions = MacroquadVec2::new(0.0, 48.0);
+        let sprite_size = Vec2::new(1.0, 1.0);
+        let scale = sprite_scale(texture_dimensions, sprite_size, 16.0);
+
+        assert_eq!(scale.x, 0.0);
+        assert!((scale.y - (16.0 / 48.0)).abs() <= f32::EPSILON);
+    }
+
+    #[test]
+    fn sprite_pivot_position_applies_offsets() {
+        let scene = base_scene(PlayMode::Attack, None);
+        let metrics = SceneMetrics::from_scene(&scene, 960.0, 960.0);
+        let sprite = SpriteInstance::new(SpriteKey::TowerBase, Vec2::new(1.0, 1.0))
+            .with_offset(Some(Vec2::new(0.5, 0.25)));
+        let anchor = Vec2::new(2.0, 3.0);
+
+        let position = sprite_pivot_position(anchor, &sprite, &metrics);
+
+        let expected_x = metrics.offset_x + (anchor.x + 0.5) * metrics.cell_step;
+        let expected_y = metrics.offset_y + (anchor.y + 0.25) * metrics.cell_step;
+        assert!((position.x - expected_x).abs() <= f32::EPSILON);
+        assert!((position.y - expected_y).abs() <= f32::EPSILON);
     }
 }
