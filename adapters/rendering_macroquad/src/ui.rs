@@ -10,7 +10,7 @@ use macroquad::{
     ui::{hash, Ui},
 };
 use maze_defence_core::PlayMode;
-use maze_defence_rendering::GoldPresentation;
+use maze_defence_rendering::{GoldPresentation, TierPresentation};
 
 /// Snapshot of the control panel's UI layout and data for the current frame.
 #[derive(Clone, Copy, Debug)]
@@ -26,6 +26,8 @@ pub(crate) struct ControlPanelUiContext {
     pub play_mode: PlayMode,
     /// Presentable gold amount exposed by the simulation.
     pub gold: Option<GoldPresentation>,
+    /// Presentable difficulty tier exposed by the simulation.
+    pub tier: Option<TierPresentation>,
 }
 
 /// Renders the control panel's interactive elements for the current frame.
@@ -80,6 +82,12 @@ pub(crate) fn draw_control_panel_ui(ui: &mut Ui, context: ControlPanelUiContext)
 
     let mut mode_toggle = false;
     let _ = ui.window(hash!("control_panel"), context.origin, context.size, |ui| {
+        let tier_text = match context.tier {
+            Some(tier) => format!("Tier: {}", tier.tier()),
+            None => "Tier: –".to_string(),
+        };
+        ui.label(None, tier_text.as_str());
+
         let gold_text = match context.gold {
             Some(gold) => format!("Gold: {}", gold.amount().get()),
             None => "Gold: –".to_string(),
