@@ -12,19 +12,24 @@
 //! Macroquad's optional audio stack depends on native ALSA development
 //! libraries, which are unavailable in the containerised CI environment.
 //! To keep `cargo test` usable everywhere we depend on macroquad without its
-//! default `audio` feature.  Consumers that need sound playback can opt back
+//! default `audio` feature. Consumers that need sound playback can opt back
 //! in by enabling `macroquad/audio` in their own `Cargo.toml` dependency
 //! specification.
+//!
+//! The adapter uses Macroquad's immediate-mode UI module so the control panel
+//! can host widgets. All UI-specific calls live inside the local `ui` module to
+//! avoid leaking Macroquad UI types throughout the renderer.
 
 mod sprites;
+mod ui;
 
+use self::ui::{draw_control_panel_ui, ControlPanelUiContext, ControlPanelUiPhase};
 use anyhow::{Context, Result};
 use glam::Vec2;
 use macroquad::math::Vec2 as MacroquadVec2;
 use macroquad::{
-    color::{BLACK, WHITE},
+    color::BLACK,
     input::{is_key_pressed, is_mouse_button_pressed, mouse_position, KeyCode, MouseButton},
-    text::{draw_text_ex, TextParams},
 };
 use maze_defence_core::{CellRect, PlayMode, TowerId, TowerKind};
 use maze_defence_rendering::{
@@ -320,15 +325,32 @@ impl RenderingBackend for MacroquadBackend {
                     show_bug_health_bars = !show_bug_health_bars;
                 }
 
-                macroquad::window::clear_background(background);
-
                 let screen_width = macroquad::window::screen_width();
                 let screen_height = macroquad::window::screen_height();
 
+                let metrics_before = SceneMetrics::from_scene(&scene, screen_width, screen_height);
+
+                let mode_toggle_from_button =
+                    control_panel_context(&scene, screen_width, screen_height)
+                        .and_then(|panel_context| {
+                            let mut control_panel_ui = macroquad::ui::root_ui();
+                            Some(
+                                draw_control_panel_ui(
+                                    &mut control_panel_ui,
+                                    panel_context,
+                                    ControlPanelUiPhase::CaptureInteractions,
+                                )
+                                .mode_toggle_pressed,
+                            )
+                        })
+                        .unwrap_or(false);
+
+                macroquad::window::clear_background(background);
+
                 let dt_seconds = macroquad::time::get_frame_time();
                 let frame_dt = Duration::from_secs_f32(dt_seconds.max(0.0));
-                let metrics_before = SceneMetrics::from_scene(&scene, screen_width, screen_height);
-                let frame_input = gather_frame_input(&scene, &metrics_before);
+                let frame_input =
+                    gather_frame_input(&scene, &metrics_before, mode_toggle_from_button);
 
                 let simulation_breakdown = update_scene(frame_dt, frame_input, &mut scene);
 
@@ -398,7 +420,17 @@ impl RenderingBackend for MacroquadBackend {
                 }
 
                 draw_projectiles(&scene.projectiles, &metrics);
-                draw_control_panel(&scene, screen_width, screen_height);
+                if let Some(panel_context) =
+                    control_panel_context(&scene, screen_width, screen_height)
+                {
+                    draw_control_panel_background(&panel_context);
+                    let mut control_panel_ui = macroquad::ui::root_ui();
+                    let _ = draw_control_panel_ui(
+                        &mut control_panel_ui,
+                        panel_context,
+                        ControlPanelUiPhase::Render,
+                    );
+                }
 
                 if show_tower_target_lines {
                     draw_tower_targets(&scene.tower_targets, &metrics);
@@ -527,9 +559,13 @@ impl SceneMetrics {
     }
 }
 
-fn gather_frame_input(scene: &Scene, metrics: &SceneMetrics) -> FrameInput {
+fn gather_frame_input(
+    scene: &Scene,
+    metrics: &SceneMetrics,
+    button_mode_toggle: bool,
+) -> FrameInput {
     let (cursor_x, cursor_y) = mouse_position();
-    let mode_toggle = is_key_pressed(KeyCode::Space);
+    let mode_toggle = is_key_pressed(KeyCode::Space) || button_mode_toggle;
     let spawn_wave = is_key_pressed(KeyCode::Enter);
     let confirm_click = is_mouse_button_pressed(MouseButton::Left);
     let remove_click = is_mouse_button_pressed(MouseButton::Right);
@@ -599,31 +635,37 @@ fn gather_frame_input_from_observations(
     input
 }
 
-fn draw_control_panel(scene: &Scene, screen_width: f32, screen_height: f32) {
+fn control_panel_context(
+    scene: &Scene,
+    screen_width: f32,
+    screen_height: f32,
+) -> Option<ControlPanelUiContext> {
     let Some(ControlPanelView { width, background }) = scene.control_panel else {
-        return;
+        return None;
     };
     if width <= f32::EPSILON {
-        return;
+        return None;
     }
 
     let left = (screen_width - width).max(0.0);
-    macroquad::shapes::draw_rectangle(
-        left,
-        0.0,
-        width,
-        screen_height,
-        to_macroquad_color(background),
-    );
+    let background_color = to_macroquad_color(background);
+    Some(ControlPanelUiContext {
+        origin: MacroquadVec2::new(left, 0.0),
+        size: MacroquadVec2::new(width, screen_height),
+        background: background_color,
+        play_mode: scene.play_mode,
+        gold: scene.gold,
+    })
+}
 
-    if let Some(gold) = scene.gold {
-        let text = format!("Gold: {}", gold.amount().get());
-        let mut params = TextParams::default();
-        params.font_size = 32;
-        params.font_scale = 1.0;
-        params.color = WHITE;
-        draw_text_ex(&text, left + 16.0, 40.0, params);
-    }
+fn draw_control_panel_background(context: &ControlPanelUiContext) {
+    macroquad::shapes::draw_rectangle(
+        context.origin.x,
+        context.origin.y,
+        context.size.x,
+        context.size.y,
+        context.background,
+    );
 }
 
 fn active_builder_preview(scene: &Scene) -> Option<TowerPreview> {
@@ -1553,6 +1595,39 @@ mod tests {
         let expected_height = scene.tile_grid.bordered_height() * metrics.scale;
 
         assert!((metrics.bordered_grid_height_scaled - expected_height).abs() <= f32::EPSILON);
+    }
+
+    #[test]
+    fn mode_toggle_button_sets_flag_for_single_frame() {
+        let scene = base_scene(PlayMode::Builder, None);
+        let metrics = SceneMetrics::from_scene(&scene, 960.0, 960.0);
+
+        let toggled_input = gather_frame_input_from_observations(
+            &scene,
+            &metrics,
+            Vec2::ZERO,
+            true,
+            false,
+            false,
+            false,
+            false,
+        );
+        assert!(toggled_input.mode_toggle);
+
+        let untoggled_input = gather_frame_input_from_observations(
+            &scene,
+            &metrics,
+            Vec2::ZERO,
+            false,
+            false,
+            false,
+            false,
+            false,
+        );
+        assert!(
+            !untoggled_input.mode_toggle,
+            "mode toggle flag must clear when button is not pressed"
+        );
     }
 
     #[test]
