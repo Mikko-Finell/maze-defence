@@ -4,7 +4,7 @@ fn run_sequence(sequence: &[bool]) -> Vec<bool> {
     let mut state = ControlPanelInputState::default();
     let mut toggles = Vec::new();
     for &pressed in sequence {
-        let mode_toggle = state.merge_mode_toggle(false);
+        let mode_toggle = state.take_mode_toggle();
         toggles.push(mode_toggle);
         if pressed {
             state.register_mode_toggle();
@@ -12,7 +12,7 @@ fn run_sequence(sequence: &[bool]) -> Vec<bool> {
     }
 
     // Flush any trailing latched press so the harness observes the final toggle.
-    toggles.push(state.merge_mode_toggle(false));
+    toggles.push(state.take_mode_toggle());
     toggles
 }
 
