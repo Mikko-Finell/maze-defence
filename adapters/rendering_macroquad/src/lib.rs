@@ -12,19 +12,24 @@
 //! Macroquad's optional audio stack depends on native ALSA development
 //! libraries, which are unavailable in the containerised CI environment.
 //! To keep `cargo test` usable everywhere we depend on macroquad without its
-//! default `audio` feature.  Consumers that need sound playback can opt back
+//! default `audio` feature. Consumers that need sound playback can opt back
 //! in by enabling `macroquad/audio` in their own `Cargo.toml` dependency
 //! specification.
+//!
+//! The adapter uses Macroquad's immediate-mode UI module so the control panel
+//! can host widgets. All UI-specific calls live inside the local `ui` module to
+//! avoid leaking Macroquad UI types throughout the renderer.
 
 mod sprites;
+mod ui;
 
+use self::ui::{draw_control_panel_ui, ControlPanelUiContext};
 use anyhow::{Context, Result};
 use glam::Vec2;
 use macroquad::math::Vec2 as MacroquadVec2;
 use macroquad::{
-    color::{BLACK, WHITE},
+    color::BLACK,
     input::{is_key_pressed, is_mouse_button_pressed, mouse_position, KeyCode, MouseButton},
-    text::{draw_text_ex, TextParams},
 };
 use maze_defence_core::{CellRect, PlayMode, TowerId, TowerKind};
 use maze_defence_rendering::{
@@ -41,6 +46,28 @@ use std::{
 };
 
 use self::sprites::SpriteAtlas;
+
+/// Tracks UI-sourced interactions so they can be merged with physical input on the next frame.
+#[doc(hidden)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct ControlPanelInputState {
+    mode_toggle_latched: bool,
+}
+
+impl ControlPanelInputState {
+    /// Consumes any latched UI interactions and merges them with the current frame's
+    /// physical input signal.
+    pub fn merge_mode_toggle(&mut self, physical_press: bool) -> bool {
+        let latched = self.mode_toggle_latched;
+        self.mode_toggle_latched = false;
+        physical_press || latched
+    }
+
+    /// Records that the control-panel button requested a mode toggle this frame.
+    pub fn register_mode_toggle(&mut self) {
+        self.mode_toggle_latched = true;
+    }
+}
 
 /// Rendering backend implemented on top of macroquad.
 #[derive(Debug)]
@@ -306,6 +333,7 @@ impl RenderingBackend for MacroquadBackend {
             let mut fps_counter = FpsCounter::default();
             let mut show_tower_target_lines = false;
             let mut show_bug_health_bars = false;
+            let mut control_panel_input = ControlPanelInputState::default();
 
             loop {
                 if is_key_pressed(KeyCode::Escape) || is_key_pressed(KeyCode::Q) {
@@ -328,7 +356,9 @@ impl RenderingBackend for MacroquadBackend {
                 let dt_seconds = macroquad::time::get_frame_time();
                 let frame_dt = Duration::from_secs_f32(dt_seconds.max(0.0));
                 let metrics_before = SceneMetrics::from_scene(&scene, screen_width, screen_height);
-                let frame_input = gather_frame_input(&scene, &metrics_before);
+                let physical_mode_toggle = is_key_pressed(KeyCode::Space);
+                let mode_toggle = control_panel_input.merge_mode_toggle(physical_mode_toggle);
+                let frame_input = gather_frame_input(&scene, &metrics_before, mode_toggle);
 
                 let simulation_breakdown = update_scene(frame_dt, frame_input, &mut scene);
 
@@ -398,7 +428,13 @@ impl RenderingBackend for MacroquadBackend {
                 }
 
                 draw_projectiles(&scene.projectiles, &metrics);
-                draw_control_panel(&scene, screen_width, screen_height);
+                if let Some(panel_context) = draw_control_panel(&scene, screen_width, screen_height)
+                {
+                    let mut control_panel_ui = macroquad::ui::root_ui();
+                    if draw_control_panel_ui(&mut control_panel_ui, panel_context) {
+                        control_panel_input.register_mode_toggle();
+                    }
+                }
 
                 if show_tower_target_lines {
                     draw_tower_targets(&scene.tower_targets, &metrics);
@@ -527,9 +563,8 @@ impl SceneMetrics {
     }
 }
 
-fn gather_frame_input(scene: &Scene, metrics: &SceneMetrics) -> FrameInput {
+fn gather_frame_input(scene: &Scene, metrics: &SceneMetrics, mode_toggle: bool) -> FrameInput {
     let (cursor_x, cursor_y) = mouse_position();
-    let mode_toggle = is_key_pressed(KeyCode::Space);
     let spawn_wave = is_key_pressed(KeyCode::Enter);
     let confirm_click = is_mouse_button_pressed(MouseButton::Left);
     let remove_click = is_mouse_button_pressed(MouseButton::Right);
@@ -599,31 +634,29 @@ fn gather_frame_input_from_observations(
     input
 }
 
-fn draw_control_panel(scene: &Scene, screen_width: f32, screen_height: f32) {
+fn draw_control_panel(
+    scene: &Scene,
+    screen_width: f32,
+    screen_height: f32,
+) -> Option<ControlPanelUiContext> {
     let Some(ControlPanelView { width, background }) = scene.control_panel else {
-        return;
+        return None;
     };
     if width <= f32::EPSILON {
-        return;
+        return None;
     }
 
     let left = (screen_width - width).max(0.0);
-    macroquad::shapes::draw_rectangle(
-        left,
-        0.0,
-        width,
-        screen_height,
-        to_macroquad_color(background),
-    );
+    let background_color = to_macroquad_color(background);
+    macroquad::shapes::draw_rectangle(left, 0.0, width, screen_height, background_color);
 
-    if let Some(gold) = scene.gold {
-        let text = format!("Gold: {}", gold.amount().get());
-        let mut params = TextParams::default();
-        params.font_size = 32;
-        params.font_scale = 1.0;
-        params.color = WHITE;
-        draw_text_ex(&text, left + 16.0, 40.0, params);
-    }
+    Some(ControlPanelUiContext {
+        origin: MacroquadVec2::new(left, 0.0),
+        size: MacroquadVec2::new(width, screen_height),
+        background: background_color,
+        play_mode: scene.play_mode,
+        gold: scene.gold,
+    })
 }
 
 fn active_builder_preview(scene: &Scene) -> Option<TowerPreview> {
