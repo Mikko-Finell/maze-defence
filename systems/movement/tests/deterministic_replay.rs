@@ -5,8 +5,8 @@ use std::{
 };
 
 use maze_defence_core::{
-    BugColor, BugSnapshot, CellCoord, Command, Event, Gold, Health, NavigationFieldView, PlayMode,
-    TileCoord, TowerKind,
+    BugColor, BugId, BugSnapshot, CellCoord, Command, Event, Gold, Health, NavigationFieldView,
+    PlayMode, TileCoord, TowerKind,
 };
 use maze_defence_system_movement::Movement;
 use maze_defence_world::{self as world, query, World};
@@ -22,22 +22,22 @@ fn deterministic_replay_produces_expected_snapshot() {
 
 #[test]
 fn dense_corridor_replay_is_stable() {
-    assert_stable_replay(dense_corridor_commands(), 0x85c0_a69b_5ca3_13c3);
+    assert_stable_replay(dense_corridor_commands(), 0xad92_2374_c397_bf39);
 }
 
 #[test]
 fn side_hallway_diversion_replay_is_stable() {
-    assert_stable_replay(side_hallway_diversion_commands(), 0x0629_bd96_1665_883c);
+    assert_stable_replay(side_hallway_diversion_commands(), 0xf6c4_6052_8b02_a0fd);
 }
 
 #[test]
 fn stall_regression_replay_is_stable() {
-    assert_stable_replay(stall_regression_commands(), 0x32cd_77df_3956_77d7);
+    assert_stable_replay(stall_regression_commands(), 0x68ed_744e_b424_8e46);
 }
 
 #[test]
 fn mixed_cadence_replay_is_stable() {
-    assert_stable_replay(mixed_cadence_commands(), 0x77a5_61d9_835e_96e7);
+    assert_stable_replay(mixed_cadence_commands(), 0xa242_aee5_76b8_4d4);
 }
 
 fn assert_stable_replay(commands: Vec<Command>, expected: u64) {
@@ -528,6 +528,9 @@ enum EventRecord {
     GoldChanged {
         amount: Gold,
     },
+    RoundLost {
+        bug: BugId,
+    },
 }
 
 impl From<&Event> for EventRecord {
@@ -567,6 +570,7 @@ impl From<&Event> for EventRecord {
                 region: *region,
             },
             Event::GoldChanged { amount } => Self::GoldChanged { amount: *amount },
+            Event::RoundLost { bug } => Self::RoundLost { bug: *bug },
             Event::TowerRemoved { .. }
             | Event::TowerPlacementRejected { .. }
             | Event::TowerRemovalRejected { .. }

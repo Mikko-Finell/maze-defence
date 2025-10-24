@@ -372,6 +372,11 @@ pub enum Event {
         /// Cell that triggered the exit when the bug entered it.
         cell: CellCoord,
     },
+    /// Announces that the current round ended in defeat.
+    RoundLost {
+        /// Identifier of the bug that caused the loss by reaching the exit.
+        bug: BugId,
+    },
     /// Announces that the simulation entered a new play mode.
     PlayModeChanged {
         /// Mode that became active after processing commands.

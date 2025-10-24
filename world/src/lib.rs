@@ -145,6 +145,26 @@ impl World {
         self.next_bug_id = 0;
     }
 
+    fn transition_to_play_mode(&mut self, mode: PlayMode, out_events: &mut Vec<Event>) -> bool {
+        if self.play_mode == mode {
+            return false;
+        }
+
+        self.play_mode = mode;
+
+        match mode {
+            PlayMode::Attack => {
+                self.rebuild_navigation_field_if_dirty();
+            }
+            PlayMode::Builder => {
+                self.clear_bugs();
+            }
+        }
+
+        out_events.push(Event::PlayModeChanged { mode });
+        true
+    }
+
     fn update_gold(&mut self, amount: Gold, out_events: &mut Vec<Event>) {
         if self.gold == amount {
             return;
@@ -335,12 +355,19 @@ impl World {
             }
         }
 
+        let triggering_bug = exited.first().map(|(bug_id, _)| *bug_id);
+
         for (bug_id, cell) in exited {
             self.occupancy.vacate(cell);
             if let Some(position) = self.bug_index(bug_id) {
                 self.remove_bug_at_index(position);
             }
             out_events.push(Event::BugExited { bug_id, cell });
+        }
+
+        if let Some(bug) = triggering_bug {
+            let _ = self.transition_to_play_mode(PlayMode::Builder, out_events);
+            out_events.push(Event::RoundLost { bug });
         }
     }
 
@@ -468,22 +495,7 @@ pub fn apply(world: &mut World, command: Command, out_events: &mut Vec<Event>) {
             world.process_exit_cells(out_events);
         }
         Command::SetPlayMode { mode } => {
-            if world.play_mode == mode {
-                return;
-            }
-
-            world.play_mode = mode;
-
-            match mode {
-                PlayMode::Attack => {
-                    world.rebuild_navigation_field_if_dirty();
-                }
-                PlayMode::Builder => {
-                    world.clear_bugs();
-                }
-            }
-
-            out_events.push(Event::PlayModeChanged { mode });
+            let _ = world.transition_to_play_mode(mode, out_events);
         }
         Command::SpawnBug {
             spawner,
@@ -4998,29 +5010,54 @@ mod tests {
             .iter()
             .position(|event| matches!(event, Event::BugExited { .. }))
             .expect("expected bug exit event");
+        let builder_index = final_events
+            .iter()
+            .position(|event| {
+                matches!(
+                    event,
+                    Event::PlayModeChanged {
+                        mode: PlayMode::Builder,
+                    }
+                )
+            })
+            .expect("expected builder play mode event");
+        let round_lost_index = final_events
+            .iter()
+            .position(|event| matches!(event, Event::RoundLost { .. }))
+            .expect("expected round lost event");
         assert!(
             advanced_index < exit_index,
             "bug must advance before exiting"
         );
+        assert!(exit_index < builder_index, "play mode change follows exit");
+        assert!(
+            builder_index < round_lost_index,
+            "round loss announced last"
+        );
 
-        let mut advanced_cell = None;
-        let mut exited_cell = None;
-        for event in final_events {
+        let mut advanced_cell: Option<CellCoord> = None;
+        let mut exited_cell: Option<CellCoord> = None;
+        let mut lost_bug = None;
+        for event in &final_events {
             match event {
                 Event::BugAdvanced {
                     bug_id: event_id,
                     to,
                     ..
                 } => {
-                    assert_eq!(event_id, bug_id, "unexpected bug advanced");
-                    advanced_cell = Some(to);
+                    assert_eq!(*event_id, bug_id, "unexpected bug advanced");
+                    advanced_cell = Some(*to);
                 }
                 Event::BugExited {
                     bug_id: event_id,
                     cell,
                 } => {
-                    assert_eq!(event_id, bug_id, "unexpected bug exit");
-                    exited_cell = Some(cell);
+                    assert_eq!(*event_id, bug_id, "unexpected bug exit");
+                    exited_cell = Some(*cell);
+                }
+                Event::RoundLost { bug } => {
+                    assert!(lost_bug.is_none(), "duplicate round loss event");
+                    lost_bug = Some(*bug);
                 }
                 _ => {}
             }
@@ -5028,9 +5065,11 @@ mod tests {
 
         assert_eq!(advanced_cell, Some(exit_cell));
         assert_eq!(exited_cell, Some(exit_cell));
+        assert_eq!(lost_bug, Some(bug_id));
         assert!(query::bug_view(&world).iter().all(|bug| bug.id != bug_id));
         let occupancy = query::occupancy_view(&world);
         assert!(occupancy.is_free(exit_cell));
+        assert_eq!(query::play_mode(&world), PlayMode::Builder);
     }
 
     #[test]
@@ -5220,7 +5259,7 @@ mod tests {
         assert_eq!(first, second, "combat replay diverged between runs");
 
         let fingerprint = first.fingerprint();
-        let expected = 0x2b8a_feac_0266_d4aa;
+        let expected = 0xec52_f446_c2fb_ff32;
         assert_eq!(
             fingerprint, expected,
             "combat replay fingerprint mismatch: {fingerprint:#x}"
@@ -5575,6 +5614,9 @@ mod tests {
             kind: TowerKind,
             region: CellRect,
         },
+        RoundLost {
+            bug: BugId,
+        },
         BugSpawned {
             bug: BugId,
             cell: CellCoord,
@@ -5627,6 +5669,7 @@ mod tests {
                     kind,
                     region,
                 },
+                Event::RoundLost { bug } => Self::RoundLost { bug },
                 Event::BugSpawned {
                     bug_id,
                     cell,
@@ -5843,6 +5886,9 @@ mod tests {
             tower: TowerId,
             reason: RemovalError,
         },
+        RoundLost {
+            bug: BugId,
+        },
     }
 
     impl From<Event> for EventRecord {
@@ -5871,6 +5917,7 @@ mod tests {
                 Event::TowerRemovalRejected { tower, reason } => {
                     Self::TowerRemovalRejected { tower, reason }
                 }
+                Event::RoundLost { bug } => Self::RoundLost { bug },
                 other => panic!("unexpected event emitted during tower replay: {other:?}"),
             }
         }
