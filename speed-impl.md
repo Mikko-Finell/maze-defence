@@ -53,7 +53,7 @@ other movement logic.
 world tests cover accumulation/consumption, and movement rejection paths remain
 unchanged.
 
-# 3) [TODO] Snapshot & query surfaces (`world::snapshot` + `world::query`)
+# 3) [DONE] Snapshot & query surfaces (`world::snapshot` + `world::query`)
 
 **Goal:** Propagate cadence state to observers while keeping systems on the
 `ready_for_step` contract.
@@ -75,7 +75,7 @@ unchanged.
 additional branching, and snapshot tests validate cadence state and the derived
 flag.
 
-# 4) [TODO] Spawn pipelines & adapter wiring (`systems/spawning` + adapters)
+# 4) [DONE] Spawn pipelines & adapter wiring (`systems/spawning` + adapters)
 
 **Goal:** Ensure every command producer supplies explicit cadence data and
 scenario helpers stay ergonomic.
@@ -97,6 +97,10 @@ scenario helpers stay ergonomic.
 **Exit checks:** All spawn command emitters compile with explicit cadence,
 scenario fixtures cover both shared and custom cadence values, and replay inputs
 round-trip without missing data.
+
+Completion notes: spawning now caches resolved `step_ms`, adapter helpers update
+the cadence whenever builder inputs reconfigure bug speed, and tests cover both
+the constant and reconfigured flows.
 
 # 5) [TODO] Determinism harness & documentation polish (tests + docs)
 

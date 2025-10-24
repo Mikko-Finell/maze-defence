@@ -541,7 +541,11 @@ impl Simulation {
             world,
             builder: TowerBuilder::default(),
             movement: Movement::default(),
-            spawning: Spawning::new(SpawningConfig::new(bug_spawn_interval, SPAWN_RNG_SEED)),
+            spawning: Spawning::new(SpawningConfig::new(
+                bug_spawn_interval,
+                bug_step,
+                SPAWN_RNG_SEED,
+            )),
             tower_targeting: TowerTargeting::new(),
             tower_combat: TowerCombat::new(),
             tower_cooldowns: TowerCooldownView::default(),
@@ -712,11 +716,7 @@ impl Simulation {
 
         self.advance_bug_motions(dt);
         if !dt.is_zero() {
-            world::apply(
-                &mut self.world,
-                Command::Tick { dt },
-                &mut self.pending_events,
-            );
+            self.apply_command(Command::Tick { dt }, &mut self.pending_events);
         }
 
         let events_profile = self.process_pending_events(builder_preview, builder_input);
@@ -750,6 +750,24 @@ impl Simulation {
         let step_duration = self.bug_step_duration;
         for motion in self.bug_motions.values_mut() {
             motion.advance(dt, step_duration);
+        }
+    }
+
+    fn apply_command(&mut self, command: Command, out_events: &mut Vec<Event>) {
+        match command {
+            Command::ConfigureBugStep { step_duration } => {
+                self.bug_step_duration = step_duration;
+                self.bug_motions.clear();
+                self.spawning.set_step_duration(step_duration);
+                world::apply(
+                    &mut self.world,
+                    Command::ConfigureBugStep { step_duration },
+                    out_events,
+                );
+            }
+            other => {
+                world::apply(&mut self.world, other, out_events);
+            }
         }
     }
 
@@ -974,7 +992,7 @@ impl Simulation {
             self.spawning
                 .handle(&events, play_mode, &spawners, &mut self.scratch_commands);
             for command in self.scratch_commands.drain(..) {
-                world::apply(&mut self.world, command, &mut next_events);
+                self.apply_command(command, &mut next_events);
             }
 
             self.scratch_commands.clear();
@@ -998,7 +1016,7 @@ impl Simulation {
                 profile.add_pathfinding(pathfinding_start.elapsed());
             }
             for command in self.scratch_commands.drain(..) {
-                world::apply(&mut self.world, command, &mut next_events);
+                self.apply_command(command, &mut next_events);
             }
 
             self.refresh_tower_targets(play_mode);
@@ -1017,7 +1035,7 @@ impl Simulation {
             builder_preview = None;
             builder_input = TowerBuilderInput::default();
             for command in self.scratch_commands.drain(..) {
-                world::apply(&mut self.world, command, &mut next_events);
+                self.apply_command(command, &mut next_events);
             }
 
             events.clear();
@@ -1396,11 +1414,7 @@ impl Simulation {
         }
 
         for command in self.queued_commands.drain(..) {
-            if let Command::ConfigureBugStep { step_duration } = &command {
-                self.bug_step_duration = *step_duration;
-                self.bug_motions.clear();
-            }
-            world::apply(&mut self.world, command, &mut self.pending_events);
+            self.apply_command(command, &mut self.pending_events);
         }
     }
 }
