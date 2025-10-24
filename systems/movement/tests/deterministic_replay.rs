@@ -12,6 +12,8 @@ use maze_defence_system_movement::Movement;
 use maze_defence_world::{self as world, query, World};
 
 const DEFAULT_STEP_MS: u32 = 250;
+const FAST_STEP_MS: u32 = 150;
+const SLOW_STEP_MS: u32 = 450;
 
 #[test]
 fn deterministic_replay_produces_expected_snapshot() {
@@ -31,6 +33,11 @@ fn side_hallway_diversion_replay_is_stable() {
 #[test]
 fn stall_regression_replay_is_stable() {
     assert_stable_replay(stall_regression_commands(), 0x6ae9_e252_97d5_406b);
+}
+
+#[test]
+fn mixed_cadence_replay_is_stable() {
+    assert_stable_replay(mixed_cadence_commands(), 0xcbc1_8da1_a21f_b597);
 }
 
 fn assert_stable_replay(commands: Vec<Command>, expected: u64) {
@@ -278,6 +285,55 @@ fn stall_regression_commands() -> Vec<Command> {
     for _ in 0..18 {
         commands.push(Command::Tick {
             dt: Duration::from_millis(250),
+        });
+    }
+
+    commands
+}
+
+fn mixed_cadence_commands() -> Vec<Command> {
+    let mut commands = vec![
+        Command::ConfigureTileGrid {
+            columns: TileCoord::new(1),
+            rows: TileCoord::new(8),
+            tile_length: 1.0,
+            cells_per_tile: 1,
+        },
+        Command::SpawnBug {
+            spawner: CellCoord::new(0, 0),
+            color: BugColor::from_rgb(0xf2, 0x69, 0x35),
+            health: Health::new(4),
+            step_ms: FAST_STEP_MS,
+        },
+        Command::Tick {
+            dt: Duration::from_millis(100),
+        },
+        Command::Tick {
+            dt: Duration::from_millis(100),
+        },
+        Command::Tick {
+            dt: Duration::from_millis(100),
+        },
+        Command::SpawnBug {
+            spawner: CellCoord::new(0, 0),
+            color: BugColor::from_rgb(0x2f, 0x70, 0xc5),
+            health: Health::new(5),
+            step_ms: SLOW_STEP_MS,
+        },
+    ];
+
+    for (index, dt) in [100, 150, 200, 100, 300, 100, 250, 100, 150, 200, 100, 300]
+        .into_iter()
+        .enumerate()
+    {
+        if index % 3 == 0 {
+            commands.push(Command::Tick {
+                dt: Duration::from_millis(50),
+            });
+        }
+
+        commands.push(Command::Tick {
+            dt: Duration::from_millis(dt),
         });
     }
 

@@ -329,7 +329,7 @@ fn is_missing_optional_asset(error: &anyhow::Error) -> bool {
     error.chain().any(|cause| {
         cause
             .downcast_ref::<std::io::Error>()
-            .map_or(false, |io| io.kind() == ErrorKind::NotFound)
+            .is_some_and(|io| io.kind() == ErrorKind::NotFound)
     })
 }
 

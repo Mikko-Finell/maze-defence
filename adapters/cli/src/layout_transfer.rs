@@ -332,5 +332,4 @@ mod tests {
         let decoded = TowerLayoutSnapshot::decode(&encoded).expect("snapshot decodes");
         assert_eq!(snapshot, decoded);
     }
-
 }

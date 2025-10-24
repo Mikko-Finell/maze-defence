@@ -102,7 +102,7 @@ Completion notes: spawning now caches resolved `step_ms`, adapter helpers update
 the cadence whenever builder inputs reconfigure bug speed, and tests cover both
 the constant and reconfigured flows.
 
-# 5) [TODO] Determinism harness & documentation polish (tests + docs)
+# 5) [DONE] Determinism harness & documentation polish (tests + docs)
 
 **Goal:** Lock cadence behaviour into the replay suite and document contributor
 guardrails.

@@ -8,6 +8,14 @@ neighbour choices using congestion sampling, and fall back to a bounded detour
 BFS when a local move cannot make progress.
 
 ## Planner building blocks
+### Cadence readiness
+Bug cadence is resolved entirely inside the world: every spawn command carries a
+`step_ms` cadence, and ticks accumulate elapsed time into each bug’s
+`accum_ms` bucket without ever exceeding the cadence. Systems never inspect the
+raw values; they rely solely on the derived `ready_for_step` flag surfaced via
+`BugSnapshot` and `BugView`. This keeps movement deterministic and makes mixed
+cadence crowds behave predictably even when fast bugs queue behind slow ones.
+
 ### Static navigation field
 `world` constructs a Manhattan-distance field that treats tower footprints and
 walls as hard blockers while keeping the virtual exit row at distance zero. The
@@ -44,6 +52,9 @@ covers the dense scenarios called out in the spec:
 - **Original stall regression** – reproduces the historic failure where a bug
   refused to advance despite an open neighbour because another bug sat further
   down the corridor.【F:systems/movement/tests/deterministic_replay.rs†L151-L190】
+- **Mixed cadence queue** – spawns fast and slow bugs so the harness exercises
+  the cadence accumulator clamp and ensures `ready_for_step` stays authoritative
+  for movement decisions.【F:systems/movement/tests/deterministic_replay.rs†L17-L273】
 
 Run the harness with:
 

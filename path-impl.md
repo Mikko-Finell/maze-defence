@@ -7,6 +7,11 @@ own, keeps determinism guards green, and layers behaviour from contracts →
 world authority → pure systems → harness coverage. Because no work has landed
 yet, every stage below is marked `[TODO]`.
 
+Cadence handling now lives alongside these pathing stages. Review
+`speed-spec.md` before altering movement rules so planner tweaks continue to use
+the `ready_for_step` flag exposed through `BugView` rather than introducing new
+cadence branches.
+
 # 1) [DONE] Navigation contracts & tuning constants (`core`)
 
 **Goal:** Establish the shared vocabulary and fixed tuning knobs the rest of the
