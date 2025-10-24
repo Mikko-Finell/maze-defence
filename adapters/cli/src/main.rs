@@ -422,8 +422,6 @@ struct Simulation {
     auto_spawn_enabled: bool,
     #[cfg(test)]
     last_frame_events: Vec<Event>,
-    #[cfg(test)]
-    last_wave_plan: Option<AttackPlan>,
 }
 
 #[derive(Debug)]
@@ -547,6 +545,7 @@ impl ScheduledSpawn {
 
 #[derive(Clone, Debug)]
 struct WaveState {
+    plan: AttackPlan,
     scheduled: Vec<ScheduledSpawn>,
     next_spawn: usize,
     elapsed: Duration,
@@ -569,6 +568,7 @@ impl WaveState {
         }
         scheduled.sort_by_key(|spawn| spawn.at);
         Self {
+            plan,
             scheduled,
             next_spawn: 0,
             elapsed: Duration::ZERO,
@@ -593,6 +593,11 @@ impl WaveState {
 
     fn finished(&self) -> bool {
         self.next_spawn >= self.scheduled.len()
+    }
+
+    #[cfg(test)]
+    fn plan(&self) -> &AttackPlan {
+        &self.plan
     }
 }
 
@@ -665,8 +670,6 @@ impl Simulation {
             auto_spawn_enabled: false,
             #[cfg(test)]
             last_frame_events: Vec::new(),
-            #[cfg(test)]
-            last_wave_plan: None,
         };
         let _ = simulation.process_pending_events(None, TowerBuilderInput::default());
         simulation.builder_preview = simulation.compute_builder_preview();
@@ -676,6 +679,11 @@ impl Simulation {
 
     fn world(&self) -> &World {
         &self.world
+    }
+
+    #[cfg(test)]
+    fn active_wave_plan(&self) -> Option<&AttackPlan> {
+        self.active_wave.as_ref().map(|wave| wave.plan())
     }
 
     fn handle_input(&mut self, input: FrameInput) {
@@ -714,9 +722,6 @@ impl Simulation {
             return;
         }
 
-        #[cfg(test)]
-        let plan_for_test = plan.clone();
-
         if query::play_mode(&self.world) != PlayMode::Attack {
             self.queued_commands.push(Command::SetPlayMode {
                 mode: PlayMode::Attack,
@@ -724,11 +729,6 @@ impl Simulation {
         }
 
         self.active_wave = Some(WaveState::new(plan));
-
-        #[cfg(test)]
-        {
-            self.last_wave_plan = Some(plan_for_test);
-        }
     }
 
     fn basic_attack_plan(&self, spawner: CellCoord) -> AttackPlan {
@@ -1140,6 +1140,13 @@ impl Simulation {
             self.handle_bug_motion_events(&events);
             self.record_tower_feedback(&events);
             self.update_gold_from_events(&events);
+
+            if events
+                .iter()
+                .any(|event| matches!(event, Event::RoundLost { .. }))
+            {
+                self.active_wave = None;
+            }
 
             let play_mode = query::play_mode(&self.world);
             let spawners = query::bug_spawners(&self.world);
@@ -1607,10 +1614,6 @@ impl Simulation {
     }
 
     #[cfg(test)]
-    fn last_wave_plan(&self) -> Option<&AttackPlan> {
-        self.last_wave_plan.as_ref()
-    }
-
     #[cfg(test)]
     fn tower_feedback(&self) -> Option<TowerInteractionFeedback> {
         self.tower_feedback
@@ -2241,7 +2244,7 @@ mod tests {
 
         assert_eq!(query::play_mode(simulation.world()), PlayMode::Attack);
         let plan = simulation
-            .last_wave_plan()
+            .active_wave_plan()
             .expect("wave plan should be recorded");
         assert_eq!(plan.bursts().len(), 1);
         let burst = &plan.bursts()[0];
@@ -2285,6 +2288,28 @@ mod tests {
         assert!(
             spawned as u32 <= BASIC_WAVE_BUGS,
             "wave should not spawn more bugs than planned"
+        );
+    }
+
+    #[test]
+    fn round_loss_clears_active_wave_state() {
+        let mut simulation = new_simulation();
+        let spawner = query::bug_spawners(simulation.world())
+            .into_iter()
+            .next()
+            .expect("expected at least one bug spawner");
+        let plan = simulation.basic_attack_plan(spawner);
+        simulation.active_wave = Some(WaveState::new(plan));
+        assert!(simulation.active_wave.is_some(), "wave should be active");
+
+        simulation
+            .pending_events
+            .push(Event::RoundLost { bug: BugId::new(7) });
+        let _ = simulation.process_pending_events(None, TowerBuilderInput::default());
+
+        assert!(
+            simulation.active_wave.is_none(),
+            "round loss should clear wave"
         );
     }
 
