@@ -112,10 +112,12 @@ impl WaveCompletion {
         }
     }
 
+    #[cfg(test)]
     const fn pressure(self) -> Pressure {
         self.pressure
     }
 
+    #[cfg(test)]
     const fn species_table_version(self) -> SpeciesTableVersion {
         self.species_table_version
     }
@@ -1814,6 +1816,7 @@ impl Simulation {
         self.wave_manager.is_active()
     }
 
+    #[cfg(test)]
     fn last_wave_completion(&self) -> Option<WaveCompletion> {
         self.last_wave_completion
     }
