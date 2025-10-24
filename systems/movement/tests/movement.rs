@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::{convert::TryFrom, time::Duration};
 
 use maze_defence_core::{
     BugColor, BugId, BugView, CellCoord, Command, Direction, Event, Health, OccupancyView,
@@ -27,6 +27,7 @@ fn emits_step_commands_toward_target() {
             spawner: CellCoord::new(0, 0),
             color: BugColor::from_rgb(0x2f, 0x95, 0x32),
             health: Health::new(3),
+            step_ms: DEFAULT_STEP_MS,
         },
         &mut events,
     );
@@ -115,6 +116,7 @@ fn bugs_progress_despite_distant_blockers() {
             spawner: CellCoord::new(0, 0),
             color: BugColor::from_rgb(0x2f, 0x95, 0x32),
             health: Health::new(3),
+            step_ms: DEFAULT_STEP_MS,
         },
     );
 
@@ -129,6 +131,7 @@ fn bugs_progress_despite_distant_blockers() {
             spawner: CellCoord::new(0, 0),
             color: BugColor::from_rgb(0x2f, 0x95, 0x32),
             health: Health::new(3),
+            step_ms: DEFAULT_STEP_MS,
         },
     );
 
@@ -195,6 +198,7 @@ fn step_commands_target_free_cells() {
             spawner: CellCoord::new(0, 0),
             color: BugColor::from_rgb(0x2f, 0x95, 0x32),
             health: Health::new(3),
+            step_ms: DEFAULT_STEP_MS,
         },
         &mut events,
     );
@@ -266,6 +270,7 @@ fn emits_step_commands_in_bug_id_order() {
             spawner: CellCoord::new(0, 0),
             color: BugColor::from_rgb(0x2f, 0x95, 0x32),
             health: Health::new(3),
+            step_ms: DEFAULT_STEP_MS,
         },
         &mut events,
     );
@@ -275,6 +280,7 @@ fn emits_step_commands_in_bug_id_order() {
             spawner: CellCoord::new(4, 0),
             color: BugColor::from_rgb(0x2f, 0x95, 0x32),
             health: Health::new(3),
+            step_ms: DEFAULT_STEP_MS,
         },
         &mut events,
     );
@@ -342,6 +348,7 @@ fn replans_after_failed_step() {
             spawner: CellCoord::new(0, 0),
             color: BugColor::from_rgb(0x2f, 0x95, 0x32),
             health: Health::new(3),
+            step_ms: DEFAULT_STEP_MS,
         },
         &mut events,
     );
@@ -477,6 +484,7 @@ fn bugs_respect_tower_blockers() {
             spawner: spawn,
             color: BugColor::from_rgb(0x2f, 0x95, 0x32),
             health: Health::new(3),
+            step_ms: DEFAULT_STEP_MS,
         },
         &mut spawn_events,
     );
@@ -632,6 +640,7 @@ fn blocked_bugs_do_not_accumulate_extra_step_time() {
             spawner: CellCoord::new(0, 0),
             color: BugColor::from_rgb(0x2f, 0x95, 0x32),
             health: Health::new(3),
+            step_ms: DEFAULT_STEP_MS,
         },
         &mut events,
     );
@@ -646,6 +655,7 @@ fn blocked_bugs_do_not_accumulate_extra_step_time() {
         .expect("bug must be present");
 
     let step_quantum = Duration::from_millis(250);
+    let step_ms = u32::try_from(step_quantum.as_millis()).expect("step quantum fits u32");
 
     for _ in 0..3 {
         let _ = drive_tick(&mut world, &mut movement, step_quantum, bug_id, false);
@@ -655,7 +665,7 @@ fn blocked_bugs_do_not_accumulate_extra_step_time() {
             .find(|bug| bug.id == bug_id)
             .expect("bug should remain while blocked");
         assert_eq!(
-            bug_snapshot.accumulated, step_quantum,
+            bug_snapshot.accum_ms, step_ms,
             "blocked bug must saturate the accumulator",
         );
         assert!(
@@ -677,7 +687,7 @@ fn blocked_bugs_do_not_accumulate_extra_step_time() {
         .find(|bug| bug.id == bug_id)
         .expect("bug should remain after advancing");
     assert!(
-        bug_snapshot.accumulated < step_quantum,
+        bug_snapshot.accum_ms < step_ms,
         "bug must not retain more than one quantum",
     );
     assert!(
@@ -734,6 +744,7 @@ fn bug_reaches_exit_when_central_tower_blocks_direct_route() {
             spawner: CellCoord::new(3, 0),
             color: BugColor::from_rgb(0x2f, 0x95, 0x32),
             health: Health::new(1000),
+            step_ms: DEFAULT_STEP_MS,
         },
     );
 
@@ -828,6 +839,7 @@ fn bug_reaches_exit_when_two_towers_force_wide_detour() {
             spawner: CellCoord::new(4, 0),
             color: BugColor::from_rgb(0x2f, 0x95, 0x32),
             health: Health::new(1000),
+            step_ms: DEFAULT_STEP_MS,
         },
     );
 
@@ -925,6 +937,7 @@ fn corner_spawn_bug_reaches_exit_through_chicane() {
             spawner: CellCoord::new(1, 0),
             color: BugColor::from_rgb(0x2f, 0x95, 0x32),
             health: Health::new(1000),
+            step_ms: DEFAULT_STEP_MS,
         },
     );
 
@@ -1094,3 +1107,4 @@ fn select_blocked_bug(
 
     None
 }
+const DEFAULT_STEP_MS: u32 = 250;

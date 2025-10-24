@@ -193,6 +193,8 @@ pub enum Command {
         color: BugColor,
         /// Health assigned to the spawned bug.
         health: Health,
+        /// Resolved cadence in milliseconds required between steps.
+        step_ms: u32,
     },
     /// Requests that a tower fire a projectile at a targeted bug.
     FireProjectile {
@@ -794,10 +796,49 @@ pub struct BugSnapshot {
     pub max_health: Health,
     /// Remaining health stored for the bug.
     pub health: Health,
+    /// Resolved cadence in milliseconds that governs when the bug may step.
+    ///
+    /// The cadence is always an integer duration measured in milliseconds.
+    /// Systems never inspect provenance—every bug exposes the exact cadence it
+    /// must satisfy before advancing.
+    pub step_ms: u32,
+    /// Accumulated cadence progress measured in milliseconds.
+    ///
+    /// The accumulator is clamped by the world so it never exceeds
+    /// [`BugSnapshot::step_ms`]. World tick handlers advance this value with
+    /// pure integer math and carry any remainder after a movement step.
+    pub accum_ms: u32,
     /// Indicates whether the bug accrued enough time to advance.
+    ///
+    /// The flag is derived from the cadence fields inside the world using the
+    /// relation `accum_ms >= step_ms` and is the only gate movement systems
+    /// consult when planning steps.
+    ///
+    /// ```
+    /// use maze_defence_core::{BugColor, BugId, BugSnapshot, CellCoord, Health};
+    ///
+    /// let step_ms = 400;
+    /// let mut snapshot = BugSnapshot {
+    ///     id: BugId::new(7),
+    ///     cell: CellCoord::new(0, 0),
+    ///     color: BugColor::from_rgb(0xff, 0, 0),
+    ///     max_health: Health::new(3),
+    ///     health: Health::new(3),
+    ///     step_ms,
+    ///     accum_ms: 0,
+    ///     ready_for_step: false,
+    /// };
+    ///
+    /// snapshot.accum_ms = snapshot.accum_ms.saturating_add(200);
+    /// snapshot.ready_for_step = snapshot.accum_ms >= snapshot.step_ms;
+    /// assert!(!snapshot.ready_for_step);
+    ///
+    /// snapshot.accum_ms = (snapshot.accum_ms + 200).min(snapshot.step_ms);
+    /// snapshot.ready_for_step = snapshot.accum_ms >= snapshot.step_ms;
+    /// assert!(snapshot.ready_for_step);
+    /// assert_eq!(snapshot.accum_ms, snapshot.step_ms);
+    /// ```
     pub ready_for_step: bool,
-    /// Duration accumulated toward the next step.
-    pub accumulated: Duration,
 }
 
 /// Read-only snapshot describing all bugs within the maze.

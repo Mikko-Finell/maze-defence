@@ -213,8 +213,6 @@ mod tests {
         BugId, BugSnapshot, BugView, CellCoord, CellRect, CellRectSize, Health, PlayMode, TowerId,
         TowerKind, TowerSnapshot, TowerView,
     };
-    use std::time::Duration;
-
     fn tower_view(snapshots: Vec<TowerSnapshot>) -> TowerView {
         TowerView::from_snapshots(snapshots)
     }
@@ -241,8 +239,9 @@ mod tests {
             color: maze_defence_core::BugColor::from_rgb(255, 0, 0),
             max_health: Health::new(3),
             health: Health::new(3),
+            step_ms: 250,
+            accum_ms: 0,
             ready_for_step: true,
-            accumulated: Duration::ZERO,
         }
     }
 

@@ -13,6 +13,7 @@ mod layout_transfer;
 
 use std::{
     collections::HashMap,
+    convert::TryFrom,
     f32::consts::{FRAC_PI_2, PI},
     fmt,
     str::FromStr,
@@ -1350,6 +1351,10 @@ impl Simulation {
         self.builder_preview
     }
 
+    fn bug_step_ms(&self) -> u32 {
+        u32::try_from(self.bug_step_duration.as_millis()).unwrap_or(u32::MAX)
+    }
+
     #[cfg(test)]
     fn bug_step_duration(&self) -> Duration {
         self.bug_step_duration
@@ -1557,6 +1562,7 @@ mod tests {
             spawner,
             color: BugColor::from_rgb(255, 0, 0),
             health: Health::new(5),
+            step_ms: simulation.bug_step_ms(),
         });
         simulation.advance(Duration::ZERO);
 
@@ -1621,6 +1627,7 @@ mod tests {
             spawner,
             color: BugColor::from_rgb(64, 96, 128),
             health: Health::new(3),
+            step_ms: simulation.bug_step_ms(),
         });
         simulation.advance(Duration::ZERO);
 
@@ -1665,6 +1672,7 @@ mod tests {
             spawner,
             color: BugColor::from_rgb(200, 100, 50),
             health: Health::new(3),
+            step_ms: simulation.bug_step_ms(),
         });
         simulation.advance(Duration::ZERO);
 
@@ -1741,6 +1749,7 @@ mod tests {
             spawner,
             color: BugColor::from_rgb(128, 64, 32),
             health: Health::new(3),
+            step_ms: simulation.bug_step_ms(),
         });
         simulation.advance(Duration::ZERO);
 
@@ -2244,6 +2253,7 @@ mod tests {
             spawner,
             color: BugColor::from_rgb(255, 0, 0),
             health: Health::new(3),
+            step_ms: simulation.bug_step_ms(),
         });
         simulation.advance(Duration::ZERO);
 
@@ -2296,6 +2306,7 @@ mod tests {
             spawner,
             color: BugColor::from_rgb(255, 0, 0),
             health: Health::new(3),
+            step_ms: simulation.bug_step_ms(),
         });
         simulation.advance(Duration::ZERO);
 
@@ -2364,11 +2375,13 @@ mod tests {
             spawner: first_spawner,
             color: BugColor::from_rgb(255, 0, 0),
             health: Health::new(3),
+            step_ms: simulation.bug_step_ms(),
         });
         simulation.queued_commands.push(Command::SpawnBug {
             spawner: second_spawner,
             color: BugColor::from_rgb(0, 255, 0),
             health: Health::new(3),
+            step_ms: simulation.bug_step_ms(),
         });
         simulation.advance(Duration::ZERO);
 
@@ -2433,6 +2446,7 @@ mod tests {
             spawner,
             color: BugColor::from_rgb(200, 120, 80),
             health: Health::new(3),
+            step_ms: simulation.bug_step_ms(),
         });
         simulation.advance(Duration::ZERO);
 
@@ -2475,6 +2489,7 @@ mod tests {
             spawner,
             color: BugColor::from_rgb(210, 160, 90),
             health: Health::new(3),
+            step_ms: simulation.bug_step_ms(),
         });
         simulation.advance(Duration::ZERO);
 
@@ -2643,6 +2658,7 @@ mod tests {
             spawner,
             color: BugColor::from_rgb(160, 120, 80),
             health: Health::new(3),
+            step_ms: simulation.bug_step_ms(),
         });
         simulation.advance(Duration::ZERO);
 
