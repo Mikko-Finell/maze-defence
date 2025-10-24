@@ -12,8 +12,8 @@
 use anyhow::Result as AnyResult;
 use glam::Vec2;
 use maze_defence_core::{
-    BugId, CellCoord, CellRect, PlacementError, PlayMode, ProjectileId, RemovalError, TowerId,
-    TowerKind,
+    BugId, CellCoord, CellRect, Gold, PlacementError, PlayMode, ProjectileId, RemovalError,
+    TowerId, TowerKind,
 };
 use std::{error::Error, fmt, time::Duration};
 
@@ -850,6 +850,26 @@ impl ControlPanelView {
     }
 }
 
+/// Snapshot of the player's gold resource for UI presentation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GoldPresentation {
+    amount: Gold,
+}
+
+impl GoldPresentation {
+    /// Creates a new gold descriptor for presentation purposes.
+    #[must_use]
+    pub const fn new(amount: Gold) -> Self {
+        Self { amount }
+    }
+
+    /// Returns the amount of gold carried by this descriptor.
+    #[must_use]
+    pub const fn amount(&self) -> Gold {
+        self.amount
+    }
+}
+
 /// Scene description combining the tile grid, perimeter wall colour and inhabitants.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Scene {
@@ -881,6 +901,8 @@ pub struct Scene {
     pub tower_feedback: Option<TowerInteractionFeedback>,
     /// Optional descriptor for the UI control panel.
     pub control_panel: Option<ControlPanelView>,
+    /// Current gold balance presented to the player.
+    pub gold: Option<GoldPresentation>,
 }
 
 impl Scene {
@@ -902,6 +924,7 @@ impl Scene {
         active_tower_footprint_tiles: Option<Vec2>,
         tower_feedback: Option<TowerInteractionFeedback>,
         control_panel: Option<ControlPanelView>,
+        gold: Option<GoldPresentation>,
     ) -> Self {
         Self {
             tile_grid,
@@ -918,6 +941,7 @@ impl Scene {
             active_tower_footprint_tiles,
             tower_feedback,
             control_panel,
+            gold,
         }
     }
 
@@ -1380,6 +1404,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
 
         assert_eq!(scene.tile_grid, tile_grid);
@@ -1396,6 +1421,7 @@ mod tests {
         assert!(scene.tower_feedback.is_none());
         assert!(scene.ground.is_none());
         assert!(scene.control_panel.is_none());
+        assert!(scene.gold.is_none());
     }
 
     #[test]
@@ -1450,6 +1476,7 @@ mod tests {
                 reason: PlacementError::Occupied,
             }),
             None,
+            None,
         );
 
         assert_eq!(scene.play_mode, PlayMode::Builder);
@@ -1472,6 +1499,7 @@ mod tests {
         assert!(scene.control_panel.is_none());
         assert!(scene.projectiles.is_empty());
         assert!(scene.ground.is_none());
+        assert!(scene.gold.is_none());
     }
 
     #[test]
@@ -1496,6 +1524,7 @@ mod tests {
             Vec::new(),
             None,
             PlayMode::Attack,
+            None,
             None,
             None,
             None,

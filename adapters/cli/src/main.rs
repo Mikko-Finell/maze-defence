@@ -24,14 +24,14 @@ use clap::{Parser, ValueEnum};
 use glam::Vec2;
 use layout_transfer::{TowerLayoutSnapshot, TowerLayoutTower};
 use maze_defence_core::{
-    BugId, BugView, CellCoord, CellPointHalf, CellRect, CellRectSize, Command, Event,
+    BugId, BugView, CellCoord, CellPointHalf, CellRect, CellRectSize, Command, Event, Gold,
     PlacementError, PlayMode, ProjectileSnapshot, RemovalError, TileCoord, TowerCooldownView,
     TowerId, TowerKind, TowerTarget,
 };
 use maze_defence_rendering::{
     visuals, BugHealthPresentation, BugPresentation, BugVisual, Color, ControlPanelView,
-    FrameInput, FrameSimulationBreakdown, GroundKind, GroundSpriteTiles, Presentation,
-    RenderingBackend, Scene, SceneProjectile, SceneTower, SceneWall, SpriteKey,
+    FrameInput, FrameSimulationBreakdown, GoldPresentation, GroundKind, GroundSpriteTiles,
+    Presentation, RenderingBackend, Scene, SceneProjectile, SceneTower, SceneWall, SpriteKey,
     TileGridPresentation, TileSpacePosition, TowerInteractionFeedback, TowerPreview,
     TowerTargetLine,
 };
@@ -344,6 +344,7 @@ fn main() -> Result<()> {
         None,
         None,
         Some(ControlPanelView::new(200.0, Color::from_rgb_u8(0, 0, 0))),
+        Some(GoldPresentation::new(query::gold(simulation.world()))),
     );
     simulation.populate_scene(&mut scene);
 
@@ -390,6 +391,7 @@ struct Simulation {
     pending_input: FrameInput,
     builder_preview: Option<BuilderPlacementPreview>,
     tower_feedback: Option<TowerInteractionFeedback>,
+    gold: Gold,
     last_placement_rejection: Option<PlacementRejection>,
     last_removal_rejection: Option<RemovalRejection>,
     bug_step_duration: Duration,
@@ -544,6 +546,7 @@ impl Simulation {
         pending_events.push(Event::PlayModeChanged {
             mode: initial_play_mode,
         });
+        let gold = query::gold(&world);
         let mut simulation = Self {
             world,
             builder: TowerBuilder::default(),
@@ -564,6 +567,7 @@ impl Simulation {
             pending_input: FrameInput::default(),
             builder_preview: None,
             tower_feedback: None,
+            gold,
             last_placement_rejection: None,
             last_removal_rejection: None,
             bug_step_duration: bug_step,
@@ -959,6 +963,7 @@ impl Simulation {
             None
         };
         scene.tower_feedback = self.tower_feedback;
+        scene.gold = Some(GoldPresentation::new(self.gold));
     }
 
     fn process_pending_events(
@@ -995,6 +1000,7 @@ impl Simulation {
 
             self.handle_bug_motion_events(&events);
             self.record_tower_feedback(&events);
+            self.update_gold_from_events(&events);
 
             let play_mode = query::play_mode(&self.world);
             let spawners = query::bug_spawners(&self.world);
@@ -1179,6 +1185,14 @@ impl Simulation {
                     }
                 }
                 _ => {}
+            }
+        }
+    }
+
+    fn update_gold_from_events(&mut self, events: &[Event]) {
+        for event in events {
+            if let Event::GoldChanged { amount } = event {
+                self.gold = *amount;
             }
         }
     }
@@ -1538,6 +1552,7 @@ mod tests {
             None,
             None,
             Some(ControlPanelView::new(200.0, Color::from_rgb_u8(0, 0, 0))),
+            Some(GoldPresentation::new(Gold::new(0))),
         )
     }
 
@@ -1697,6 +1712,9 @@ mod tests {
             .expect("bug spawner available");
 
         let slow_step_ms = simulation.bug_step_ms().saturating_mul(2);
+        simulation.queued_commands.push(Command::SetPlayMode {
+            mode: PlayMode::Attack,
+        });
         simulation.queued_commands.push(Command::SpawnBug {
             spawner,
             color: BugColor::from_rgb(255, 255, 255),

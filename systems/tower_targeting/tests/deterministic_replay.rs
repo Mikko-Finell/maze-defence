@@ -4,8 +4,8 @@ use std::{
 };
 
 use maze_defence_core::{
-    BugColor, BugId, CellCoord, CellPoint, CellRect, Command, Event, Health, NavigationFieldView,
-    PlayMode, TileCoord, TowerId, TowerKind, TowerTarget,
+    BugColor, BugId, CellCoord, CellPoint, CellRect, Command, Event, Gold, Health,
+    NavigationFieldView, PlayMode, TileCoord, TowerId, TowerKind, TowerTarget,
 };
 use maze_defence_system_tower_targeting::TowerTargeting;
 use maze_defence_world::{self as world, query, World};
@@ -21,7 +21,7 @@ fn deterministic_replay_handles_equidistant_bugs_and_builder_mode() {
     assert_eq!(first.assignments.len(), script_len);
 
     let fingerprint = first.fingerprint();
-    let expected = 0x2b34_619b_2945_0988;
+    let expected = 0x8abd_8303_019d_0521;
     assert_eq!(
         fingerprint, expected,
         "fingerprint mismatch: {fingerprint:#x}"
@@ -290,6 +290,9 @@ enum EventRecord {
         color: BugColor,
         health: Health,
     },
+    GoldChanged {
+        amount: Gold,
+    },
 }
 
 impl From<Event> for EventRecord {
@@ -316,6 +319,7 @@ impl From<Event> for EventRecord {
                 color,
                 health,
             },
+            Event::GoldChanged { amount } => Self::GoldChanged { amount },
             other => panic!("unexpected event during targeting replay: {other:?}"),
         }
     }
