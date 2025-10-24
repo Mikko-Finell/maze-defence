@@ -228,8 +228,20 @@ impl World {
             return;
         }
 
+        let (columns, _) = self.occupancy.dimensions();
+        let adjusted_step_ms = if columns > 0 && cell.column() >= columns / 2 {
+            let halved = step_ms / 2;
+            if halved == 0 {
+                1
+            } else {
+                halved
+            }
+        } else {
+            step_ms
+        };
+
         let bug_id = self.next_bug_identifier();
-        let bug = Bug::new(bug_id, cell, color, health, step_ms);
+        let bug = Bug::new(bug_id, cell, color, health, adjusted_step_ms);
         let bug_health = bug.health();
         self.occupancy.occupy(bug_id, cell);
         let index = self.bugs.len();
