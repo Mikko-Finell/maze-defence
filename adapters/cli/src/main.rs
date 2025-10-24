@@ -27,15 +27,15 @@ use layout_transfer::{TowerLayoutSnapshot, TowerLayoutTower};
 use maze_defence_core::{
     AttackBugDescriptor, AttackBurst, AttackPlan, BugColor, BugId, BugView, CellCoord,
     CellPointHalf, CellRect, CellRectSize, Command, Event, Gold, Health, PlacementError, PlayMode,
-    ProjectileSnapshot, RemovalError, TileCoord, TowerCooldownView, TowerId, TowerKind,
-    TowerTarget,
+    ProjectileSnapshot, RemovalError, RoundOutcome, TileCoord, TowerCooldownView, TowerId,
+    TowerKind, TowerTarget,
 };
 use maze_defence_rendering::{
     visuals, BugHealthPresentation, BugPresentation, BugVisual, Color, ControlPanelView,
     FrameInput, FrameSimulationBreakdown, GoldPresentation, GroundKind, GroundSpriteTiles,
     Presentation, RenderingBackend, Scene, SceneProjectile, SceneTower, SceneWall, SpriteKey,
-    TileGridPresentation, TileSpacePosition, TowerInteractionFeedback, TowerPreview,
-    TowerTargetLine,
+    TierPresentation, TileGridPresentation, TileSpacePosition, TowerInteractionFeedback,
+    TowerPreview, TowerTargetLine,
 };
 use maze_defence_rendering_macroquad::MacroquadBackend;
 use maze_defence_system_bootstrap::Bootstrap;
@@ -362,6 +362,9 @@ fn main() -> Result<()> {
         None,
         Some(ControlPanelView::new(200.0, Color::from_rgb_u8(0, 0, 0))),
         Some(GoldPresentation::new(query::gold(simulation.world()))),
+        Some(TierPresentation::new(query::difficulty_tier(
+            simulation.world(),
+        ))),
     );
     simulation.populate_scene(&mut scene);
 
@@ -409,6 +412,7 @@ struct Simulation {
     builder_preview: Option<BuilderPlacementPreview>,
     tower_feedback: Option<TowerInteractionFeedback>,
     gold: Gold,
+    difficulty_tier: u32,
     last_placement_rejection: Option<PlacementRejection>,
     last_removal_rejection: Option<RemovalRejection>,
     bug_step_duration: Duration,
@@ -420,6 +424,8 @@ struct Simulation {
     last_announced_play_mode: PlayMode,
     active_wave: Option<WaveState>,
     auto_spawn_enabled: bool,
+    pending_outcome_command: bool,
+    awaiting_round_resolution: bool,
     #[cfg(test)]
     last_frame_events: Vec<Event>,
 }
@@ -636,6 +642,7 @@ impl Simulation {
             mode: initial_play_mode,
         });
         let gold = query::gold(&world);
+        let difficulty_tier = query::difficulty_tier(&world);
         let mut simulation = Self {
             world,
             builder: TowerBuilder::default(),
@@ -657,6 +664,7 @@ impl Simulation {
             builder_preview: None,
             tower_feedback: None,
             gold,
+            difficulty_tier,
             last_placement_rejection: None,
             last_removal_rejection: None,
             bug_step_duration: bug_step,
@@ -668,6 +676,8 @@ impl Simulation {
             last_announced_play_mode: initial_play_mode,
             active_wave: None,
             auto_spawn_enabled: false,
+            pending_outcome_command: false,
+            awaiting_round_resolution: false,
             #[cfg(test)]
             last_frame_events: Vec::new(),
         };
@@ -709,7 +719,14 @@ impl Simulation {
     }
 
     fn start_basic_wave(&mut self) {
-        if self.active_wave.is_some() {
+        if self.pending_outcome_command
+            || self
+                .queued_commands
+                .iter()
+                .any(|command| matches!(command, Command::ResolveRound { .. }))
+            || self.awaiting_round_resolution
+            || self.active_wave.is_some()
+        {
             return;
         }
 
@@ -729,6 +746,24 @@ impl Simulation {
         }
 
         self.active_wave = Some(WaveState::new(plan));
+        self.awaiting_round_resolution = true;
+    }
+
+    fn queue_round_outcome(&mut self, outcome: RoundOutcome) -> bool {
+        if self.pending_outcome_command {
+            return false;
+        }
+        if self
+            .queued_commands
+            .iter()
+            .any(|command| matches!(command, Command::ResolveRound { .. }))
+        {
+            self.pending_outcome_command = true;
+            return false;
+        }
+        self.queued_commands.push(Command::ResolveRound { outcome });
+        self.pending_outcome_command = true;
+        true
     }
 
     fn basic_attack_plan(&self, spawner: CellCoord) -> AttackPlan {
@@ -1103,6 +1138,7 @@ impl Simulation {
         };
         scene.tower_feedback = self.tower_feedback;
         scene.gold = Some(GoldPresentation::new(self.gold));
+        scene.tier = Some(TierPresentation::new(self.difficulty_tier));
     }
 
     fn process_pending_events(
@@ -1140,12 +1176,15 @@ impl Simulation {
             self.handle_bug_motion_events(&events);
             self.record_tower_feedback(&events);
             self.update_gold_from_events(&events);
+            self.update_difficulty_tier_from_events(&events);
 
             if events
                 .iter()
                 .any(|event| matches!(event, Event::RoundLost { .. }))
             {
                 self.active_wave = None;
+                self.awaiting_round_resolution = false;
+                let _ = self.queue_round_outcome(RoundOutcome::Loss);
             }
 
             let play_mode = query::play_mode(&self.world);
@@ -1180,6 +1219,11 @@ impl Simulation {
             }
             if wave_complete {
                 self.active_wave = None;
+                if query::bug_view(&self.world).iter().next().is_none() {
+                    if self.queue_round_outcome(RoundOutcome::Win) || self.pending_outcome_command {
+                        self.awaiting_round_resolution = false;
+                    }
+                }
             }
 
             self.scratch_commands.clear();
@@ -1230,6 +1274,15 @@ impl Simulation {
                 next_events.append(&mut emitted_events);
             }
             self.scratch_commands = commands;
+
+            if self.awaiting_round_resolution
+                && self.active_wave.is_none()
+                && query::bug_view(&self.world).iter().next().is_none()
+            {
+                if self.queue_round_outcome(RoundOutcome::Win) || self.pending_outcome_command {
+                    self.awaiting_round_resolution = false;
+                }
+            }
 
             events.clear();
         }
@@ -1359,6 +1412,14 @@ impl Simulation {
         for event in events {
             if let Event::GoldChanged { amount } = event {
                 self.gold = *amount;
+            }
+        }
+    }
+
+    fn update_difficulty_tier_from_events(&mut self, events: &[Event]) {
+        for event in events {
+            if let Event::DifficultyTierChanged { tier } = event {
+                self.difficulty_tier = *tier;
             }
         }
     }
@@ -1647,7 +1708,12 @@ impl Simulation {
         let mut emitted = Vec::new();
         let mut queued = std::mem::take(&mut self.queued_commands);
         for command in queued.drain(..) {
+            let resolves_round = matches!(command, Command::ResolveRound { .. });
             self.apply_command(command, &mut emitted);
+            if resolves_round {
+                self.pending_outcome_command = false;
+                self.awaiting_round_resolution = false;
+            }
             self.pending_events.append(&mut emitted);
         }
         self.queued_commands = queued;
@@ -1720,6 +1786,7 @@ mod tests {
             None,
             Some(ControlPanelView::new(200.0, Color::from_rgb_u8(0, 0, 0))),
             Some(GoldPresentation::new(Gold::new(0))),
+            Some(TierPresentation::new(0)),
         )
     }
 
@@ -2310,6 +2377,143 @@ mod tests {
         assert!(
             simulation.active_wave.is_none(),
             "round loss should clear wave"
+        );
+    }
+
+    #[test]
+    fn round_win_queues_resolution_and_blocks_new_wave_until_applied() {
+        let mut simulation = new_simulation();
+        let initial_tier = query::difficulty_tier(simulation.world());
+
+        enter_builder_mode(&mut simulation);
+        let first_tile = TileSpacePosition::from_indices(1, 1);
+        let first_origin = simulation.tile_position_to_cell(first_tile);
+        simulation.queued_commands.push(Command::PlaceTower {
+            kind: TowerKind::Basic,
+            origin: first_origin,
+        });
+        let second_tile = TileSpacePosition::from_indices(2, 1);
+        let second_origin = simulation.tile_position_to_cell(second_tile);
+        simulation.queued_commands.push(Command::PlaceTower {
+            kind: TowerKind::Basic,
+            origin: second_origin,
+        });
+        simulation.queued_commands.push(Command::ConfigureBugStep {
+            step_duration: Duration::from_millis(800),
+        });
+        simulation.advance(Duration::ZERO);
+        let gold_after_build = query::gold(simulation.world());
+        assert_eq!(
+            query::towers(simulation.world()).into_vec().len(),
+            2,
+            "two towers should be placed before the wave starts",
+        );
+
+        simulation.handle_input(FrameInput {
+            spawn_wave: true,
+            ..FrameInput::default()
+        });
+        simulation.advance(Duration::ZERO);
+
+        let step = Duration::from_millis(100);
+        let mut resolve_command_detected = false;
+        for _ in 0..2000 {
+            simulation.advance(step);
+            if simulation.queued_commands().iter().any(|command| {
+                matches!(
+                    command,
+                    Command::ResolveRound {
+                        outcome: RoundOutcome::Win,
+                    }
+                )
+            }) {
+                resolve_command_detected = true;
+                break;
+            }
+        }
+
+        let remaining_bugs = query::bug_view(simulation.world()).into_vec().len();
+        let wave_active = simulation.active_wave.is_some();
+        assert!(
+            resolve_command_detected,
+            "wave win should queue resolution command (queued: {:?}, last events: {:?}, remaining bugs: {}, wave active: {})",
+            simulation.queued_commands(),
+            simulation.last_frame_events(),
+            remaining_bugs,
+            wave_active,
+        );
+        assert!(
+            simulation.pending_outcome_command,
+            "queued resolution should mark outcome command pending",
+        );
+
+        let gold_after_wave = query::gold(simulation.world());
+        let expected_reward =
+            Gold::new(BASIC_WAVE_BUGS.saturating_mul(initial_tier.saturating_add(1)));
+        assert_eq!(
+            gold_after_wave,
+            gold_after_build.saturating_add(expected_reward),
+            "bug kills should award gold scaled by tier",
+        );
+
+        simulation.handle_input(FrameInput {
+            spawn_wave: true,
+            ..FrameInput::default()
+        });
+        assert!(
+            simulation.active_wave.is_none(),
+            "new wave should not start while resolution is pending",
+        );
+
+        simulation.advance(Duration::ZERO);
+
+        let final_tier = query::difficulty_tier(simulation.world());
+        assert_eq!(
+            final_tier,
+            initial_tier.saturating_add(1),
+            "round win should increment difficulty tier",
+        );
+        let final_gold = query::gold(simulation.world());
+        assert_eq!(
+            final_gold, gold_after_wave,
+            "resolving the round should preserve accumulated gold",
+        );
+        assert!(
+            simulation.queued_commands().is_empty(),
+            "queued commands should be flushed after resolution",
+        );
+        assert!(
+            !simulation.pending_outcome_command,
+            "pending outcome flag should clear once resolution applies",
+        );
+
+        let mut scene = make_scene();
+        simulation.populate_scene(&mut scene);
+        let presented_gold = scene
+            .gold
+            .expect("scene should include gold presentation")
+            .amount();
+        assert_eq!(
+            presented_gold, final_gold,
+            "scene presentation should reflect resolved gold",
+        );
+        let presented_tier = scene
+            .tier
+            .expect("scene should include tier presentation")
+            .tier();
+        assert_eq!(
+            presented_tier, final_tier,
+            "scene presentation should reflect resolved tier",
+        );
+
+        simulation.handle_input(FrameInput {
+            spawn_wave: true,
+            ..FrameInput::default()
+        });
+        simulation.advance(Duration::ZERO);
+        assert!(
+            simulation.active_wave.is_some(),
+            "new wave should start once resolution completes",
         );
     }
 

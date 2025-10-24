@@ -693,6 +693,7 @@ fn draw_control_panel(
         background: background_color,
         play_mode: scene.play_mode,
         gold: scene.gold,
+        tier: scene.tier,
     })
 }
 
@@ -1496,7 +1497,7 @@ mod tests {
     };
     use maze_defence_rendering::{
         BugHealthPresentation, ControlPanelView, GoldPresentation, SpriteInstance, SpriteKey,
-        TowerTargetLine,
+        TierPresentation, TowerTargetLine,
     };
     use std::{collections::HashMap, f32::consts::FRAC_PI_2, time::Duration};
 
@@ -1527,6 +1528,7 @@ mod tests {
             None,
             Some(ControlPanelView::new(200.0, Color::from_rgb_u8(0, 0, 0))),
             Some(GoldPresentation::new(Gold::new(0))),
+            Some(TierPresentation::new(0)),
         )
     }
 
@@ -1655,6 +1657,7 @@ mod tests {
                 None,
                 Some(ControlPanelView::new(200.0, Color::from_rgb_u8(0, 0, 0))),
                 Some(GoldPresentation::new(Gold::new(0))),
+                Some(TierPresentation::new(0)),
             );
             let metrics = SceneMetrics::from_scene(&scene, screen_width, screen_height);
 

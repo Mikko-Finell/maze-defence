@@ -54,10 +54,10 @@ Objective: enable a trivial but repeatable “wave → kill → reward → build
 3. **Resolve round outcomes through commands** [DONE]
    * Introduce a `RoundOutcome` enum and `Command::ResolveRound { outcome }` in `maze_defence_core` and handle it inside `world::apply`, incrementing the tier on wins, decrementing (with floor at zero) on losses, and emitting `DifficultyTierChanged` events accordingly.
    * Within the loss branch, remove a deterministic slice of towers (e.g., highest IDs first using `towers::TowerRegistry::iter`) and emit `Event::TowerRemoved` for each so the adapter reconciles state. The world remains the **only** locus of side-effects for these outcomes.
-4. **Drive outcome commands from the CLI adapter**
+4. **Drive outcome commands from the CLI adapter** [DONE]
    * Enhance `Simulation::process_pending_events` in `adapters/cli/src/main.rs` to queue `Command::ResolveRound` when `Event::RoundLost` appears, and when a wave finishes (`WaveState::finished()` && `query::bug_view(&self.world).iter().next().is_none()`), covering both win paths. The adapter’s responsibility stops at **detecting** the outcome and issuing the command — it must not apply any consequences directly.
    * Gate subsequent wave starts on the absence of an active outcome command to keep the deterministic loop intact.
-5. **Surface tier changes in the UI**
+5. **Surface tier changes in the UI** [DONE]
    * Extend `adapters/rendering::Scene` (and the Macroquad panel) with a `TierPresentation` type so `Simulation::build_scene` can display the latest tier alongside the existing `GoldPresentation`.
    * Add a headless harness test (e.g., `tests/cli_round_resolution.rs`) that plays `build → start wave → clear → ResolveRound(Win)` to assert tier/gold deltas, then starts the next wave to confirm the adapter emits the proper commands and scene digests.
 

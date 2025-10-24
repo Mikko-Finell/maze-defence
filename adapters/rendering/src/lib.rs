@@ -872,6 +872,26 @@ impl GoldPresentation {
     }
 }
 
+/// Snapshot of the active difficulty tier for UI presentation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TierPresentation {
+    tier: u32,
+}
+
+impl TierPresentation {
+    /// Creates a new difficulty tier descriptor for presentation purposes.
+    #[must_use]
+    pub const fn new(tier: u32) -> Self {
+        Self { tier }
+    }
+
+    /// Returns the active difficulty tier carried by this descriptor.
+    #[must_use]
+    pub const fn tier(&self) -> u32 {
+        self.tier
+    }
+}
+
 /// Scene description combining the tile grid, perimeter wall colour and inhabitants.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Scene {
@@ -905,6 +925,8 @@ pub struct Scene {
     pub control_panel: Option<ControlPanelView>,
     /// Current gold balance presented to the player.
     pub gold: Option<GoldPresentation>,
+    /// Current difficulty tier presented to the player.
+    pub tier: Option<TierPresentation>,
 }
 
 impl Scene {
@@ -927,6 +949,7 @@ impl Scene {
         tower_feedback: Option<TowerInteractionFeedback>,
         control_panel: Option<ControlPanelView>,
         gold: Option<GoldPresentation>,
+        tier: Option<TierPresentation>,
     ) -> Self {
         Self {
             tile_grid,
@@ -944,6 +967,7 @@ impl Scene {
             tower_feedback,
             control_panel,
             gold,
+            tier,
         }
     }
 
@@ -1407,6 +1431,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
 
         assert_eq!(scene.tile_grid, tile_grid);
@@ -1424,6 +1449,7 @@ mod tests {
         assert!(scene.ground.is_none());
         assert!(scene.control_panel.is_none());
         assert!(scene.gold.is_none());
+        assert!(scene.tier.is_none());
     }
 
     #[test]
@@ -1479,6 +1505,7 @@ mod tests {
             }),
             None,
             None,
+            None,
         );
 
         assert_eq!(scene.play_mode, PlayMode::Builder);
@@ -1502,6 +1529,7 @@ mod tests {
         assert!(scene.projectiles.is_empty());
         assert!(scene.ground.is_none());
         assert!(scene.gold.is_none());
+        assert!(scene.tier.is_none());
     }
 
     #[test]
@@ -1526,6 +1554,7 @@ mod tests {
             Vec::new(),
             None,
             PlayMode::Attack,
+            None,
             None,
             None,
             None,
