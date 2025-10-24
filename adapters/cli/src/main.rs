@@ -24,9 +24,9 @@ use clap::{Parser, ValueEnum};
 use glam::Vec2;
 use layout_transfer::{TowerLayoutSnapshot, TowerLayoutTower};
 use maze_defence_core::{
-    BugId, CellCoord, CellPointHalf, CellRect, CellRectSize, Command, Event, PlacementError,
-    PlayMode, ProjectileSnapshot, RemovalError, TileCoord, TowerCooldownView, TowerId, TowerKind,
-    TowerTarget,
+    BugId, BugView, CellCoord, CellPointHalf, CellRect, CellRectSize, Command, Event,
+    PlacementError, PlayMode, ProjectileSnapshot, RemovalError, TileCoord, TowerCooldownView,
+    TowerId, TowerKind, TowerTarget,
 };
 use maze_defence_rendering::{
     visuals, BugHealthPresentation, BugPresentation, BugVisual, Color, FrameInput,
@@ -467,36 +467,38 @@ impl ProcessEventsProfile {
 struct BugMotion {
     from: CellCoord,
     to: CellCoord,
+    step_duration: Duration,
     elapsed: Duration,
 }
 
 impl BugMotion {
-    fn new(from: CellCoord, to: CellCoord) -> Self {
+    fn new(from: CellCoord, to: CellCoord, step_duration: Duration) -> Self {
         Self {
             from,
             to,
+            step_duration,
             elapsed: Duration::ZERO,
         }
     }
 
-    fn advance(&mut self, dt: Duration, step_duration: Duration) {
+    fn advance(&mut self, dt: Duration) {
         if dt.is_zero() {
             return;
         }
 
         self.elapsed = self.elapsed.saturating_add(dt);
-        if !step_duration.is_zero() {
-            self.elapsed = self.elapsed.min(step_duration);
+        if !self.step_duration.is_zero() {
+            self.elapsed = self.elapsed.min(self.step_duration);
         }
     }
 
-    fn progress(&self, step_duration: Duration) -> f32 {
-        if step_duration.is_zero() {
+    fn progress(&self) -> f32 {
+        if self.step_duration.is_zero() {
             return 1.0;
         }
 
         let numerator = self.elapsed.as_secs_f32();
-        let denominator = step_duration.as_secs_f32();
+        let denominator = self.step_duration.as_secs_f32();
         if denominator <= f32::EPSILON {
             1.0
         } else {
@@ -748,9 +750,8 @@ impl Simulation {
             return;
         }
 
-        let step_duration = self.bug_step_duration;
         for motion in self.bug_motions.values_mut() {
-            motion.advance(dt, step_duration);
+            motion.advance(dt);
         }
     }
 
@@ -780,7 +781,7 @@ impl Simulation {
         if let Some(motion) = self.bug_motions.get(&id) {
             let from = Self::cell_center(motion.from);
             let to = Self::cell_center(motion.to);
-            let progress = motion.progress(self.bug_step_duration);
+            let progress = motion.progress();
             return from + (to - from) * progress;
         }
 
@@ -1064,10 +1065,21 @@ impl Simulation {
     }
 
     fn handle_bug_motion_events(&mut self, events: &[Event]) {
+        let mut bug_view_cache: Option<BugView> = None;
         for event in events {
             match event {
                 Event::BugAdvanced { bug_id, from, to } => {
-                    let _ = self.bug_motions.insert(*bug_id, BugMotion::new(*from, *to));
+                    let step_duration = self
+                        .bug_specific_step_duration(*bug_id, &mut bug_view_cache)
+                        .or_else(|| {
+                            self.bug_motions
+                                .get(bug_id)
+                                .map(|motion| motion.step_duration)
+                        })
+                        .unwrap_or(self.bug_step_duration);
+                    let _ = self
+                        .bug_motions
+                        .insert(*bug_id, BugMotion::new(*from, *to, step_duration));
                     if let Some(heading) = Self::bug_heading_from_cells(*from, *to) {
                         let _ = self.bug_headings.insert(*bug_id, heading);
                     }
@@ -1091,6 +1103,21 @@ impl Simulation {
                 _ => {}
             }
         }
+    }
+
+    fn bug_specific_step_duration(
+        &self,
+        bug_id: BugId,
+        bug_view_cache: &mut Option<BugView>,
+    ) -> Option<Duration> {
+        let bug_view = bug_view_cache.get_or_insert_with(|| query::bug_view(&self.world));
+        bug_view.iter().find_map(|bug| {
+            if bug.id == bug_id {
+                Some(Duration::from_millis(u64::from(bug.step_ms)))
+            } else {
+                None
+            }
+        })
     }
 
     fn record_tower_feedback(&mut self, events: &[Event]) {
@@ -1645,6 +1672,59 @@ mod tests {
                 panic!("sprite visual expected when sprites enabled");
             }
         }
+    }
+
+    #[test]
+    fn populate_scene_interpolation_respects_bug_step_duration() {
+        let mut simulation = new_simulation();
+        let spawner = query::bug_spawners(simulation.world())
+            .into_iter()
+            .next()
+            .expect("bug spawner available");
+
+        let slow_step_ms = simulation.bug_step_ms().saturating_mul(2);
+        simulation.queued_commands.push(Command::SpawnBug {
+            spawner,
+            color: BugColor::from_rgb(255, 255, 255),
+            health: Health::new(7),
+            step_ms: slow_step_ms,
+        });
+        simulation.advance(Duration::ZERO);
+
+        let slow_step_duration = Duration::from_millis(u64::from(slow_step_ms));
+        simulation.advance(slow_step_duration);
+
+        let (from, to) = simulation
+            .last_frame_events()
+            .iter()
+            .find_map(|event| match event {
+                Event::BugAdvanced { from, to, .. } => Some((*from, *to)),
+                _ => None,
+            })
+            .expect("bug should advance after enough time elapsed");
+
+        let partial_dt = if slow_step_duration.is_zero() {
+            Duration::ZERO
+        } else {
+            slow_step_duration / 4
+        };
+        simulation.advance(partial_dt);
+
+        let mut scene = make_scene();
+        simulation.populate_scene(&mut scene);
+
+        assert_eq!(scene.bugs.len(), 1);
+        let bug = scene.bugs[0];
+        let from_vec = Simulation::cell_center(from);
+        let to_vec = Simulation::cell_center(to);
+        let expected_progress = if slow_step_duration.is_zero() {
+            1.0
+        } else {
+            (partial_dt.as_secs_f32() / slow_step_duration.as_secs_f32()).clamp(0.0, 1.0)
+        };
+        let expected_position = from_vec + (to_vec - from_vec) * expected_progress;
+
+        assert!((bug.position() - expected_position).length() <= f32::EPSILON);
     }
 
     #[test]
