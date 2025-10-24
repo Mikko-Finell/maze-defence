@@ -226,6 +226,8 @@ impl GroundSpriteTiles {
 pub struct FrameInput {
     /// Whether the adapter detected a toggle press on this frame.
     pub mode_toggle: bool,
+    /// Whether the adapter requested the next wave to start on this frame.
+    pub spawn_wave: bool,
     /// Cursor position expressed in world units, clamped to the playable grid bounds.
     pub cursor_world_space: Option<Vec2>,
     /// Cursor position snapped to tile coordinates with adapter-provided subdivision resolution.
