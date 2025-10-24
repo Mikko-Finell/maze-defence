@@ -28,8 +28,8 @@ use towers::{footprint_for, TowerRegistry, TowerState};
 
 use maze_defence_core::{
     BugColor, BugId, CellCoord, CellPointHalf, Command, Damage, Direction, Event, Gold, Health,
-    PlayMode, ProjectileId, ReservationClaim, Target, TargetCell, TileCoord, TileGrid,
-    WELCOME_BANNER,
+    PlayMode, ProjectileId, ReservationClaim, RoundOutcome, Target, TargetCell, TileCoord,
+    TileGrid, WELCOME_BANNER,
 };
 
 #[cfg(any(test, feature = "tower_scaffolding"))]
@@ -56,6 +56,10 @@ const TOP_BORDER_CELL_LAYERS: u32 = 1;
 const BOTTOM_BORDER_CELL_LAYERS: u32 = 1;
 const EXIT_CELL_LAYERS: u32 = 1;
 const INITIAL_GOLD: Gold = Gold::new(100);
+const ROUND_WIN_TIER_INCREMENT: u32 = 1;
+const ROUND_LOSS_TIER_PENALTY: u32 = 1;
+#[cfg(any(test, feature = "tower_scaffolding"))]
+const ROUND_LOSS_TOWER_REMOVAL_PERCENT: u32 = 50;
 
 /// Represents the authoritative Maze Defence world state.
 #[derive(Debug)]
@@ -77,6 +81,7 @@ pub struct World {
     navigation_field: NavigationField,
     navigation_dirty: bool,
     gold: Gold,
+    difficulty_tier: u32,
     #[cfg(any(test, feature = "tower_scaffolding"))]
     towers: TowerRegistry,
     #[cfg(any(test, feature = "tower_scaffolding"))]
@@ -118,6 +123,7 @@ impl World {
             navigation_field: NavigationField::default(),
             navigation_dirty: true,
             gold: INITIAL_GOLD,
+            difficulty_tier: 0,
             #[cfg(any(test, feature = "tower_scaffolding"))]
             towers: TowerRegistry::new(),
             #[cfg(any(test, feature = "tower_scaffolding"))]
@@ -172,6 +178,80 @@ impl World {
 
         self.gold = amount;
         out_events.push(Event::GoldChanged { amount });
+    }
+
+    fn update_difficulty_tier(&mut self, tier: u32, out_events: &mut Vec<Event>) {
+        if self.difficulty_tier == tier {
+            return;
+        }
+
+        self.difficulty_tier = tier;
+        out_events.push(Event::DifficultyTierChanged { tier });
+    }
+
+    fn resolve_round_win(&mut self, out_events: &mut Vec<Event>) {
+        let new_tier = self
+            .difficulty_tier
+            .saturating_add(ROUND_WIN_TIER_INCREMENT);
+        self.update_difficulty_tier(new_tier, out_events);
+    }
+
+    fn resolve_round_loss(&mut self, out_events: &mut Vec<Event>) {
+        let new_tier = self.difficulty_tier.saturating_sub(ROUND_LOSS_TIER_PENALTY);
+        self.update_difficulty_tier(new_tier, out_events);
+
+        #[cfg(any(test, feature = "tower_scaffolding"))]
+        self.remove_towers_after_loss(out_events);
+    }
+
+    #[cfg(any(test, feature = "tower_scaffolding"))]
+    fn remove_towers_after_loss(&mut self, out_events: &mut Vec<Event>) {
+        let total_towers = self.towers.iter().count();
+        if total_towers == 0 {
+            return;
+        }
+
+        let percent = ROUND_LOSS_TOWER_REMOVAL_PERCENT as usize;
+        if percent == 0 {
+            return;
+        }
+
+        let numerator = total_towers.saturating_mul(percent);
+        let mut to_remove = numerator / 100;
+        if numerator % 100 != 0 {
+            to_remove = to_remove.saturating_add(1);
+        }
+        to_remove = to_remove.max(1);
+
+        let mut ordered_ids: Vec<_> = self.towers.iter().map(|state| state.id).collect();
+        ordered_ids.reverse();
+        let candidate_ids: Vec<_> = ordered_ids.into_iter().take(to_remove).collect();
+
+        if candidate_ids.is_empty() {
+            return;
+        }
+
+        let mut removed_states = Vec::with_capacity(candidate_ids.len());
+        for tower_id in candidate_ids {
+            if let Some(state) = self.towers.remove(tower_id) {
+                self.mark_tower_region(state.region, false);
+                removed_states.push(state);
+            }
+        }
+
+        if removed_states.is_empty() {
+            return;
+        }
+
+        self.mark_navigation_dirty();
+        self.rebuild_navigation_field_if_dirty();
+
+        for state in removed_states {
+            out_events.push(Event::TowerRemoved {
+                tower: state.id,
+                region: state.region,
+            });
+        }
     }
 
     #[cfg(test)]
@@ -424,6 +504,7 @@ pub fn apply(world: &mut World, command: Command, out_events: &mut Vec<Event>) {
             world.rebuild_bug_spawners();
             world.clear_bugs();
             world.rebuild_navigation_field_if_dirty();
+            world.update_difficulty_tier(0, out_events);
         }
         Command::Tick { dt } => {
             if world.play_mode == PlayMode::Builder {
@@ -536,6 +617,10 @@ pub fn apply(world: &mut World, command: Command, out_events: &mut Vec<Event>) {
             #[cfg(not(any(test, feature = "tower_scaffolding")))]
             let _ = tower;
         }
+        Command::ResolveRound { outcome } => match outcome {
+            RoundOutcome::Win => world.resolve_round_win(out_events),
+            RoundOutcome::Loss => world.resolve_round_loss(out_events),
+        },
     }
 }
 
@@ -685,8 +770,10 @@ impl World {
         if let Some(cell) = death_cell {
             self.occupancy.vacate(cell);
             self.remove_bug_at_index(index);
-            let reward = Gold::new(1);
-            let updated = self.gold.saturating_add(reward);
+            let base_reward = Gold::new(1);
+            let multiplier = self.difficulty_tier.saturating_add(1);
+            let scaled_reward = Gold::new(base_reward.get().saturating_mul(multiplier));
+            let updated = self.gold.saturating_add(scaled_reward);
             self.update_gold(updated, out_events);
             out_events.push(Event::BugDied { bug: target });
         }
@@ -1059,6 +1146,12 @@ pub mod query {
     #[must_use]
     pub fn gold(world: &World) -> Gold {
         world.gold
+    }
+
+    /// Reports the current difficulty tier tracked by the world.
+    #[must_use]
+    pub fn difficulty_tier(world: &World) -> u32 {
+        world.difficulty_tier
     }
 
     /// Retrieves the welcome banner that adapters may display to players.
@@ -1880,6 +1973,232 @@ mod tests {
             events,
         );
         events.clear();
+    }
+
+    fn gold_after_bug_death_at_tier(tier: u32) -> Gold {
+        let mut world = World::new();
+        let mut events = Vec::new();
+
+        apply(
+            &mut world,
+            Command::PlaceTower {
+                kind: TowerKind::Basic,
+                origin: CellCoord::new(2, 2),
+            },
+            &mut events,
+        );
+
+        let tower = events
+            .iter()
+            .find_map(|event| match event {
+                Event::TowerPlaced { tower, .. } => Some(*tower),
+                _ => None,
+            })
+            .expect("tower placement should emit placement event");
+        events.clear();
+
+        ensure_attack_mode(&mut world, &mut events);
+
+        world.set_gold_for_tests(Gold::ZERO);
+        world.difficulty_tier = tier;
+
+        let spawner = query::bug_spawners(&world)
+            .into_iter()
+            .next()
+            .expect("expected bug spawner for combat");
+        let step_ms = world_step_ms(&world);
+        apply(
+            &mut world,
+            Command::SpawnBug {
+                spawner,
+                color: BugColor::from_rgb(0x33, 0x44, 0x55),
+                health: Health::new(1),
+                step_ms,
+            },
+            &mut events,
+        );
+
+        let bug_id = match events.as_slice() {
+            [Event::BugSpawned { bug_id, .. }] => *bug_id,
+            other => panic!("unexpected events when spawning bug: {other:?}"),
+        };
+        events.clear();
+
+        apply(
+            &mut world,
+            Command::FireProjectile {
+                tower,
+                target: bug_id,
+            },
+            &mut events,
+        );
+
+        let projectile = match events.as_slice() {
+            [Event::ProjectileFired { projectile, .. }] => *projectile,
+            other => panic!("unexpected events when firing projectile: {other:?}"),
+        };
+        events.clear();
+
+        let travel_time_ms = world
+            .projectiles
+            .get(&projectile)
+            .expect("projectile state must exist")
+            .travel_time_ms;
+        let travel_time = Duration::from_millis(
+            u64::try_from(travel_time_ms).expect("projectile travel time fits in u64"),
+        );
+
+        apply(&mut world, Command::Tick { dt: travel_time }, &mut events);
+
+        let amount = events
+            .iter()
+            .find_map(|event| match event {
+                Event::GoldChanged { amount } => Some(*amount),
+                _ => None,
+            })
+            .expect("bug death should update gold");
+
+        assert!(events
+            .iter()
+            .any(|event| matches!(event, Event::BugDied { bug } if *bug == bug_id)));
+        assert_eq!(query::gold(&world), amount);
+
+        amount
+    }
+
+    #[test]
+    fn bug_kill_reward_scales_with_difficulty_tier() {
+        assert_eq!(gold_after_bug_death_at_tier(0), Gold::new(1));
+        assert_eq!(gold_after_bug_death_at_tier(3), Gold::new(4));
+        assert_eq!(gold_after_bug_death_at_tier(7), Gold::new(8));
+    }
+
+    #[test]
+    fn bug_kill_reward_saturates_at_multiplier_limit() {
+        assert_eq!(gold_after_bug_death_at_tier(u32::MAX), Gold::new(u32::MAX));
+    }
+
+    #[test]
+    fn resolving_round_win_increments_tier() {
+        let mut world = World::new();
+        let mut events = Vec::new();
+
+        world.difficulty_tier = 2;
+
+        apply(
+            &mut world,
+            Command::ResolveRound {
+                outcome: RoundOutcome::Win,
+            },
+            &mut events,
+        );
+
+        assert_eq!(query::difficulty_tier(&world), 3);
+        assert!(events.iter().any(|event| {
+            matches!(
+                event,
+                Event::DifficultyTierChanged { tier } if *tier == 3
+            )
+        }));
+    }
+
+    #[test]
+    fn resolving_round_loss_decrements_tier_and_removes_towers() {
+        let mut world = World::new();
+        let mut events = Vec::new();
+
+        let origins = [
+            CellCoord::new(2, 2),
+            CellCoord::new(6, 2),
+            CellCoord::new(2, 6),
+            CellCoord::new(6, 6),
+        ];
+
+        let mut tower_ids = Vec::new();
+        for origin in origins {
+            apply(
+                &mut world,
+                Command::PlaceTower {
+                    kind: TowerKind::Basic,
+                    origin,
+                },
+                &mut events,
+            );
+
+            let placed = events
+                .iter()
+                .find_map(|event| match event {
+                    Event::TowerPlaced { tower, .. } => Some(*tower),
+                    _ => None,
+                })
+                .expect("placement emits tower identifier");
+            tower_ids.push(placed);
+            events.clear();
+        }
+
+        assert_eq!(
+            tower_ids,
+            vec![
+                TowerId::new(0),
+                TowerId::new(1),
+                TowerId::new(2),
+                TowerId::new(3),
+            ]
+        );
+
+        world.difficulty_tier = 3;
+
+        apply(
+            &mut world,
+            Command::ResolveRound {
+                outcome: RoundOutcome::Loss,
+            },
+            &mut events,
+        );
+
+        assert_eq!(query::difficulty_tier(&world), 2);
+
+        let removed_towers: Vec<_> = events
+            .iter()
+            .filter_map(|event| match event {
+                Event::TowerRemoved { tower, .. } => Some(*tower),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(removed_towers, vec![TowerId::new(3), TowerId::new(2)]);
+
+        assert!(events.iter().any(|event| {
+            matches!(
+                event,
+                Event::DifficultyTierChanged { tier } if *tier == 2
+            )
+        }));
+
+        assert!(world.towers.get(TowerId::new(3)).is_none());
+        assert!(world.towers.get(TowerId::new(2)).is_none());
+        assert!(world.towers.get(TowerId::new(1)).is_some());
+        assert!(world.towers.get(TowerId::new(0)).is_some());
+
+        events.clear();
+    }
+
+    #[test]
+    fn resolving_round_loss_at_zero_tier_does_not_emit_tier_change() {
+        let mut world = World::new();
+        let mut events = Vec::new();
+
+        apply(
+            &mut world,
+            Command::ResolveRound {
+                outcome: RoundOutcome::Loss,
+            },
+            &mut events,
+        );
+
+        assert_eq!(query::difficulty_tier(&world), 0);
+        assert!(events
+            .iter()
+            .all(|event| !matches!(event, Event::DifficultyTierChanged { .. })));
     }
 
     #[test]
