@@ -149,6 +149,137 @@ pub enum PlayMode {
     Builder,
 }
 
+/// Authoritative description of a single hand-authored enemy wave.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AttackPlan {
+    pressure: u32,
+    bursts: Vec<AttackBurst>,
+}
+
+impl AttackPlan {
+    /// Creates a new attack plan populated with the provided bursts.
+    #[must_use]
+    pub fn new(pressure: u32, bursts: Vec<AttackBurst>) -> Self {
+        Self { pressure, bursts }
+    }
+
+    /// Returns the pressure budget associated with this plan.
+    #[must_use]
+    pub const fn pressure(&self) -> u32 {
+        self.pressure
+    }
+
+    /// Provides immutable access to the burst descriptors in deterministic order.
+    #[must_use]
+    pub fn bursts(&self) -> &[AttackBurst] {
+        &self.bursts
+    }
+
+    /// Returns whether the plan contains no bursts.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.bursts.is_empty()
+    }
+}
+
+/// Homogeneous burst scheduled within an [`AttackPlan`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AttackBurst {
+    spawner: CellCoord,
+    bug: AttackBugDescriptor,
+    count: NonZeroU32,
+    cadence_ms: NonZeroU32,
+    start_ms: u32,
+}
+
+impl AttackBurst {
+    /// Creates a new burst descriptor spawning identical bugs from a single spawner.
+    #[must_use]
+    pub fn new(
+        spawner: CellCoord,
+        bug: AttackBugDescriptor,
+        count: NonZeroU32,
+        cadence_ms: NonZeroU32,
+        start_ms: u32,
+    ) -> Self {
+        Self {
+            spawner,
+            bug,
+            count,
+            cadence_ms,
+            start_ms,
+        }
+    }
+
+    /// Returns the cell coordinate of the spawner assigned to the burst.
+    #[must_use]
+    pub const fn spawner(&self) -> CellCoord {
+        self.spawner
+    }
+
+    /// Returns the bug descriptor emitted by this burst.
+    #[must_use]
+    pub const fn bug(&self) -> AttackBugDescriptor {
+        self.bug
+    }
+
+    /// Returns the number of bugs emitted by the burst.
+    #[must_use]
+    pub const fn count(&self) -> NonZeroU32 {
+        self.count
+    }
+
+    /// Returns the cadence in milliseconds between consecutive spawns.
+    #[must_use]
+    pub const fn cadence_ms(&self) -> NonZeroU32 {
+        self.cadence_ms
+    }
+
+    /// Returns the start offset in milliseconds relative to the beginning of the wave.
+    #[must_use]
+    pub const fn start_ms(&self) -> u32 {
+        self.start_ms
+    }
+}
+
+/// Describes the appearance and behaviour of bugs spawned by an [`AttackBurst`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AttackBugDescriptor {
+    color: BugColor,
+    health: Health,
+    step_ms: u32,
+}
+
+impl AttackBugDescriptor {
+    /// Creates a new bug descriptor using the provided appearance and pacing.
+    #[must_use]
+    pub const fn new(color: BugColor, health: Health, step_ms: u32) -> Self {
+        Self {
+            color,
+            health,
+            step_ms,
+        }
+    }
+
+    /// Returns the colour assigned to spawned bugs.
+    #[must_use]
+    pub const fn color(&self) -> BugColor {
+        self.color
+    }
+
+    /// Returns the health applied to spawned bugs.
+    #[must_use]
+    pub const fn health(&self) -> Health {
+        self.health
+    }
+
+    /// Returns the bug step cadence expressed in milliseconds.
+    #[must_use]
+    pub const fn step_ms(&self) -> u32 {
+        self.step_ms
+    }
+}
+
 /// Commands that express all permissible world mutations.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Command {

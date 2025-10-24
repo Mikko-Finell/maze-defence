@@ -530,6 +530,7 @@ impl SceneMetrics {
 fn gather_frame_input(scene: &Scene, metrics: &SceneMetrics) -> FrameInput {
     let (cursor_x, cursor_y) = mouse_position();
     let mode_toggle = is_key_pressed(KeyCode::Space);
+    let spawn_wave = is_key_pressed(KeyCode::Enter);
     let confirm_click = is_mouse_button_pressed(MouseButton::Left);
     let remove_click = is_mouse_button_pressed(MouseButton::Right);
     let delete_pressed = is_key_pressed(KeyCode::Delete);
@@ -538,6 +539,7 @@ fn gather_frame_input(scene: &Scene, metrics: &SceneMetrics) -> FrameInput {
         metrics,
         Vec2::new(cursor_x, cursor_y),
         mode_toggle,
+        spawn_wave,
         confirm_click,
         remove_click,
         delete_pressed,
@@ -549,12 +551,14 @@ fn gather_frame_input_from_observations(
     metrics: &SceneMetrics,
     cursor_position: Vec2,
     mode_toggle: bool,
+    spawn_wave: bool,
     confirm_click: bool,
     remove_click: bool,
     delete_pressed: bool,
 ) -> FrameInput {
     let mut input = FrameInput {
         mode_toggle,
+        spawn_wave,
         ..FrameInput::default()
     };
 
@@ -1486,6 +1490,7 @@ mod tests {
             &metrics,
             inside_cursor,
             false,
+            false,
             true,
             false,
             false,
@@ -1500,6 +1505,7 @@ mod tests {
             &scene,
             &metrics,
             outside_cursor,
+            false,
             false,
             true,
             false,
@@ -1527,7 +1533,7 @@ mod tests {
             metrics.grid_offset_y + metrics.grid_height_scaled - 1.0,
         );
         let input = gather_frame_input_from_observations(
-            &scene, &metrics, cursor, false, false, false, false,
+            &scene, &metrics, cursor, false, false, false, false, false,
         );
 
         let tile = input
