@@ -17,13 +17,13 @@ Objective: enable a trivial but repeatable “wave → kill → reward → build
 2. **Initial game state** [DONE]
    * Start sessions in build mode by default so the player can place towers before any action begins.
    * Disable automatic enemy spawning; waves should only start from explicit player input.
-3. **Economy groundwork**
+3. **Economy groundwork** [DONE]
    * Introduce global **gold resource** owned by the world state.
    * Award **gold per bug kill** (flat value is sufficient) and charge **tower placement cost**, rejecting placement when funds are insufficient.
-4. **Wave scaffolding**
+4. **Wave scaffolding** [TODO]
    * Keep the existing manual “Spawn Wave” trigger but hardcode a basic wave (e.g. N slow bugs).
    * Define an initial `AttackPlan` representation that captures wave intent (per `pressure-spec.md`) without yet generating waves systemically.
-5. **Failure condition**
+5. **Failure condition** [TODO]
    * If any bug reaches exit → round is **lost** (no reset logic yet).
 
 **Outcome:** The game now has agency, reward, and pacing. Usable for economy tuning.
