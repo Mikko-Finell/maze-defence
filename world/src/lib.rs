@@ -228,8 +228,17 @@ impl World {
             return;
         }
 
+        let mut effective_step_ms = step_ms;
+        let (columns, _) = self.occupancy.dimensions();
+        if columns > 0 {
+            let midpoint = columns / 2;
+            if cell.column() >= midpoint {
+                effective_step_ms = if step_ms <= 1 { 1 } else { step_ms / 2 };
+            }
+        }
+
         let bug_id = self.next_bug_identifier();
-        let bug = Bug::new(bug_id, cell, color, health, step_ms);
+        let bug = Bug::new(bug_id, cell, color, health, effective_step_ms);
         let bug_health = bug.health();
         self.occupancy.occupy(bug_id, cell);
         let index = self.bugs.len();
