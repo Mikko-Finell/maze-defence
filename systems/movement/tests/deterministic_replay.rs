@@ -11,9 +11,11 @@ use maze_defence_core::{
 use maze_defence_system_movement::Movement;
 use maze_defence_world::{self as world, query, World};
 
+const DEFAULT_STEP_MS: u32 = 250;
+
 #[test]
 fn deterministic_replay_produces_expected_snapshot() {
-    assert_stable_replay(baseline_commands(), 0x3ad8_7a70_83dd_22f1);
+    assert_stable_replay(baseline_commands(), 0xe2d9_a3a0_0ce5_b675);
 }
 
 #[test]
@@ -132,6 +134,7 @@ fn baseline_commands() -> Vec<Command> {
             spawner: CellCoord::new(0, 0),
             color: BugColor::from_rgb(0x2f, 0x95, 0x32),
             health: Health::new(3),
+            step_ms: DEFAULT_STEP_MS,
         },
         Command::Tick {
             dt: Duration::from_millis(500),
@@ -173,6 +176,7 @@ fn dense_corridor_commands() -> Vec<Command> {
             spawner: CellCoord::new(0, 0),
             color: BugColor::from_rgb(red, green, blue),
             health: Health::new(3),
+            step_ms: DEFAULT_STEP_MS,
         });
         commands.push(Command::Tick {
             dt: Duration::from_millis(250),
@@ -226,6 +230,7 @@ fn side_hallway_diversion_commands() -> Vec<Command> {
             spawner: CellCoord::new(4, 0),
             color: BugColor::from_rgb(red, green, blue),
             health: Health::new(5),
+            step_ms: DEFAULT_STEP_MS,
         });
         commands.push(Command::Tick {
             dt: Duration::from_millis(250),
@@ -253,6 +258,7 @@ fn stall_regression_commands() -> Vec<Command> {
             spawner: CellCoord::new(0, 0),
             color: BugColor::from_rgb(0x9a, 0x4c, 0x2f),
             health: Health::new(3),
+            step_ms: DEFAULT_STEP_MS,
         },
     ];
 
@@ -266,6 +272,7 @@ fn stall_regression_commands() -> Vec<Command> {
         spawner: CellCoord::new(0, 0),
         color: BugColor::from_rgb(0x2f, 0x8c, 0xc0),
         health: Health::new(3),
+        step_ms: DEFAULT_STEP_MS,
     });
 
     for _ in 0..18 {
@@ -289,6 +296,7 @@ fn movement_pauses_in_builder_mode() {
             spawner: CellCoord::new(0, 0),
             color: BugColor::from_rgb(0x2f, 0x95, 0x32),
             health: Health::new(3),
+            step_ms: DEFAULT_STEP_MS,
         },
         &mut events,
     );
@@ -383,8 +391,9 @@ impl ReplayOutcome {
 struct BugState {
     id: maze_defence_core::BugId,
     cell: CellCoord,
+    step_ms: u32,
+    accum_ms: u32,
     ready_for_step: bool,
-    accumulated_micros: u128,
     color: (u8, u8, u8),
     max_health: Health,
     health: Health,
@@ -395,8 +404,9 @@ impl From<BugSnapshot> for BugState {
         Self {
             id: snapshot.id,
             cell: snapshot.cell,
+            step_ms: snapshot.step_ms,
+            accum_ms: snapshot.accum_ms,
             ready_for_step: snapshot.ready_for_step,
-            accumulated_micros: snapshot.accumulated.as_micros(),
             color: (
                 snapshot.color.red(),
                 snapshot.color.green(),

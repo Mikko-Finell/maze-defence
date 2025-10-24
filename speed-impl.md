@@ -6,7 +6,7 @@ its own, respects the architecture guardrails, and layers behaviour from
 contract extensions → world authority → system integration → harness coverage.
 Nothing has landed yet, so each checkpoint below is marked `[TODO]`.
 
-# 1) [TODO] Cadence contracts & snapshots (`core`)
+# 1) [DONE] Cadence contracts & snapshots (`core`)
 
 **Goal:** Extend shared command/snapshot types so every caller deals with
 resolved cadence data explicitly.

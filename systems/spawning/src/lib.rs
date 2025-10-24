@@ -9,7 +9,7 @@
 
 //! Deterministic spawning system responsible for emitting bug spawn commands.
 
-use std::time::Duration;
+use std::{convert::TryFrom, time::Duration};
 
 use maze_defence_core::{BugColor, CellCoord, Command, Event, Health, PlayMode};
 
@@ -93,6 +93,8 @@ impl Spawning {
         self.accumulator = self.accumulator.saturating_add(accumulated);
         let spawn_attempts = self.resolve_spawn_attempts();
 
+        let step_ms = u32::try_from(self.spawn_interval.as_millis()).unwrap_or(u32::MAX);
+
         for _ in 0..spawn_attempts {
             let spawner = self.select_spawner(spawners);
             let color = self.next_color();
@@ -100,6 +102,7 @@ impl Spawning {
                 spawner,
                 color,
                 health: DEFAULT_BUG_HEALTH,
+                step_ms,
             });
         }
     }

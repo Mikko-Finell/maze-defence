@@ -854,7 +854,6 @@ fn lexicographically_less(left: CellCoord, right: CellCoord) -> bool {
 mod tests {
     use super::*;
     use maze_defence_core::{BugColor, Health, ReservationClaim, ReservationLedgerView};
-    use std::time::Duration;
 
     #[test]
     fn direction_between_neighbors() {
@@ -1324,8 +1323,9 @@ mod tests {
             color: BugColor::from_rgb(0, 0, 0),
             max_health: Health::new(3),
             health: Health::new(3),
+            step_ms: 1,
+            accum_ms: 1,
             ready_for_step: true,
-            accumulated: Duration::default(),
         }
     }
 }

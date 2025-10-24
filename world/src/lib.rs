@@ -13,6 +13,7 @@ mod navigation;
 
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap},
+    convert::TryFrom,
     time::Duration,
 };
 
@@ -212,6 +213,7 @@ impl World {
         cell: CellCoord,
         color: BugColor,
         health: Health,
+        _step_ms: u32,
         out_events: &mut Vec<Event>,
     ) {
         if !self.bug_spawners.contains(cell) {
@@ -468,12 +470,13 @@ pub fn apply(world: &mut World, command: Command, out_events: &mut Vec<Event>) {
             spawner,
             color,
             health,
+            step_ms,
         } => {
             if world.play_mode == PlayMode::Builder {
                 return;
             }
 
-            world.spawn_from_spawner(spawner, color, health, out_events);
+            world.spawn_from_spawner(spawner, color, health, step_ms, out_events);
         }
         Command::FireProjectile { tower, target } => {
             #[cfg(any(test, feature = "tower_scaffolding"))]
@@ -1059,18 +1062,25 @@ pub mod query {
     /// Captures a read-only view of the bugs inhabiting the maze.
     #[must_use]
     pub fn bug_view(world: &World) -> BugView {
+        let step_ms = u32::try_from(world.step_quantum.as_millis()).unwrap_or(u32::MAX);
+
         let snapshots: Vec<BugSnapshot> = world
             .bugs
             .iter()
             .filter(|bug| !bug.health.is_zero())
-            .map(|bug| BugSnapshot {
-                id: bug.id,
-                cell: bug.cell,
-                color: bug.color,
-                max_health: bug.max_health(),
-                health: bug.health,
-                ready_for_step: bug.ready_for_step(world.step_quantum),
-                accumulated: bug.accumulator,
+            .map(|bug| {
+                let accum_ms = u32::try_from(bug.accumulator.as_millis()).unwrap_or(u32::MAX);
+
+                BugSnapshot {
+                    id: bug.id,
+                    cell: bug.cell,
+                    color: bug.color,
+                    max_health: bug.max_health(),
+                    health: bug.health,
+                    step_ms,
+                    accum_ms,
+                    ready_for_step: bug.ready_for_step(world.step_quantum),
+                }
             })
             .collect();
         BugView::from_snapshots(snapshots)
@@ -1802,6 +1812,10 @@ mod tests {
         cells
     }
 
+    fn world_step_ms(world: &World) -> u32 {
+        u32::try_from(world.step_quantum.as_millis()).unwrap_or(u32::MAX)
+    }
+
     #[test]
     fn build_cell_walls_returns_empty_when_dimensions_zero() {
         assert!(build_cell_walls(TileCoord::new(0), TileCoord::new(1), 1).is_empty());
@@ -1866,12 +1880,14 @@ mod tests {
             .into_iter()
             .next()
             .expect("expected bug spawner");
+        let step_ms = world_step_ms(&world);
         apply(
             &mut world,
             Command::SpawnBug {
                 spawner,
                 color: BugColor::from_rgb(0xaa, 0xbb, 0xcc),
                 health: Health::new(5),
+                step_ms,
             },
             &mut events,
         );
@@ -2269,6 +2285,7 @@ mod tests {
             .next()
             .expect("expected at least one spawner");
         let mut events = Vec::new();
+        let step_ms = world_step_ms(&world);
 
         apply(
             &mut world,
@@ -2276,6 +2293,7 @@ mod tests {
                 spawner,
                 color: BugColor::from_rgb(0, 255, 0),
                 health: Health::new(1),
+                step_ms,
             },
             &mut events,
         );
@@ -2506,12 +2524,14 @@ mod tests {
             .into_iter()
             .next()
             .expect("expected spawner");
+        let step_ms = world_step_ms(&world);
         apply(
             &mut world,
             Command::SpawnBug {
                 spawner,
                 color: BugColor::from_rgb(0x44, 0x44, 0x44),
                 health: Health::new(1),
+                step_ms,
             },
             &mut events,
         );
@@ -2579,12 +2599,14 @@ mod tests {
             .into_iter()
             .next()
             .expect("expected spawner");
+        let step_ms = world_step_ms(&world);
         apply(
             &mut world,
             Command::SpawnBug {
                 spawner,
                 color: BugColor::from_rgb(0xaa, 0xbb, 0xcc),
                 health: Health::new(3),
+                step_ms,
             },
             &mut events,
         );
@@ -2755,12 +2777,14 @@ mod tests {
             .into_iter()
             .next()
             .expect("expected spawner");
+        let step_ms = world_step_ms(&world);
         apply(
             &mut world,
             Command::SpawnBug {
                 spawner,
                 color: BugColor::from_rgb(0x11, 0x22, 0x33),
                 health: Health::new(6),
+                step_ms,
             },
             &mut events,
         );
@@ -2980,12 +3004,14 @@ mod tests {
             .into_iter()
             .next()
             .expect("expected spawner");
+        let step_ms = world_step_ms(&world);
         apply(
             &mut world,
             Command::SpawnBug {
                 spawner,
                 color: BugColor::from_rgb(0x55, 0x66, 0x77),
                 health: Health::new(3),
+                step_ms,
             },
             &mut events,
         );
@@ -3075,12 +3101,14 @@ mod tests {
             .into_iter()
             .next()
             .expect("expected spawner");
+        let step_ms = world_step_ms(&world);
         apply(
             &mut world,
             Command::SpawnBug {
                 spawner,
                 color: BugColor::from_rgb(0x10, 0x20, 0x30),
                 health: Health::new(1),
+                step_ms,
             },
             &mut events,
         );
@@ -3171,12 +3199,14 @@ mod tests {
             .into_iter()
             .next()
             .expect("expected spawner");
+        let step_ms = world_step_ms(&world);
         apply(
             &mut world,
             Command::SpawnBug {
                 spawner,
                 color: BugColor::from_rgb(0x40, 0x50, 0x60),
                 health: Health::new(2),
+                step_ms,
             },
             &mut events,
         );
@@ -3278,12 +3308,14 @@ mod tests {
             .into_iter()
             .next()
             .expect("expected spawner");
+        let step_ms = world_step_ms(&world);
         apply(
             &mut world,
             Command::SpawnBug {
                 spawner,
                 color: BugColor::from_rgb(0x55, 0x22, 0x11),
                 health: Health::new(1),
+                step_ms,
             },
             &mut events,
         );
@@ -3916,12 +3948,14 @@ mod tests {
         let mut world = World::new();
         let mut events = Vec::new();
 
+        let step_ms = world_step_ms(&world);
         apply(
             &mut world,
             Command::SpawnBug {
                 spawner: CellCoord::new(0, 0),
                 color: BugColor::from_rgb(0x2f, 0x95, 0x32),
                 health: Health::new(3),
+                step_ms,
             },
             &mut events,
         );
@@ -4125,12 +4159,14 @@ mod tests {
         );
 
         events.clear();
+        let step_ms = world_step_ms(&world);
         apply(
             &mut world,
             Command::SpawnBug {
                 spawner: CellCoord::new(0, 0),
                 color: BugColor::from_rgb(0x12, 0x34, 0x56),
                 health: Health::new(3),
+                step_ms,
             },
             &mut events,
         );
@@ -4175,12 +4211,14 @@ mod tests {
         );
 
         events.clear();
+        let step_ms = world_step_ms(&world);
         apply(
             &mut world,
             Command::SpawnBug {
                 spawner: CellCoord::new(0, 0),
                 color: BugColor::from_rgb(0xaa, 0xbb, 0xcc),
                 health: Health::new(3),
+                step_ms,
             },
             &mut events,
         );
@@ -4188,12 +4226,14 @@ mod tests {
         assert_eq!(events.len(), 1);
 
         events.clear();
+        let step_ms = world_step_ms(&world);
         apply(
             &mut world,
             Command::SpawnBug {
                 spawner: CellCoord::new(0, 0),
                 color: BugColor::from_rgb(0x10, 0x20, 0x30),
                 health: Health::new(3),
+                step_ms,
             },
             &mut events,
         );
@@ -4223,12 +4263,14 @@ mod tests {
         world.clear_bugs();
 
         events.clear();
+        let step_ms = world_step_ms(&world);
         apply(
             &mut world,
             Command::SpawnBug {
                 spawner: CellCoord::new(1, 1),
                 color: BugColor::from_rgb(0xaa, 0x00, 0xff),
                 health: Health::new(3),
+                step_ms,
             },
             &mut events,
         );
@@ -4251,12 +4293,14 @@ mod tests {
         );
 
         events.clear();
+        let step_ms = world_step_ms(&world);
         apply(
             &mut world,
             Command::SpawnBug {
                 spawner: CellCoord::new(0, 0),
                 color: BugColor::from_rgb(0, 0, 0),
                 health: Health::new(3),
+                step_ms,
             },
             &mut events,
         );
@@ -4442,6 +4486,7 @@ mod tests {
             .into_iter()
             .find(|cell| cell.column() == exit_cell.column())
             .expect("expected aligned spawner");
+        let step_ms = world_step_ms(&world);
 
         apply(
             &mut world,
@@ -4449,6 +4494,7 @@ mod tests {
                 spawner: spawn_cell,
                 color: BugColor::from_rgb(0x2f, 0x95, 0x32),
                 health: Health::new(3),
+                step_ms,
             },
             &mut events,
         );
@@ -4746,12 +4792,14 @@ mod tests {
 
         assert!(events.is_empty());
 
+        let step_ms = world_step_ms(&world);
         apply(
             &mut world,
             Command::SpawnBug {
                 spawner: CellCoord::new(0, 0),
                 color: BugColor::from_rgb(0x2f, 0x95, 0x32),
                 health: Health::new(3),
+                step_ms,
             },
             &mut events,
         );
@@ -4897,10 +4945,12 @@ mod tests {
             .into_iter()
             .next()
             .expect("expected at least one spawner");
+        let step_ms = world_step_ms(&world);
         let spawn_bug = Command::SpawnBug {
             spawner,
             color: BugColor::from_rgb(0xaa, 0x44, 0x22),
             health: Health::new(1),
+            step_ms,
         };
         commands.push(spawn_bug.clone());
         apply(&mut world, spawn_bug, &mut events);
@@ -5066,8 +5116,9 @@ mod tests {
         color: (u8, u8, u8),
         max_health: Health,
         health: Health,
+        step_ms: u32,
+        accum_ms: u32,
         ready_for_step: bool,
-        accumulated_micros: u128,
     }
 
     impl From<BugSnapshot> for BugRecord {
@@ -5082,8 +5133,9 @@ mod tests {
                 ),
                 max_health: snapshot.max_health,
                 health: snapshot.health,
+                step_ms: snapshot.step_ms,
+                accum_ms: snapshot.accum_ms,
                 ready_for_step: snapshot.ready_for_step,
-                accumulated_micros: snapshot.accumulated.as_micros(),
             }
         }
     }

@@ -128,11 +128,13 @@ fn scripted_commands() -> Vec<Command> {
         spawner: first_spawner,
         color: BugColor::from_rgb(0xff, 0, 0),
         health: Health::new(3),
+        step_ms: 250,
     };
     let spawn_second = Command::SpawnBug {
         spawner: second_spawner,
         color: BugColor::from_rgb(0, 0xff, 0),
         health: Health::new(3),
+        step_ms: 250,
     };
     let exit_to_builder = Command::SetPlayMode {
         mode: PlayMode::Builder,

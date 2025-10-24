@@ -1,5 +1,6 @@
 use std::{
     collections::hash_map::DefaultHasher,
+    convert::TryFrom,
     hash::{Hash, Hasher},
     time::Duration,
 };
@@ -48,9 +49,15 @@ fn emits_multiple_spawn_commands_for_large_dt() {
         BugColor::from_rgb(0x58, 0x47, 0xff),
     ];
 
+    let expected_step_ms =
+        u32::try_from(Duration::from_millis(500).as_millis()).expect("spawn interval fits u32");
+
     for (command, expected_color) in commands.iter().zip(expected_colors.iter().cycle()) {
         match command {
-            Command::SpawnBug { color, .. } => assert_eq!(color, expected_color),
+            Command::SpawnBug { color, step_ms, .. } => {
+                assert_eq!(color, expected_color);
+                assert_eq!(step_ms, &expected_step_ms);
+            }
             other => panic!("unexpected command emitted: {other:?}"),
         }
     }
@@ -121,7 +128,7 @@ fn deterministic_replay_produces_identical_sequence() {
     assert_eq!(first, second, "replay diverged between runs");
 
     let fingerprint = first.fingerprint();
-    let expected = 0x08eb_0c34_60fa_6b17;
+    let expected = 0x55c2_f129_5c38_33c8;
     assert_eq!(
         fingerprint, expected,
         "fingerprint mismatch: {fingerprint:#x}",
@@ -187,12 +194,14 @@ fn process_spawning(
                 spawner,
                 color,
                 health,
+                step_ms,
             } = command
             {
                 log.push(SpawnRecord {
                     spawner,
                     color,
                     health,
+                    step_ms,
                 });
                 let mut generated_events = Vec::new();
                 world::apply(
@@ -201,6 +210,7 @@ fn process_spawning(
                         spawner,
                         color,
                         health,
+                        step_ms,
                     },
                     &mut generated_events,
                 );
@@ -267,12 +277,18 @@ struct SpawnRecord {
     spawner: CellCoord,
     color: BugColor,
     health: Health,
+    step_ms: u32,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 struct BugState {
     cell: CellCoord,
     color: BugColor,
+    step_ms: u32,
+    accum_ms: u32,
+    ready_for_step: bool,
+    max_health: Health,
+    health: Health,
 }
 
 impl From<maze_defence_core::BugSnapshot> for BugState {
@@ -280,6 +296,11 @@ impl From<maze_defence_core::BugSnapshot> for BugState {
         Self {
             cell: snapshot.cell,
             color: snapshot.color,
+            step_ms: snapshot.step_ms,
+            accum_ms: snapshot.accum_ms,
+            ready_for_step: snapshot.ready_for_step,
+            max_health: snapshot.max_health,
+            health: snapshot.health,
         }
     }
 }
