@@ -9,12 +9,22 @@ The following roadmap introduces gameplay in strictly layered stages, each playa
 
 Objective: enable a trivial but repeatable “wave → kill → reward → build more” loop.
 
-* Introduce global **gold resource** (world-owned).
-* Award **gold per bug kill** (flat value is sufficient).
-* Add **tower placement cost** and reject placement if insufficient gold.
-* Add **“Spawn Wave”** trigger in adapter (manual, not timed).
-* Hardcode a basic wave (e.g. N slow bugs).
-* If any bug reaches exit → round is **lost** (no reset logic yet).
+**Phase 0 kickoff roadmap**
+
+1. **UI control hub** [DONE]
+   * Add a right-side adapter panel (fixed 200 px width) to host build controls and wave buttons.
+   * Route existing manual commands (build, spawn) through this panel so future buttons have a consistent home.
+2. **Initial game state** [DONE]
+   * Start sessions in build mode by default so the player can place towers before any action begins.
+   * Disable automatic enemy spawning; waves should only start from explicit player input.
+3. **Economy groundwork**
+   * Introduce global **gold resource** owned by the world state.
+   * Award **gold per bug kill** (flat value is sufficient) and charge **tower placement cost**, rejecting placement when funds are insufficient.
+4. **Wave scaffolding**
+   * Keep the existing manual “Spawn Wave” trigger but hardcode a basic wave (e.g. N slow bugs).
+   * Define an initial `AttackPlan` representation that captures wave intent (per `pressure-spec.md`) without yet generating waves systemically.
+5. **Failure condition**
+   * If any bug reaches exit → round is **lost** (no reset logic yet).
 
 **Outcome:** The game now has agency, reward, and pacing. Usable for economy tuning.
 

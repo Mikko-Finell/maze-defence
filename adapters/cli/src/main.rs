@@ -29,10 +29,11 @@ use maze_defence_core::{
     TowerId, TowerKind, TowerTarget,
 };
 use maze_defence_rendering::{
-    visuals, BugHealthPresentation, BugPresentation, BugVisual, Color, FrameInput,
-    FrameSimulationBreakdown, GroundKind, GroundSpriteTiles, Presentation, RenderingBackend, Scene,
-    SceneProjectile, SceneTower, SceneWall, SpriteKey, TileGridPresentation, TileSpacePosition,
-    TowerInteractionFeedback, TowerPreview, TowerTargetLine,
+    visuals, BugHealthPresentation, BugPresentation, BugVisual, Color, ControlPanelView,
+    FrameInput, FrameSimulationBreakdown, GroundKind, GroundSpriteTiles, Presentation,
+    RenderingBackend, Scene, SceneProjectile, SceneTower, SceneWall, SpriteKey,
+    TileGridPresentation, TileSpacePosition, TowerInteractionFeedback, TowerPreview,
+    TowerTargetLine,
 };
 use maze_defence_rendering_macroquad::MacroquadBackend;
 use maze_defence_system_bootstrap::Bootstrap;
@@ -342,6 +343,7 @@ fn main() -> Result<()> {
         None,
         None,
         None,
+        Some(ControlPanelView::new(200.0, Color::from_rgb_u8(0, 0, 0))),
     );
     simulation.populate_scene(&mut scene);
 
@@ -397,6 +399,7 @@ struct Simulation {
     visual_style: VisualStyle,
     last_advance_profile: AdvanceProfile,
     last_announced_play_mode: PlayMode,
+    auto_spawn_enabled: bool,
     #[cfg(test)]
     last_frame_events: Vec<Event>,
 }
@@ -538,6 +541,9 @@ impl Simulation {
         );
 
         let initial_play_mode = query::play_mode(&world);
+        pending_events.push(Event::PlayModeChanged {
+            mode: initial_play_mode,
+        });
         let mut simulation = Self {
             world,
             builder: TowerBuilder::default(),
@@ -567,6 +573,7 @@ impl Simulation {
             visual_style,
             last_advance_profile: AdvanceProfile::default(),
             last_announced_play_mode: initial_play_mode,
+            auto_spawn_enabled: false,
             #[cfg(test)]
             last_frame_events: Vec::new(),
         };
@@ -992,14 +999,16 @@ impl Simulation {
             let play_mode = query::play_mode(&self.world);
             let spawners = query::bug_spawners(&self.world);
             self.scratch_commands.clear();
-            self.spawning
-                .handle(&events, play_mode, &spawners, &mut self.scratch_commands);
-            let mut commands = std::mem::take(&mut self.scratch_commands);
-            for command in commands.drain(..) {
-                self.apply_command(command, &mut emitted_events);
-                next_events.append(&mut emitted_events);
+            if self.auto_spawn_enabled {
+                self.spawning
+                    .handle(&events, play_mode, &spawners, &mut self.scratch_commands);
+                let mut commands = std::mem::take(&mut self.scratch_commands);
+                for command in commands.drain(..) {
+                    self.apply_command(command, &mut emitted_events);
+                    next_events.append(&mut emitted_events);
+                }
+                self.scratch_commands = commands;
             }
-            self.scratch_commands = commands;
 
             self.scratch_commands.clear();
             if play_mode == PlayMode::Attack {
@@ -1528,6 +1537,7 @@ mod tests {
             None,
             None,
             None,
+            Some(ControlPanelView::new(200.0, Color::from_rgb_u8(0, 0, 0))),
         )
     }
 
@@ -1612,6 +1622,10 @@ mod tests {
     #[test]
     fn populate_scene_interpolates_bug_positions_between_cells() {
         let mut simulation = new_simulation();
+        simulation.queued_commands.push(Command::SetPlayMode {
+            mode: PlayMode::Attack,
+        });
+        simulation.advance(Duration::ZERO);
         let spawner = query::bug_spawners(simulation.world())
             .into_iter()
             .next()
@@ -1730,6 +1744,10 @@ mod tests {
     #[test]
     fn interpolated_bug_position_returns_cell_center_without_motion() {
         let mut simulation = new_simulation();
+        simulation.queued_commands.push(Command::SetPlayMode {
+            mode: PlayMode::Attack,
+        });
+        simulation.advance(Duration::ZERO);
         let spawner = query::bug_spawners(simulation.world())
             .into_iter()
             .next()
@@ -1883,6 +1901,11 @@ mod tests {
     }
 
     fn enter_builder_mode(simulation: &mut Simulation) {
+        if query::play_mode(simulation.world()) == PlayMode::Builder {
+            simulation.advance(Duration::ZERO);
+            return;
+        }
+
         simulation.handle_input(FrameInput {
             mode_toggle: true,
             ..FrameInput::default()
@@ -1912,7 +1935,7 @@ mod tests {
         assert_eq!(
             simulation.queued_commands,
             vec![Command::SetPlayMode {
-                mode: PlayMode::Builder,
+                mode: PlayMode::Attack,
             }]
         );
         assert!(!simulation.pending_input.mode_toggle);
@@ -1934,7 +1957,7 @@ mod tests {
         assert_eq!(
             simulation.queued_commands,
             vec![Command::SetPlayMode {
-                mode: PlayMode::Builder,
+                mode: PlayMode::Attack,
             }]
         );
         assert_eq!(
@@ -1952,7 +1975,6 @@ mod tests {
         let mut simulation = new_simulation();
         let initial_tile = TileSpacePosition::from_indices(0, 1);
         simulation.handle_input(FrameInput {
-            mode_toggle: true,
             cursor_world_space: Some(Vec2::new(16.0, 48.0)),
             cursor_tile_space: Some(initial_tile),
             ..FrameInput::default()
@@ -1996,7 +2018,7 @@ mod tests {
     }
 
     #[test]
-    fn advance_spawns_bug_after_interval() {
+    fn advance_does_not_spawn_bug_without_wave() {
         let mut simulation = new_simulation();
 
         assert!(query::bug_view(simulation.world()).into_vec().is_empty());
@@ -2005,18 +2027,13 @@ mod tests {
         assert!(query::bug_view(simulation.world()).into_vec().is_empty());
 
         simulation.advance(Duration::from_millis(500));
-        assert_eq!(query::bug_view(simulation.world()).into_vec().len(), 1);
+        assert!(query::bug_view(simulation.world()).into_vec().is_empty());
     }
 
     #[test]
-    fn builder_mode_pauses_spawning() {
+    fn automatic_spawning_disabled_in_both_modes() {
         let mut simulation = new_simulation();
 
-        simulation.handle_input(FrameInput {
-            mode_toggle: true,
-            ..FrameInput::default()
-        });
-        simulation.advance(Duration::ZERO);
         simulation.advance(Duration::from_secs(2));
         assert!(query::bug_view(simulation.world()).into_vec().is_empty());
 
@@ -2027,7 +2044,7 @@ mod tests {
         simulation.advance(Duration::ZERO);
         simulation.advance(Duration::from_secs(1));
 
-        assert_eq!(query::bug_view(simulation.world()).into_vec().len(), 1);
+        assert!(query::bug_view(simulation.world()).into_vec().is_empty());
     }
 
     #[test]

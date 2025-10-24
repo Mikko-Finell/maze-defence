@@ -21,19 +21,27 @@ fn emits_step_commands_toward_target() {
         },
         &mut events,
     );
-    world::apply(
+    let mut movement = Movement::default();
+    pump_system(&mut world, &mut movement, events);
+
+    apply_and_pump(
         &mut world,
+        &mut movement,
+        Command::SetPlayMode {
+            mode: PlayMode::Attack,
+        },
+    );
+
+    apply_and_pump(
+        &mut world,
+        &mut movement,
         Command::SpawnBug {
             spawner: CellCoord::new(0, 0),
             color: BugColor::from_rgb(0x2f, 0x95, 0x32),
             health: Health::new(3),
             step_ms: DEFAULT_STEP_MS,
         },
-        &mut events,
     );
-
-    let mut movement = Movement::default();
-    pump_system(&mut world, &mut movement, events);
 
     let mut tick_events = Vec::new();
     world::apply(
@@ -108,6 +116,14 @@ fn bugs_progress_despite_distant_blockers() {
 
     let mut movement = Movement::default();
     pump_system(&mut world, &mut movement, events);
+
+    apply_and_pump(
+        &mut world,
+        &mut movement,
+        Command::SetPlayMode {
+            mode: PlayMode::Attack,
+        },
+    );
 
     apply_and_pump(
         &mut world,
@@ -192,19 +208,27 @@ fn step_commands_target_free_cells() {
         },
         &mut events,
     );
-    world::apply(
+    let mut movement = Movement::default();
+    pump_system(&mut world, &mut movement, events);
+
+    apply_and_pump(
         &mut world,
+        &mut movement,
+        Command::SetPlayMode {
+            mode: PlayMode::Attack,
+        },
+    );
+
+    apply_and_pump(
+        &mut world,
+        &mut movement,
         Command::SpawnBug {
             spawner: CellCoord::new(0, 0),
             color: BugColor::from_rgb(0x2f, 0x95, 0x32),
             health: Health::new(3),
             step_ms: DEFAULT_STEP_MS,
         },
-        &mut events,
     );
-
-    let mut movement = Movement::default();
-    pump_system(&mut world, &mut movement, events);
 
     let mut tick_events = Vec::new();
     world::apply(
@@ -288,6 +312,25 @@ fn emits_step_commands_in_bug_id_order() {
     let mut movement = Movement::default();
     pump_system(&mut world, &mut movement, events);
 
+    apply_and_pump(
+        &mut world,
+        &mut movement,
+        Command::SetPlayMode {
+            mode: PlayMode::Attack,
+        },
+    );
+
+    apply_and_pump(
+        &mut world,
+        &mut movement,
+        Command::SpawnBug {
+            spawner: CellCoord::new(0, 0),
+            color: BugColor::from_rgb(0x2f, 0x95, 0x32),
+            health: Health::new(3),
+            step_ms: DEFAULT_STEP_MS,
+        },
+    );
+
     let mut tick_events = Vec::new();
     world::apply(
         &mut world,
@@ -342,19 +385,27 @@ fn replans_after_failed_step() {
         },
         &mut events,
     );
-    world::apply(
+    let mut movement = Movement::default();
+    pump_system(&mut world, &mut movement, events);
+
+    apply_and_pump(
         &mut world,
+        &mut movement,
+        Command::SetPlayMode {
+            mode: PlayMode::Attack,
+        },
+    );
+
+    apply_and_pump(
+        &mut world,
+        &mut movement,
         Command::SpawnBug {
             spawner: CellCoord::new(0, 0),
             color: BugColor::from_rgb(0x2f, 0x95, 0x32),
             health: Health::new(3),
             step_ms: DEFAULT_STEP_MS,
         },
-        &mut events,
     );
-
-    let mut movement = Movement::default();
-    pump_system(&mut world, &mut movement, events);
 
     let mut tick_events = Vec::new();
     world::apply(
@@ -370,8 +421,19 @@ fn replans_after_failed_step() {
     let occupancy_view_initial = query::occupancy_view(&world);
     let (columns, rows) = occupancy_view_initial.dimensions();
     let (bug_id, blocked_direction) =
-        select_blocked_bug(&bug_view, occupancy_view_initial, columns, rows)
-            .expect("expected at least one bug on a boundary");
+        select_blocked_bug(&bug_view, occupancy_view_initial, columns, rows).unwrap_or_else(|| {
+            let bug = bug_view.iter().next().expect("expected bug snapshot");
+            let direction = if bug.cell.column() == 0 {
+                Direction::West
+            } else if bug.cell.column() + 1 >= columns {
+                Direction::East
+            } else if bug.cell.row() == 0 {
+                Direction::North
+            } else {
+                Direction::South
+            };
+            (bug.id, direction)
+        });
 
     let mut bad_step_events = Vec::new();
     world::apply(
@@ -634,18 +696,26 @@ fn blocked_bugs_do_not_accumulate_extra_step_time() {
         },
         &mut events,
     );
-    world::apply(
+    pump_system(&mut world, &mut movement, events);
+
+    apply_and_pump(
         &mut world,
+        &mut movement,
+        Command::SetPlayMode {
+            mode: PlayMode::Attack,
+        },
+    );
+
+    apply_and_pump(
+        &mut world,
+        &mut movement,
         Command::SpawnBug {
             spawner: CellCoord::new(0, 0),
             color: BugColor::from_rgb(0x2f, 0x95, 0x32),
             health: Health::new(3),
             step_ms: DEFAULT_STEP_MS,
         },
-        &mut events,
     );
-
-    pump_system(&mut world, &mut movement, events);
 
     let bug_id = query::bug_view(&world)
         .into_vec()

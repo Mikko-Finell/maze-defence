@@ -833,6 +833,23 @@ impl SceneProjectile {
     }
 }
 
+/// Describes the layout and styling of the control panel rendered next to the maze.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ControlPanelView {
+    /// Width of the panel in logical pixels.
+    pub width: f32,
+    /// Background color applied to the panel.
+    pub background: Color,
+}
+
+impl ControlPanelView {
+    /// Creates a new control panel descriptor.
+    #[must_use]
+    pub const fn new(width: f32, background: Color) -> Self {
+        Self { width, background }
+    }
+}
+
 /// Scene description combining the tile grid, perimeter wall colour and inhabitants.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Scene {
@@ -862,6 +879,8 @@ pub struct Scene {
     pub active_tower_footprint_tiles: Option<Vec2>,
     /// Feedback about the last tower placement/removal attempt.
     pub tower_feedback: Option<TowerInteractionFeedback>,
+    /// Optional descriptor for the UI control panel.
+    pub control_panel: Option<ControlPanelView>,
 }
 
 impl Scene {
@@ -882,6 +901,7 @@ impl Scene {
         tower_preview: Option<TowerPreview>,
         active_tower_footprint_tiles: Option<Vec2>,
         tower_feedback: Option<TowerInteractionFeedback>,
+        control_panel: Option<ControlPanelView>,
     ) -> Self {
         Self {
             tile_grid,
@@ -897,6 +917,7 @@ impl Scene {
             tower_preview,
             active_tower_footprint_tiles,
             tower_feedback,
+            control_panel,
         }
     }
 
@@ -1358,6 +1379,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
 
         assert_eq!(scene.tile_grid, tile_grid);
@@ -1373,6 +1395,7 @@ mod tests {
         assert!(scene.hovered_tower.is_none());
         assert!(scene.tower_feedback.is_none());
         assert!(scene.ground.is_none());
+        assert!(scene.control_panel.is_none());
     }
 
     #[test]
@@ -1426,6 +1449,7 @@ mod tests {
                 origin: maze_defence_core::CellCoord::new(4, 6),
                 reason: PlacementError::Occupied,
             }),
+            None,
         );
 
         assert_eq!(scene.play_mode, PlayMode::Builder);
@@ -1445,6 +1469,7 @@ mod tests {
             })
         );
         assert_eq!(scene.tower_targets, vec![target_line]);
+        assert!(scene.control_panel.is_none());
         assert!(scene.projectiles.is_empty());
         assert!(scene.ground.is_none());
     }
@@ -1471,6 +1496,7 @@ mod tests {
             Vec::new(),
             None,
             PlayMode::Attack,
+            None,
             None,
             None,
             None,
