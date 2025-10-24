@@ -2,6 +2,8 @@
 
 This codebase **will not rely on developer willpower** — architectural integrity is enforced by *structure, automation, and tests*.
 
+This document is a style guide. Refer to `architecture.md` for the current engine model, keep that document up to date if you add a new system or significantly change an existing one. It will tell you where things are, how things work, and where to add new things. Read it.
+
 ---
 
 ## 1. Crate & Module Structure (Non-Negotiable)
