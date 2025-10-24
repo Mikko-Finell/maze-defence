@@ -65,13 +65,30 @@ Objective: enable a trivial but repeatable “wave → kill → reward → build
 
 ### Phase 2 — Player Difficulty Choice (Risk vs Reward)
 
-* Before spawning wave, prompt for:
-
-  * **Normal** → same tier.
-  * **Hard** → +1 or +2 tier, with bonus gold reward.
-* If Hard is successfully cleared → permanently increment base tier by 1.
+* Before each wave, surface **Normal** and **Hard** buttons in the control panel.
+  * **Normal** → run the wave at the current tier.
+  * **Hard** → run the wave at `tier + 1`, award bonus gold on victory.
+* If Hard is successfully cleared → permanently increment the base tier by 1.
 
 **Outcome:** First strategic choice loop (risk/reward). Still uses hand-authored wave template.
+
+**Phase 2 progression roadmap**
+
+1. **Expose difficulty buttons in the UI** [TODO]
+   * Extend the adapter panel layout so it renders side-by-side **Normal** and **Hard** buttons before the wave trigger controls.
+   * Wire button presses to emit a new `Command::StartWave { difficulty }`, queuing it like existing manual actions so determinism is preserved.
+2. **Record pending difficulty inside the world** [TODO]
+   * Introduce a `PendingWaveDifficulty` enum stored on `maze_defence_world::World` and surface it through `world::query::pending_wave_difficulty` alongside an `Event::PendingWaveDifficultyChanged`.
+   * Ensure configuration commands (`Command::ConfigureTileGrid`, resets) initialise the field and emit change events so adapters remain message-driven.
+3. **Resolve wave launches based on difficulty** [TODO]
+   * Update the spawning system to consume the new enum and treat **Hard** as `tier + 1` when generating wave contents and gold multipliers, keeping **Normal** unchanged.
+   * When `Command::StartWave` is applied, compute the effective parameters (difficulty, `tier_effective`, `reward_multiplier`, any pressure scalar) and emit a factual `Event::WaveStarted { … }` carrying them alongside a `wave_id` so downstream systems can react without re-querying.
+4. **Apply Hard victory promotions** [TODO]
+   * Extend `Command::ResolveRound` handling to detect victories tagged as **Hard**, using the stored `wave_id` / difficulty context from `Event::WaveStarted`, increment the permanent tier by one, and emit a new `Event::HardWinAchieved` for UI feedback.
+   * Saturate tier increases at the desired cap (if any) while leaving loss handling untouched.
+5. **Display difficulty state to the player** [TODO]
+   * Enrich `adapters/rendering::Scene` with difficulty selection feedback (e.g., highlight the active button, show bonus reward preview).
+   * Cover the selection loop with a headless harness test that drives `Normal` and `Hard` launches, asserting tier deltas and gold payouts across both paths.
 
 ---
 
