@@ -5,7 +5,7 @@ use std::{
 };
 
 use maze_defence_core::{
-    BugColor, BugSnapshot, CellCoord, Command, Event, Health, NavigationFieldView, PlayMode,
+    BugColor, BugSnapshot, CellCoord, Command, Event, Gold, Health, NavigationFieldView, PlayMode,
     TileCoord, TowerKind,
 };
 use maze_defence_system_movement::Movement;
@@ -27,7 +27,7 @@ fn dense_corridor_replay_is_stable() {
 
 #[test]
 fn side_hallway_diversion_replay_is_stable() {
-    assert_stable_replay(side_hallway_diversion_commands(), 0x2c4f_eb03_928d_2b06);
+    assert_stable_replay(side_hallway_diversion_commands(), 0x0629_bd96_1665_883c);
 }
 
 #[test]
@@ -525,6 +525,9 @@ enum EventRecord {
         kind: TowerKind,
         region: maze_defence_core::CellRect,
     },
+    GoldChanged {
+        amount: Gold,
+    },
 }
 
 impl From<&Event> for EventRecord {
@@ -563,6 +566,7 @@ impl From<&Event> for EventRecord {
                 kind: *kind,
                 region: *region,
             },
+            Event::GoldChanged { amount } => Self::GoldChanged { amount: *amount },
             Event::TowerRemoved { .. }
             | Event::TowerPlacementRejected { .. }
             | Event::TowerRemovalRejected { .. }

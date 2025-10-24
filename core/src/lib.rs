@@ -246,6 +246,11 @@ pub enum Event {
         /// Mode that became active after processing commands.
         mode: PlayMode,
     },
+    /// Reports that the player's gold balance changed.
+    GoldChanged {
+        /// Total gold owned after the adjustment.
+        amount: Gold,
+    },
     /// Confirms that a bug was created by a spawner.
     BugSpawned {
         /// Identifier assigned to the newly spawned bug.
@@ -452,6 +457,39 @@ impl Damage {
     #[must_use]
     pub const fn get(&self) -> u32 {
         self.0
+    }
+}
+
+/// Amount of gold owned by the defending player.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct Gold(u32);
+
+impl Gold {
+    /// Canonical zero value representing a lack of gold.
+    pub const ZERO: Self = Self(0);
+
+    /// Creates a new gold value from the provided raw integer.
+    #[must_use]
+    pub const fn new(value: u32) -> Self {
+        Self(value)
+    }
+
+    /// Retrieves the underlying gold amount.
+    #[must_use]
+    pub const fn get(&self) -> u32 {
+        self.0
+    }
+
+    /// Adds another gold amount while saturating at `u32::MAX`.
+    #[must_use]
+    pub const fn saturating_add(self, other: Self) -> Self {
+        Self(self.0.saturating_add(other.0))
+    }
+
+    /// Subtracts another gold amount while saturating at zero.
+    #[must_use]
+    pub const fn saturating_sub(self, other: Self) -> Self {
+        Self(self.0.saturating_sub(other.0))
     }
 }
 
@@ -1342,6 +1380,14 @@ impl TowerKind {
             Self::Basic => 1_000,
         }
     }
+
+    /// Gold required to construct a tower of this kind.
+    #[must_use]
+    pub const fn build_cost(self) -> Gold {
+        match self {
+            Self::Basic => Gold::new(10),
+        }
+    }
 }
 
 /// Reasons a tower placement request may be rejected by the world.
@@ -1357,6 +1403,8 @@ pub enum PlacementError {
     Occupied,
     /// The placement would block all paths between the exit and bug spawners.
     PathBlocked,
+    /// The world cannot afford the tower's construction cost.
+    InsufficientFunds,
 }
 
 /// Reasons a tower removal request may be rejected by the world.
@@ -1411,9 +1459,9 @@ mod tests {
     use std::num::NonZeroU32;
 
     use super::{
-        CellCoord, CellRect, CellRectSize, Damage, Health, NavigationFieldView, PlacementError,
-        ProjectileId, ProjectileRejection, RemovalError, TowerId, TowerKind, CONGESTION_LOOKAHEAD,
-        CONGESTION_WEIGHT, DETOUR_RADIUS,
+        CellCoord, CellRect, CellRectSize, Damage, Gold, Health, NavigationFieldView,
+        PlacementError, ProjectileId, ProjectileRejection, RemovalError, TowerId, TowerKind,
+        CONGESTION_LOOKAHEAD, CONGESTION_WEIGHT, DETOUR_RADIUS,
     };
     use serde::{de::DeserializeOwned, Serialize};
 
@@ -1462,6 +1510,12 @@ mod tests {
     }
 
     #[test]
+    fn gold_round_trips_through_bincode() {
+        let gold = Gold::new(27);
+        assert_round_trip(&gold);
+    }
+
+    #[test]
     fn health_round_trips_through_bincode() {
         let health = Health::new(9);
         assert_round_trip(&health);
@@ -1476,6 +1530,7 @@ mod tests {
     fn placement_error_round_trips_through_bincode() {
         assert_round_trip(&PlacementError::Occupied);
         assert_round_trip(&PlacementError::PathBlocked);
+        assert_round_trip(&PlacementError::InsufficientFunds);
     }
 
     #[test]

@@ -27,8 +27,9 @@ mod towers;
 use towers::{footprint_for, TowerRegistry, TowerState};
 
 use maze_defence_core::{
-    BugColor, BugId, CellCoord, CellPointHalf, Command, Damage, Direction, Event, Health, PlayMode,
-    ProjectileId, ReservationClaim, Target, TargetCell, TileCoord, TileGrid, WELCOME_BANNER,
+    BugColor, BugId, CellCoord, CellPointHalf, Command, Damage, Direction, Event, Gold, Health,
+    PlayMode, ProjectileId, ReservationClaim, Target, TargetCell, TileCoord, TileGrid,
+    WELCOME_BANNER,
 };
 
 #[cfg(any(test, feature = "tower_scaffolding"))]
@@ -54,6 +55,7 @@ const SIDE_BORDER_CELL_LAYERS: u32 = 1;
 const TOP_BORDER_CELL_LAYERS: u32 = 1;
 const BOTTOM_BORDER_CELL_LAYERS: u32 = 1;
 const EXIT_CELL_LAYERS: u32 = 1;
+const INITIAL_GOLD: Gold = Gold::new(100);
 
 /// Represents the authoritative Maze Defence world state.
 #[derive(Debug)]
@@ -74,6 +76,7 @@ pub struct World {
     walls: MazeWalls,
     navigation_field: NavigationField,
     navigation_dirty: bool,
+    gold: Gold,
     #[cfg(any(test, feature = "tower_scaffolding"))]
     towers: TowerRegistry,
     #[cfg(any(test, feature = "tower_scaffolding"))]
@@ -114,6 +117,7 @@ impl World {
             walls,
             navigation_field: NavigationField::default(),
             navigation_dirty: true,
+            gold: INITIAL_GOLD,
             #[cfg(any(test, feature = "tower_scaffolding"))]
             towers: TowerRegistry::new(),
             #[cfg(any(test, feature = "tower_scaffolding"))]
@@ -139,6 +143,21 @@ impl World {
         self.occupancy.clear();
         self.reservations.clear();
         self.next_bug_id = 0;
+    }
+
+    fn update_gold(&mut self, amount: Gold, out_events: &mut Vec<Event>) {
+        if self.gold == amount {
+            return;
+        }
+
+        self.gold = amount;
+        out_events.push(Event::GoldChanged { amount });
+    }
+
+    #[cfg(test)]
+    #[allow(dead_code)]
+    fn set_gold_for_tests(&mut self, amount: Gold) {
+        self.gold = amount;
     }
 
     fn mark_navigation_dirty(&mut self) {
@@ -654,6 +673,9 @@ impl World {
         if let Some(cell) = death_cell {
             self.occupancy.vacate(cell);
             self.remove_bug_at_index(index);
+            let reward = Gold::new(1);
+            let updated = self.gold.saturating_add(reward);
+            self.update_gold(updated, out_events);
             out_events.push(Event::BugDied { bug: target });
         }
 
@@ -737,6 +759,19 @@ impl World {
             });
             return;
         }
+
+        let cost = kind.build_cost();
+        if self.gold.get() < cost.get() {
+            out_events.push(Event::TowerPlacementRejected {
+                kind,
+                origin,
+                reason: PlacementError::InsufficientFunds,
+            });
+            return;
+        }
+
+        let remaining = self.gold.saturating_sub(cost);
+        self.update_gold(remaining, out_events);
 
         let id = self.towers.allocate();
         self.mark_tower_region(region, true);
@@ -991,7 +1026,7 @@ fn cell_rect_contains(region: CellRect, cell: CellCoord) -> bool {
 pub mod query {
     use super::{Bug, World};
     use maze_defence_core::{
-        BugSnapshot, BugView, CellCoord, Goal, NavigationFieldView, OccupancyView, PlayMode,
+        BugSnapshot, BugView, CellCoord, Goal, Gold, NavigationFieldView, OccupancyView, PlayMode,
         ProjectileSnapshot, ReservationLedgerView, Target, TileGrid,
     };
 
@@ -1006,6 +1041,12 @@ pub mod query {
     #[must_use]
     pub fn play_mode(world: &World) -> PlayMode {
         world.play_mode
+    }
+
+    /// Reports the amount of gold owned by the defender.
+    #[must_use]
+    pub fn gold(world: &World) -> Gold {
+        world.gold
     }
 
     /// Retrieves the welcome banner that adapters may display to players.
@@ -2319,11 +2360,16 @@ mod tests {
 
         assert_eq!(
             events,
-            vec![Event::TowerPlaced {
-                tower: TowerId::new(0),
-                kind: TowerKind::Basic,
-                region: CellRect::from_origin_and_size(origin, footprint),
-            }],
+            vec![
+                Event::GoldChanged {
+                    amount: Gold::new(90),
+                },
+                Event::TowerPlaced {
+                    tower: TowerId::new(0),
+                    kind: TowerKind::Basic,
+                    region: CellRect::from_origin_and_size(origin, footprint),
+                },
+            ],
         );
         events.clear();
 
@@ -3234,6 +3280,9 @@ mod tests {
                     bug: bug_id,
                     remaining: Health::ZERO,
                 },
+                Event::GoldChanged {
+                    amount: Gold::new(91),
+                },
                 Event::BugDied { bug: bug_id },
                 Event::ProjectileHit {
                     projectile: projectile_id,
@@ -3362,7 +3411,11 @@ mod tests {
             &mut events,
         );
         let first_tower = match events.as_slice() {
-            [Event::TowerPlaced { tower, .. }] => *tower,
+            [Event::GoldChanged { amount }, Event::TowerPlaced { tower, .. }]
+                if *amount == Gold::new(90) =>
+            {
+                *tower
+            }
             other => panic!("unexpected events when placing first tower: {other:?}"),
         };
         events.clear();
@@ -3377,7 +3430,11 @@ mod tests {
             &mut events,
         );
         let second_tower = match events.as_slice() {
-            [Event::TowerPlaced { tower, .. }] => *tower,
+            [Event::GoldChanged { amount }, Event::TowerPlaced { tower, .. }]
+                if *amount == Gold::new(80) =>
+            {
+                *tower
+            }
             other => panic!("unexpected events when placing second tower: {other:?}"),
         };
         events.clear();
@@ -3458,6 +3515,9 @@ mod tests {
                 Event::BugDamaged {
                     bug: bug_id,
                     remaining: Health::ZERO,
+                },
+                Event::GoldChanged {
+                    amount: Gold::new(81),
                 },
                 Event::BugDied { bug: bug_id },
                 Event::ProjectileHit {
@@ -3617,14 +3677,19 @@ mod tests {
 
         assert_eq!(
             events,
-            vec![Event::TowerPlaced {
-                tower: TowerId::new(0),
-                kind: TowerKind::Basic,
-                region: CellRect::from_origin_and_size(
-                    first_origin,
-                    super::footprint_for(TowerKind::Basic),
-                ),
-            }]
+            vec![
+                Event::GoldChanged {
+                    amount: Gold::new(90),
+                },
+                Event::TowerPlaced {
+                    tower: TowerId::new(0),
+                    kind: TowerKind::Basic,
+                    region: CellRect::from_origin_and_size(
+                        first_origin,
+                        super::footprint_for(TowerKind::Basic),
+                    ),
+                },
+            ]
         );
         events.clear();
 
@@ -3659,14 +3724,19 @@ mod tests {
 
         assert_eq!(
             events,
-            vec![Event::TowerPlaced {
-                tower: TowerId::new(1),
-                kind: TowerKind::Basic,
-                region: CellRect::from_origin_and_size(
-                    second_origin,
-                    super::footprint_for(TowerKind::Basic),
-                ),
-            }]
+            vec![
+                Event::GoldChanged {
+                    amount: Gold::new(80),
+                },
+                Event::TowerPlaced {
+                    tower: TowerId::new(1),
+                    kind: TowerKind::Basic,
+                    region: CellRect::from_origin_and_size(
+                        second_origin,
+                        super::footprint_for(TowerKind::Basic),
+                    ),
+                },
+            ]
         );
     }
 
@@ -3764,11 +3834,16 @@ mod tests {
 
         assert_eq!(
             events,
-            vec![Event::TowerPlaced {
-                tower: TowerId::new(0),
-                kind: TowerKind::Basic,
-                region,
-            }]
+            vec![
+                Event::GoldChanged {
+                    amount: Gold::new(90),
+                },
+                Event::TowerPlaced {
+                    tower: TowerId::new(0),
+                    kind: TowerKind::Basic,
+                    region,
+                },
+            ]
         );
 
         for column_offset in 0..region.size().width() {
@@ -5145,7 +5220,7 @@ mod tests {
         assert_eq!(first, second, "combat replay diverged between runs");
 
         let fingerprint = first.fingerprint();
-        let expected = 0x11a5_36ef_2105_9367;
+        let expected = 0x2b8a_feac_0266_d4aa;
         assert_eq!(
             fingerprint, expected,
             "combat replay fingerprint mismatch: {fingerprint:#x}"
@@ -5226,7 +5301,11 @@ mod tests {
         commands.push(place_near.clone());
         apply(&mut world, place_near, &mut events);
         let near_tower = match events.as_slice() {
-            [Event::TowerPlaced { tower, .. }] => *tower,
+            [Event::GoldChanged { amount }, Event::TowerPlaced { tower, .. }]
+                if *amount == Gold::new(90) =>
+            {
+                *tower
+            }
             other => panic!("unexpected events when placing near tower: {other:?}"),
         };
         events.clear();
@@ -5239,7 +5318,11 @@ mod tests {
         commands.push(place_far.clone());
         apply(&mut world, place_far, &mut events);
         let far_tower = match events.as_slice() {
-            [Event::TowerPlaced { tower, .. }] => *tower,
+            [Event::GoldChanged { amount }, Event::TowerPlaced { tower, .. }]
+                if *amount == Gold::new(80) =>
+            {
+                *tower
+            }
             other => panic!("unexpected events when placing far tower: {other:?}"),
         };
         events.clear();
@@ -5328,13 +5411,14 @@ mod tests {
         commands.push(resolve_first.clone());
         apply(&mut world, resolve_first, &mut events);
         match events.as_slice() {
-            [Event::TimeAdvanced { dt }, Event::BugDamaged { bug, remaining }, Event::BugDied { bug: died_bug }, Event::ProjectileHit {
+            [Event::TimeAdvanced { dt }, Event::BugDamaged { bug, remaining }, Event::GoldChanged { amount }, Event::BugDied { bug: died_bug }, Event::ProjectileHit {
                 projectile,
                 target,
                 damage,
             }] if *dt == first_dt
                 && *bug == bug_id
                 && *remaining == Health::ZERO
+                && *amount == Gold::new(81)
                 && *died_bug == bug_id
                 && *projectile == first_id
                 && *target == bug_id
@@ -5525,6 +5609,9 @@ mod tests {
         TimeAdvanced {
             dt_micros: u128,
         },
+        GoldChanged {
+            amount: Gold,
+        },
     }
 
     impl From<Event> for CombatEventRecord {
@@ -5584,6 +5671,7 @@ mod tests {
                 Event::TimeAdvanced { dt } => Self::TimeAdvanced {
                     dt_micros: dt.as_micros(),
                 },
+                Event::GoldChanged { amount } => Self::GoldChanged { amount },
                 other => panic!("unexpected event emitted during combat replay: {other:?}"),
             }
         }

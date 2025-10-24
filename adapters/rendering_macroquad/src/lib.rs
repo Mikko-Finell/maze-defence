@@ -22,8 +22,9 @@ use anyhow::{Context, Result};
 use glam::Vec2;
 use macroquad::math::Vec2 as MacroquadVec2;
 use macroquad::{
-    color::BLACK,
+    color::{BLACK, WHITE},
     input::{is_key_pressed, is_mouse_button_pressed, mouse_position, KeyCode, MouseButton},
+    text::{draw_text_ex, TextParams},
 };
 use maze_defence_core::{CellRect, PlayMode, TowerId, TowerKind};
 use maze_defence_rendering::{
@@ -610,6 +611,15 @@ fn draw_control_panel(scene: &Scene, screen_width: f32, screen_height: f32) {
         screen_height,
         to_macroquad_color(background),
     );
+
+    if let Some(gold) = scene.gold {
+        let text = format!("Gold: {}", gold.amount().get());
+        let mut params = TextParams::default();
+        params.font_size = 32;
+        params.font_scale = 1.0;
+        params.color = WHITE;
+        draw_text_ex(&text, left + 16.0, 40.0, params);
+    }
 }
 
 fn active_builder_preview(scene: &Scene) -> Option<TowerPreview> {
@@ -1408,10 +1418,11 @@ mod tests {
     use super::*;
     use glam::Vec2;
     use maze_defence_core::{
-        BugId, CellCoord, CellRect, CellRectSize, ProjectileId, TowerId, TowerKind,
+        BugId, CellCoord, CellRect, CellRectSize, Gold, ProjectileId, TowerId, TowerKind,
     };
     use maze_defence_rendering::{
-        BugHealthPresentation, ControlPanelView, SpriteInstance, SpriteKey, TowerTargetLine,
+        BugHealthPresentation, ControlPanelView, GoldPresentation, SpriteInstance, SpriteKey,
+        TowerTargetLine,
     };
     use std::{collections::HashMap, f32::consts::FRAC_PI_2, time::Duration};
 
@@ -1441,6 +1452,7 @@ mod tests {
             None,
             None,
             Some(ControlPanelView::new(200.0, Color::from_rgb_u8(0, 0, 0))),
+            Some(GoldPresentation::new(Gold::new(0))),
         )
     }
 
@@ -1566,6 +1578,7 @@ mod tests {
                 None,
                 None,
                 Some(ControlPanelView::new(200.0, Color::from_rgb_u8(0, 0, 0))),
+                Some(GoldPresentation::new(Gold::new(0))),
             );
             let metrics = SceneMetrics::from_scene(&scene, screen_width, screen_height);
 
