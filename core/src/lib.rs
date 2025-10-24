@@ -280,6 +280,15 @@ impl AttackBugDescriptor {
     }
 }
 
+/// Outcome emitted when resolving a round.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum RoundOutcome {
+    /// Indicates that the defenders successfully cleared the round.
+    Win,
+    /// Indicates that the defenders lost the round.
+    Loss,
+}
+
 /// Commands that express all permissible world mutations.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Command {
@@ -346,6 +355,11 @@ pub enum Command {
         /// Identifier of the tower targeted for removal.
         tower: TowerId,
     },
+    /// Resolves the previously concluded round with the provided outcome.
+    ResolveRound {
+        /// Outcome that should be applied to the world state.
+        outcome: RoundOutcome,
+    },
 }
 
 /// Events broadcast by the world after processing commands.
@@ -386,6 +400,11 @@ pub enum Event {
     GoldChanged {
         /// Total gold owned after the adjustment.
         amount: Gold,
+    },
+    /// Reports that the experience's difficulty tier changed.
+    DifficultyTierChanged {
+        /// Difficulty tier active after the adjustment.
+        tier: u32,
     },
     /// Confirms that a bug was created by a spawner.
     BugSpawned {

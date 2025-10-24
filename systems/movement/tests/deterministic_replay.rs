@@ -578,6 +578,7 @@ impl From<&Event> for EventRecord {
             | Event::ProjectileHit { .. }
             | Event::ProjectileExpired { .. }
             | Event::ProjectileRejected { .. }
+            | Event::DifficultyTierChanged { .. }
             | Event::BugDamaged { .. }
             | Event::BugDied { .. } => {
                 unreachable!("tower events are not expected in movement replay tests")
