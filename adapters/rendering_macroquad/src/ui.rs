@@ -91,7 +91,7 @@ pub(crate) fn draw_control_panel_ui(ui: &mut Ui, context: ControlPanelUiContext)
             PlayMode::Builder => "Mode: Builder",
         };
         ui.label(None, mode_label);
-        ui.label(None, "Press T to toggle or use the button below.");
+        ui.label(None, "Use the button below to switch modes.");
 
         if ui.button(None, "Toggle Mode") {
             mode_toggle = true;

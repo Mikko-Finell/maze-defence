@@ -55,17 +55,50 @@ pub struct ControlPanelInputState {
 }
 
 impl ControlPanelInputState {
-    /// Consumes any latched UI interactions and merges them with the current frame's
-    /// physical input signal.
-    pub fn merge_mode_toggle(&mut self, physical_press: bool) -> bool {
+    /// Returns whether the UI requested a mode toggle and clears the latch so the
+    /// action fires only once.
+    pub fn take_mode_toggle(&mut self) -> bool {
         let latched = self.mode_toggle_latched;
         self.mode_toggle_latched = false;
-        physical_press || latched
+        latched
     }
 
     /// Records that the control-panel button requested a mode toggle this frame.
     pub fn register_mode_toggle(&mut self) {
         self.mode_toggle_latched = true;
+    }
+}
+
+/// Snapshot of edge-triggered keyboard shortcuts observed during a single frame.
+#[derive(Clone, Copy, Debug, Default)]
+struct KeyboardShortcuts {
+    /// `Q` or `Escape` to quit the game loop.
+    quit_requested: bool,
+    /// `T` toggles tower targeting line visibility.
+    toggle_target_lines: bool,
+    /// `H` toggles bug health-bar overlays.
+    toggle_bug_health_bars: bool,
+    /// `Enter` launches an attack wave.
+    spawn_wave: bool,
+    /// `Delete` removes the currently selected element.
+    delete_pressed: bool,
+}
+
+impl KeyboardShortcuts {
+    fn poll() -> Self {
+        let quit_requested = is_key_pressed(KeyCode::Escape) || is_key_pressed(KeyCode::Q);
+        let toggle_target_lines = is_key_pressed(KeyCode::T);
+        let toggle_bug_health_bars = is_key_pressed(KeyCode::H);
+        let spawn_wave = is_key_pressed(KeyCode::Enter);
+        let delete_pressed = is_key_pressed(KeyCode::Delete);
+
+        Self {
+            quit_requested,
+            toggle_target_lines,
+            toggle_bug_health_bars,
+            spawn_wave,
+            delete_pressed,
+        }
     }
 }
 
@@ -336,15 +369,16 @@ impl RenderingBackend for MacroquadBackend {
             let mut control_panel_input = ControlPanelInputState::default();
 
             loop {
-                if is_key_pressed(KeyCode::Escape) || is_key_pressed(KeyCode::Q) {
+                let keyboard = KeyboardShortcuts::poll();
+                if keyboard.quit_requested {
                     break;
                 }
 
-                if is_key_pressed(KeyCode::T) {
+                if keyboard.toggle_target_lines {
                     show_tower_target_lines = !show_tower_target_lines;
                 }
 
-                if is_key_pressed(KeyCode::H) {
+                if keyboard.toggle_bug_health_bars {
                     show_bug_health_bars = !show_bug_health_bars;
                 }
 
@@ -356,9 +390,9 @@ impl RenderingBackend for MacroquadBackend {
                 let dt_seconds = macroquad::time::get_frame_time();
                 let frame_dt = Duration::from_secs_f32(dt_seconds.max(0.0));
                 let metrics_before = SceneMetrics::from_scene(&scene, screen_width, screen_height);
-                let physical_mode_toggle = is_key_pressed(KeyCode::Space);
-                let mode_toggle = control_panel_input.merge_mode_toggle(physical_mode_toggle);
-                let frame_input = gather_frame_input(&scene, &metrics_before, mode_toggle);
+                let mode_toggle = control_panel_input.take_mode_toggle();
+                let frame_input =
+                    gather_frame_input(&scene, &metrics_before, mode_toggle, keyboard);
 
                 let simulation_breakdown = update_scene(frame_dt, frame_input, &mut scene);
 
@@ -563,21 +597,24 @@ impl SceneMetrics {
     }
 }
 
-fn gather_frame_input(scene: &Scene, metrics: &SceneMetrics, mode_toggle: bool) -> FrameInput {
+fn gather_frame_input(
+    scene: &Scene,
+    metrics: &SceneMetrics,
+    mode_toggle: bool,
+    keyboard: KeyboardShortcuts,
+) -> FrameInput {
     let (cursor_x, cursor_y) = mouse_position();
-    let spawn_wave = is_key_pressed(KeyCode::Enter);
     let confirm_click = is_mouse_button_pressed(MouseButton::Left);
     let remove_click = is_mouse_button_pressed(MouseButton::Right);
-    let delete_pressed = is_key_pressed(KeyCode::Delete);
     gather_frame_input_from_observations(
         scene,
         metrics,
         Vec2::new(cursor_x, cursor_y),
         mode_toggle,
-        spawn_wave,
+        keyboard.spawn_wave,
         confirm_click,
         remove_click,
-        delete_pressed,
+        keyboard.delete_pressed,
     )
 }
 
