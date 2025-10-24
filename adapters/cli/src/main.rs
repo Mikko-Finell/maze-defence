@@ -13,7 +13,6 @@ mod layout_transfer;
 
 use std::{
     collections::HashMap,
-    convert::TryFrom,
     f32::consts::{FRAC_PI_2, PI},
     fmt,
     str::FromStr,
@@ -716,7 +715,9 @@ impl Simulation {
 
         self.advance_bug_motions(dt);
         if !dt.is_zero() {
-            self.apply_command(Command::Tick { dt }, &mut self.pending_events);
+            let mut emitted = Vec::new();
+            self.apply_command(Command::Tick { dt }, &mut emitted);
+            self.pending_events.append(&mut emitted);
         }
 
         let events_profile = self.process_pending_events(builder_preview, builder_input);
@@ -960,6 +961,7 @@ impl Simulation {
         let mut events = std::mem::take(&mut self.pending_events);
         let mut next_events = Vec::new();
         let mut profile = ProcessEventsProfile::default();
+        let mut emitted_events = Vec::new();
 
         #[cfg(test)]
         {
@@ -991,9 +993,12 @@ impl Simulation {
             self.scratch_commands.clear();
             self.spawning
                 .handle(&events, play_mode, &spawners, &mut self.scratch_commands);
-            for command in self.scratch_commands.drain(..) {
-                self.apply_command(command, &mut next_events);
+            let mut commands = std::mem::take(&mut self.scratch_commands);
+            for command in commands.drain(..) {
+                self.apply_command(command, &mut emitted_events);
+                next_events.append(&mut emitted_events);
             }
+            self.scratch_commands = commands;
 
             self.scratch_commands.clear();
             if play_mode == PlayMode::Attack {
@@ -1015,9 +1020,12 @@ impl Simulation {
                 );
                 profile.add_pathfinding(pathfinding_start.elapsed());
             }
-            for command in self.scratch_commands.drain(..) {
-                self.apply_command(command, &mut next_events);
+            let mut commands = std::mem::take(&mut self.scratch_commands);
+            for command in commands.drain(..) {
+                self.apply_command(command, &mut emitted_events);
+                next_events.append(&mut emitted_events);
             }
+            self.scratch_commands = commands;
 
             self.refresh_tower_targets(play_mode);
 
@@ -1034,9 +1042,12 @@ impl Simulation {
             );
             builder_preview = None;
             builder_input = TowerBuilderInput::default();
-            for command in self.scratch_commands.drain(..) {
-                self.apply_command(command, &mut next_events);
+            let mut commands = std::mem::take(&mut self.scratch_commands);
+            for command in commands.drain(..) {
+                self.apply_command(command, &mut emitted_events);
+                next_events.append(&mut emitted_events);
             }
+            self.scratch_commands = commands;
 
             events.clear();
         }
@@ -1369,7 +1380,10 @@ impl Simulation {
         self.builder_preview
     }
 
+    #[cfg(test)]
     fn bug_step_ms(&self) -> u32 {
+        use std::convert::TryFrom;
+
         u32::try_from(self.bug_step_duration.as_millis()).unwrap_or(u32::MAX)
     }
 
@@ -1413,9 +1427,13 @@ impl Simulation {
             return;
         }
 
-        for command in self.queued_commands.drain(..) {
-            self.apply_command(command, &mut self.pending_events);
+        let mut emitted = Vec::new();
+        let mut queued = std::mem::take(&mut self.queued_commands);
+        for command in queued.drain(..) {
+            self.apply_command(command, &mut emitted);
+            self.pending_events.append(&mut emitted);
         }
+        self.queued_commands = queued;
     }
 }
 
