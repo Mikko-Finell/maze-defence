@@ -28,7 +28,7 @@ resolved cadence data explicitly.
 constructors/tests compile with explicit cadence arguments, and doctests cover
 `ready_for_step` behaviour.
 
-# 2) [TODO] World authority & accumulation (`world`)
+# 2) [DONE] World authority & accumulation (`world`)
 
 **Goal:** Persist cadence per bug and update tick/step flows without disturbing
 other movement logic.

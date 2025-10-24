@@ -213,7 +213,7 @@ impl World {
         cell: CellCoord,
         color: BugColor,
         health: Health,
-        _step_ms: u32,
+        step_ms: u32,
         out_events: &mut Vec<Event>,
     ) {
         if !self.bug_spawners.contains(cell) {
@@ -229,7 +229,7 @@ impl World {
         }
 
         let bug_id = self.next_bug_identifier();
-        let bug = Bug::new(bug_id, cell, color, health);
+        let bug = Bug::new(bug_id, cell, color, health, step_ms);
         let bug_health = bug.health();
         self.occupancy.occupy(bug_id, cell);
         let index = self.bugs.len();
@@ -274,7 +274,7 @@ impl World {
             let bug = &mut after[0];
             let from = bug.cell;
 
-            if bug.accumulator < self.step_quantum {
+            if bug.accum_ms < bug.step_ms {
                 continue;
             }
 
@@ -293,7 +293,7 @@ impl World {
             self.occupancy.vacate(from);
             self.occupancy.occupy(bug.id, next_cell);
             bug.advance(next_cell);
-            bug.accumulator = bug.accumulator.saturating_sub(self.step_quantum);
+            bug.accum_ms = bug.accum_ms.saturating_sub(bug.step_ms);
             out_events.push(Event::BugAdvanced {
                 bug_id: bug.id,
                 from,
@@ -398,7 +398,7 @@ pub fn apply(world: &mut World, command: Command, out_events: &mut Vec<Event>) {
                 }
             }
 
-            let dt_millis = dt.as_millis();
+            let dt_millis = u32::try_from(dt.as_millis()).unwrap_or(u32::MAX);
             let projectile_ids: Vec<_> = world.projectiles.keys().copied().collect();
             let mut completed = Vec::new();
             for projectile_id in projectile_ids {
@@ -411,7 +411,7 @@ pub fn apply(world: &mut World, command: Command, out_events: &mut Vec<Event>) {
 
                     let new_elapsed = projectile
                         .elapsed_ms
-                        .saturating_add(dt_millis)
+                        .saturating_add(u128::from(dt_millis))
                         .min(projectile.travel_time_ms);
                     projectile.elapsed_ms = new_elapsed;
 
@@ -429,9 +429,9 @@ pub fn apply(world: &mut World, command: Command, out_events: &mut Vec<Event>) {
                 world.resolve_projectile_completion(projectile_id, target, damage, out_events);
             }
 
-            let step_quantum = world.step_quantum;
             for bug in world.iter_bugs_mut() {
-                bug.accumulator = bug.accumulator.saturating_add(dt).min(step_quantum);
+                let advanced = bug.accum_ms.saturating_add(dt_millis);
+                bug.accum_ms = advanced.min(bug.step_ms);
             }
         }
         Command::ConfigureBugStep { step_duration } => {
@@ -1062,25 +1062,19 @@ pub mod query {
     /// Captures a read-only view of the bugs inhabiting the maze.
     #[must_use]
     pub fn bug_view(world: &World) -> BugView {
-        let step_ms = u32::try_from(world.step_quantum.as_millis()).unwrap_or(u32::MAX);
-
         let snapshots: Vec<BugSnapshot> = world
             .bugs
             .iter()
             .filter(|bug| !bug.health.is_zero())
-            .map(|bug| {
-                let accum_ms = u32::try_from(bug.accumulator.as_millis()).unwrap_or(u32::MAX);
-
-                BugSnapshot {
-                    id: bug.id,
-                    cell: bug.cell,
-                    color: bug.color,
-                    max_health: bug.max_health(),
-                    health: bug.health,
-                    step_ms,
-                    accum_ms,
-                    ready_for_step: bug.ready_for_step(world.step_quantum),
-                }
+            .map(|bug| BugSnapshot {
+                id: bug.id,
+                cell: bug.cell,
+                color: bug.color,
+                max_health: bug.max_health(),
+                health: bug.health,
+                step_ms: bug.step_ms,
+                accum_ms: bug.accum_ms,
+                ready_for_step: bug.ready_for_step(),
             })
             .collect();
         BugView::from_snapshots(snapshots)
@@ -1287,18 +1281,20 @@ struct Bug {
     color: BugColor,
     max_health: Health,
     health: Health,
-    accumulator: Duration,
+    step_ms: u32,
+    accum_ms: u32,
 }
 
 impl Bug {
-    fn new(id: BugId, cell: CellCoord, color: BugColor, health: Health) -> Self {
+    fn new(id: BugId, cell: CellCoord, color: BugColor, health: Health, step_ms: u32) -> Self {
         Self {
             id,
             cell,
             color,
             max_health: health,
             health,
-            accumulator: Duration::ZERO,
+            step_ms,
+            accum_ms: step_ms,
         }
     }
 
@@ -1319,8 +1315,8 @@ impl Bug {
         self.cell = destination;
     }
 
-    fn ready_for_step(&self, step_quantum: Duration) -> bool {
-        self.accumulator >= step_quantum
+    fn ready_for_step(&self) -> bool {
+        self.accum_ms >= self.step_ms
     }
 }
 
@@ -4192,6 +4188,231 @@ mod tests {
             query::occupancy_view(&world).occupant(CellCoord::new(0, 0)),
             Some(BugId::new(0))
         );
+    }
+
+    #[test]
+    fn slow_cadence_bug_requires_multiple_ticks() {
+        let mut world = World::new();
+        let mut events = Vec::new();
+        let slow_step_ms = 600;
+
+        apply(
+            &mut world,
+            Command::SpawnBug {
+                spawner: CellCoord::new(0, 0),
+                color: BugColor::from_rgb(0x12, 0x34, 0x56),
+                health: Health::new(5),
+                step_ms: slow_step_ms,
+            },
+            &mut events,
+        );
+
+        let bug_id = events
+            .iter()
+            .find_map(|event| {
+                if let Event::BugSpawned { bug_id, .. } = event {
+                    Some(*bug_id)
+                } else {
+                    None
+                }
+            })
+            .expect("spawn should emit bug identifier");
+        events.clear();
+
+        let index = world
+            .bug_index(bug_id)
+            .expect("bug should be tracked after spawning");
+        world.bugs[index].accum_ms = 0;
+
+        apply(
+            &mut world,
+            Command::StepBug {
+                bug_id,
+                direction: Direction::South,
+            },
+            &mut events,
+        );
+        assert!(events
+            .iter()
+            .all(|event| !matches!(event, Event::BugAdvanced { .. })));
+        events.clear();
+
+        for _ in 0..2 {
+            apply(
+                &mut world,
+                Command::Tick {
+                    dt: Duration::from_millis(200),
+                },
+                &mut events,
+            );
+            assert!(events
+                .iter()
+                .any(|event| matches!(event, Event::TimeAdvanced { .. })));
+            events.clear();
+
+            apply(
+                &mut world,
+                Command::StepBug {
+                    bug_id,
+                    direction: Direction::South,
+                },
+                &mut events,
+            );
+            assert!(events
+                .iter()
+                .all(|event| !matches!(event, Event::BugAdvanced { .. })));
+            events.clear();
+        }
+
+        apply(
+            &mut world,
+            Command::Tick {
+                dt: Duration::from_millis(200),
+            },
+            &mut events,
+        );
+        assert!(events
+            .iter()
+            .any(|event| matches!(event, Event::TimeAdvanced { .. })));
+        events.clear();
+
+        apply(
+            &mut world,
+            Command::StepBug {
+                bug_id,
+                direction: Direction::South,
+            },
+            &mut events,
+        );
+        assert!(events
+            .iter()
+            .any(|event| matches!(event, Event::BugAdvanced { .. })));
+
+        let updated_index = world
+            .bug_index(bug_id)
+            .expect("bug should remain tracked after stepping");
+        assert_eq!(world.bugs[updated_index].accum_ms, 0);
+    }
+
+    #[test]
+    fn large_tick_clamps_accumulator_to_step() {
+        let mut world = World::new();
+        let mut events = Vec::new();
+        let step_ms = 150;
+
+        apply(
+            &mut world,
+            Command::SpawnBug {
+                spawner: CellCoord::new(0, 0),
+                color: BugColor::from_rgb(0x01, 0x23, 0x45),
+                health: Health::new(4),
+                step_ms,
+            },
+            &mut events,
+        );
+
+        let bug_id = events
+            .iter()
+            .find_map(|event| {
+                if let Event::BugSpawned { bug_id, .. } = event {
+                    Some(*bug_id)
+                } else {
+                    None
+                }
+            })
+            .expect("spawn should emit bug identifier");
+        events.clear();
+
+        let index = world
+            .bug_index(bug_id)
+            .expect("bug should be tracked after spawning");
+        world.bugs[index].accum_ms = 0;
+
+        apply(
+            &mut world,
+            Command::Tick {
+                dt: Duration::from_millis(5_000),
+            },
+            &mut events,
+        );
+        assert!(events
+            .iter()
+            .any(|event| matches!(event, Event::TimeAdvanced { .. })));
+
+        let updated_index = world
+            .bug_index(bug_id)
+            .expect("bug should remain tracked after tick");
+        assert_eq!(world.bugs[updated_index].accum_ms, step_ms);
+    }
+
+    #[test]
+    fn step_bug_carries_remainder_within_single_tick() {
+        let mut world = World::new();
+        let mut events = Vec::new();
+        let step_ms = 120;
+
+        apply(
+            &mut world,
+            Command::SpawnBug {
+                spawner: CellCoord::new(0, 0),
+                color: BugColor::from_rgb(0xde, 0xad, 0xbe),
+                health: Health::new(7),
+                step_ms,
+            },
+            &mut events,
+        );
+
+        let bug_id = events
+            .iter()
+            .find_map(|event| {
+                if let Event::BugSpawned { bug_id, .. } = event {
+                    Some(*bug_id)
+                } else {
+                    None
+                }
+            })
+            .expect("spawn should emit bug identifier");
+        events.clear();
+
+        let index = world
+            .bug_index(bug_id)
+            .expect("bug should be tracked after spawning");
+        world.bugs[index].accum_ms = step_ms.saturating_mul(2);
+
+        apply(
+            &mut world,
+            Command::StepBug {
+                bug_id,
+                direction: Direction::South,
+            },
+            &mut events,
+        );
+        assert!(events
+            .iter()
+            .any(|event| matches!(event, Event::BugAdvanced { .. })));
+        events.clear();
+
+        let mid_index = world
+            .bug_index(bug_id)
+            .expect("bug should remain tracked after first step");
+        assert_eq!(world.bugs[mid_index].accum_ms, step_ms);
+
+        apply(
+            &mut world,
+            Command::StepBug {
+                bug_id,
+                direction: Direction::South,
+            },
+            &mut events,
+        );
+        assert!(events
+            .iter()
+            .any(|event| matches!(event, Event::BugAdvanced { .. })));
+
+        let final_index = world
+            .bug_index(bug_id)
+            .expect("bug should remain tracked after second step");
+        assert_eq!(world.bugs[final_index].accum_ms, 0);
     }
 
     #[test]
