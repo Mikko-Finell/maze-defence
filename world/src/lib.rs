@@ -125,7 +125,7 @@ impl World {
             cells_per_tile,
             tick_index: 0,
             step_quantum: DEFAULT_STEP_QUANTUM,
-            play_mode: PlayMode::Attack,
+            play_mode: PlayMode::Builder,
         };
         world.rebuild_bug_spawners();
         world.clear_bugs();
@@ -1818,6 +1818,17 @@ mod tests {
         u32::try_from(world.step_quantum.as_millis()).unwrap_or(u32::MAX)
     }
 
+    fn ensure_attack_mode(world: &mut World, events: &mut Vec<Event>) {
+        apply(
+            world,
+            Command::SetPlayMode {
+                mode: PlayMode::Attack,
+            },
+            events,
+        );
+        events.clear();
+    }
+
     #[test]
     fn build_cell_walls_returns_empty_when_dimensions_zero() {
         assert!(build_cell_walls(TileCoord::new(0), TileCoord::new(1), 1).is_empty());
@@ -1852,10 +1863,10 @@ mod tests {
     }
 
     #[test]
-    fn world_defaults_to_attack_mode() {
+    fn world_defaults_to_builder_mode() {
         let world = World::new();
 
-        assert_eq!(query::play_mode(&world), PlayMode::Attack);
+        assert_eq!(query::play_mode(&world), PlayMode::Builder);
     }
 
     #[test]
@@ -1883,6 +1894,7 @@ mod tests {
             .next()
             .expect("expected bug spawner");
         let step_ms = world_step_ms(&world);
+        ensure_attack_mode(&mut world, &mut events);
         apply(
             &mut world,
             Command::SpawnBug {
@@ -1915,6 +1927,7 @@ mod tests {
             .next()
             .expect("expected bug spawner");
         let step_ms = 320;
+        ensure_attack_mode(&mut world, &mut events);
 
         apply(
             &mut world,
@@ -1957,6 +1970,7 @@ mod tests {
         assert_eq!(snapshot.accum_ms, 0);
         assert!(!snapshot.ready_for_step);
 
+        ensure_attack_mode(&mut world, &mut events);
         apply(
             &mut world,
             Command::Tick {
@@ -2264,6 +2278,7 @@ mod tests {
         let mut world = World::new();
         let mut events = Vec::new();
 
+        ensure_attack_mode(&mut world, &mut events);
         apply(
             &mut world,
             Command::SetPlayMode {
@@ -2357,6 +2372,7 @@ mod tests {
         let mut events = Vec::new();
         let step_ms = world_step_ms(&world);
 
+        ensure_attack_mode(&mut world, &mut events);
         apply(
             &mut world,
             Command::SpawnBug {
@@ -2416,6 +2432,7 @@ mod tests {
         let mut world = World::new();
         let mut events = Vec::new();
 
+        ensure_attack_mode(&mut world, &mut events);
         let tower = TowerId::new(9);
         let target = BugId::new(4);
         apply(
@@ -3464,6 +3481,7 @@ mod tests {
         let mut events = Vec::new();
         let origin = CellCoord::new(1, 1);
 
+        ensure_attack_mode(&mut world, &mut events);
         apply(
             &mut world,
             Command::PlaceTower {
@@ -4019,6 +4037,7 @@ mod tests {
         let mut events = Vec::new();
 
         let step_ms = world_step_ms(&world);
+        ensure_attack_mode(&mut world, &mut events);
         apply(
             &mut world,
             Command::SpawnBug {
@@ -4090,14 +4109,7 @@ mod tests {
         let mut world = World::new();
         let mut events = Vec::new();
 
-        apply(
-            &mut world,
-            Command::SetPlayMode {
-                mode: PlayMode::Attack,
-            },
-            &mut events,
-        );
-        assert!(events.is_empty());
+        ensure_attack_mode(&mut world, &mut events);
 
         apply(
             &mut world,
@@ -4230,6 +4242,7 @@ mod tests {
 
         events.clear();
         let step_ms = world_step_ms(&world);
+        ensure_attack_mode(&mut world, &mut events);
         apply(
             &mut world,
             Command::SpawnBug {
@@ -4270,6 +4283,7 @@ mod tests {
         let mut events = Vec::new();
         let slow_step_ms = 600;
 
+        ensure_attack_mode(&mut world, &mut events);
         apply(
             &mut world,
             Command::SpawnBug {
@@ -4374,6 +4388,7 @@ mod tests {
         let mut events = Vec::new();
         let step_ms = 150;
 
+        ensure_attack_mode(&mut world, &mut events);
         apply(
             &mut world,
             Command::SpawnBug {
@@ -4425,6 +4440,7 @@ mod tests {
         let mut events = Vec::new();
         let step_ms = 120;
 
+        ensure_attack_mode(&mut world, &mut events);
         apply(
             &mut world,
             Command::SpawnBug {
@@ -4507,6 +4523,7 @@ mod tests {
 
         events.clear();
         let step_ms = world_step_ms(&world);
+        ensure_attack_mode(&mut world, &mut events);
         apply(
             &mut world,
             Command::SpawnBug {
@@ -4559,6 +4576,7 @@ mod tests {
 
         events.clear();
         let step_ms = world_step_ms(&world);
+        ensure_attack_mode(&mut world, &mut events);
         apply(
             &mut world,
             Command::SpawnBug {
@@ -4783,6 +4801,7 @@ mod tests {
             .expect("expected aligned spawner");
         let step_ms = world_step_ms(&world);
 
+        ensure_attack_mode(&mut world, &mut events);
         apply(
             &mut world,
             Command::SpawnBug {
@@ -5088,6 +5107,7 @@ mod tests {
         assert!(events.is_empty());
 
         let step_ms = world_step_ms(&world);
+        ensure_attack_mode(&mut world, &mut events);
         apply(
             &mut world,
             Command::SpawnBug {
@@ -5125,7 +5145,7 @@ mod tests {
         assert_eq!(first, second, "combat replay diverged between runs");
 
         let fingerprint = first.fingerprint();
-        let expected = 0xf750_f195_b3ad_abdd;
+        let expected = 0x11a5_36ef_2105_9367;
         assert_eq!(
             fingerprint, expected,
             "combat replay fingerprint mismatch: {fingerprint:#x}"
@@ -5184,6 +5204,7 @@ mod tests {
         let mut commands = Vec::new();
         let mut events = Vec::new();
 
+        ensure_attack_mode(&mut world, &mut events);
         let enter_builder = Command::SetPlayMode {
             mode: PlayMode::Builder,
         };
@@ -5586,6 +5607,10 @@ mod tests {
     fn replay_tower_script(commands: Vec<Command>) -> ReplayOutcome {
         let mut world = World::new();
         let mut log = Vec::new();
+
+        let mut init_events = Vec::new();
+        ensure_attack_mode(&mut world, &mut init_events);
+        debug_assert!(init_events.is_empty());
 
         for command in commands {
             let mut events = Vec::new();

@@ -27,10 +27,10 @@ use macroquad::{
 };
 use maze_defence_core::{CellRect, PlayMode, TowerId, TowerKind};
 use maze_defence_rendering::{
-    visuals::heading_from_target_line, BugPresentation, BugVisual, Color, FrameInput,
-    FrameSimulationBreakdown, Presentation, RenderingBackend, Scene, SceneProjectile, SceneTower,
-    SceneWall, SpriteInstance, SpriteKey, TileGridPresentation, TowerPreview, TowerTargetLine,
-    TowerVisual,
+    visuals::heading_from_target_line, BugPresentation, BugVisual, Color, ControlPanelView,
+    FrameInput, FrameSimulationBreakdown, Presentation, RenderingBackend, Scene, SceneProjectile,
+    SceneTower, SceneWall, SpriteInstance, SpriteKey, TileGridPresentation, TowerPreview,
+    TowerTargetLine, TowerVisual,
 };
 use std::{
     collections::{HashMap, VecDeque},
@@ -397,6 +397,7 @@ impl RenderingBackend for MacroquadBackend {
                 }
 
                 draw_projectiles(&scene.projectiles, &metrics);
+                draw_control_panel(&scene, screen_width, screen_height);
 
                 if show_tower_target_lines {
                     draw_tower_targets(&scene.tower_targets, &metrics);
@@ -465,15 +466,26 @@ impl SceneMetrics {
         let tile_grid = scene.tile_grid;
         let world_width = tile_grid.bordered_width();
         let world_height = tile_grid.bordered_height();
+        let panel_width = scene
+            .control_panel
+            .map(|panel| panel.width.max(0.0))
+            .unwrap_or(0.0)
+            .min(screen_width);
+        let available_width = (screen_width - panel_width).max(0.0);
         let scale = if world_width == 0.0 || world_height == 0.0 {
             1.0
         } else {
-            (screen_width / world_width).min(screen_height / world_height)
+            let width_ratio = if available_width <= f32::EPSILON {
+                f32::INFINITY
+            } else {
+                available_width / world_width
+            };
+            width_ratio.min(screen_height / world_height)
         };
 
         let scaled_width = world_width * scale;
         let scaled_height = world_height * scale;
-        let offset_x = (screen_width - scaled_width) * 0.5;
+        let offset_x = ((available_width - scaled_width) * 0.5).max(0.0);
         let offset_y = (screen_height - scaled_height) * 0.5;
 
         let grid_width_scaled = tile_grid.width() * scale;
@@ -580,6 +592,24 @@ fn gather_frame_input_from_observations(
     input.remove_action = remove_click || delete_pressed;
 
     input
+}
+
+fn draw_control_panel(scene: &Scene, screen_width: f32, screen_height: f32) {
+    let Some(ControlPanelView { width, background }) = scene.control_panel else {
+        return;
+    };
+    if width <= f32::EPSILON {
+        return;
+    }
+
+    let left = (screen_width - width).max(0.0);
+    macroquad::shapes::draw_rectangle(
+        left,
+        0.0,
+        width,
+        screen_height,
+        to_macroquad_color(background),
+    );
 }
 
 fn active_builder_preview(scene: &Scene) -> Option<TowerPreview> {
@@ -1381,7 +1411,7 @@ mod tests {
         BugId, CellCoord, CellRect, CellRectSize, ProjectileId, TowerId, TowerKind,
     };
     use maze_defence_rendering::{
-        BugHealthPresentation, SpriteInstance, SpriteKey, TowerTargetLine,
+        BugHealthPresentation, ControlPanelView, SpriteInstance, SpriteKey, TowerTargetLine,
     };
     use std::{collections::HashMap, f32::consts::FRAC_PI_2, time::Duration};
 
@@ -1410,6 +1440,7 @@ mod tests {
             placement_preview,
             None,
             None,
+            Some(ControlPanelView::new(200.0, Color::from_rgb_u8(0, 0, 0))),
         )
     }
 
@@ -1534,6 +1565,7 @@ mod tests {
                 None,
                 None,
                 None,
+                Some(ControlPanelView::new(200.0, Color::from_rgb_u8(0, 0, 0))),
             );
             let metrics = SceneMetrics::from_scene(&scene, screen_width, screen_height);
 

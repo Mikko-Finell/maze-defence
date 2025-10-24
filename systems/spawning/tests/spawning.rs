@@ -281,6 +281,9 @@ fn scripted_commands() -> Vec<Command> {
             tile_length: 1.0,
             cells_per_tile: 1,
         },
+        Command::SetPlayMode {
+            mode: PlayMode::Attack,
+        },
         Command::Tick {
             dt: Duration::from_millis(500),
         },

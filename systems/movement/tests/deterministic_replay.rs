@@ -17,27 +17,27 @@ const SLOW_STEP_MS: u32 = 450;
 
 #[test]
 fn deterministic_replay_produces_expected_snapshot() {
-    assert_stable_replay(baseline_commands(), 0xe2d9_a3a0_0ce5_b675);
+    assert_stable_replay(baseline_commands(), 0x7068_db3a_b842_daee);
 }
 
 #[test]
 fn dense_corridor_replay_is_stable() {
-    assert_stable_replay(dense_corridor_commands(), 0x2473_1168_725c_c528);
+    assert_stable_replay(dense_corridor_commands(), 0x85c0_a69b_5ca3_13c3);
 }
 
 #[test]
 fn side_hallway_diversion_replay_is_stable() {
-    assert_stable_replay(side_hallway_diversion_commands(), 0x2d37_4a61_07c0_2d2c);
+    assert_stable_replay(side_hallway_diversion_commands(), 0x2c4f_eb03_928d_2b06);
 }
 
 #[test]
 fn stall_regression_replay_is_stable() {
-    assert_stable_replay(stall_regression_commands(), 0x6ae9_e252_97d5_406b);
+    assert_stable_replay(stall_regression_commands(), 0x32cd_77df_3956_77d7);
 }
 
 #[test]
 fn mixed_cadence_replay_is_stable() {
-    assert_stable_replay(mixed_cadence_commands(), 0xcbc1_8da1_a21f_b597);
+    assert_stable_replay(mixed_cadence_commands(), 0x77a5_61d9_835e_96e7);
 }
 
 fn assert_stable_replay(commands: Vec<Command>, expected: u64) {
@@ -137,6 +137,9 @@ fn baseline_commands() -> Vec<Command> {
             tile_length: 1.0,
             cells_per_tile: 1,
         },
+        Command::SetPlayMode {
+            mode: PlayMode::Attack,
+        },
         Command::SpawnBug {
             spawner: CellCoord::new(0, 0),
             color: BugColor::from_rgb(0x2f, 0x95, 0x32),
@@ -162,12 +165,17 @@ fn baseline_commands() -> Vec<Command> {
 }
 
 fn dense_corridor_commands() -> Vec<Command> {
-    let mut commands = vec![Command::ConfigureTileGrid {
-        columns: TileCoord::new(1),
-        rows: TileCoord::new(8),
-        tile_length: 1.0,
-        cells_per_tile: 1,
-    }];
+    let mut commands = vec![
+        Command::ConfigureTileGrid {
+            columns: TileCoord::new(1),
+            rows: TileCoord::new(8),
+            tile_length: 1.0,
+            cells_per_tile: 1,
+        },
+        Command::SetPlayMode {
+            mode: PlayMode::Attack,
+        },
+    ];
 
     let palette = [
         (0x2f, 0x70, 0x32),
@@ -261,6 +269,9 @@ fn stall_regression_commands() -> Vec<Command> {
             tile_length: 1.0,
             cells_per_tile: 1,
         },
+        Command::SetPlayMode {
+            mode: PlayMode::Attack,
+        },
         Command::SpawnBug {
             spawner: CellCoord::new(0, 0),
             color: BugColor::from_rgb(0x9a, 0x4c, 0x2f),
@@ -298,6 +309,9 @@ fn mixed_cadence_commands() -> Vec<Command> {
             rows: TileCoord::new(8),
             tile_length: 1.0,
             cells_per_tile: 1,
+        },
+        Command::SetPlayMode {
+            mode: PlayMode::Attack,
         },
         Command::SpawnBug {
             spawner: CellCoord::new(0, 0),
@@ -345,6 +359,15 @@ fn movement_pauses_in_builder_mode() {
     let mut world = World::new();
     let mut movement = Movement::default();
     let mut events = Vec::new();
+
+    world::apply(
+        &mut world,
+        Command::SetPlayMode {
+            mode: PlayMode::Attack,
+        },
+        &mut events,
+    );
+    events.clear();
 
     world::apply(
         &mut world,
