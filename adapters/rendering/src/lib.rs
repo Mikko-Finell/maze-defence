@@ -995,8 +995,8 @@ pub mod visuals {
         let base =
             SpriteInstance::new(SpriteKey::TowerBase, base_size).with_offset(Some(centre_offset));
 
-        let turret_side = turret_side_length(base_size);
-        let turret = SpriteInstance::square(SpriteKey::TowerTurret, Vec2::splat(turret_side))
+        let turret_size = turret_size(base_size);
+        let turret = SpriteInstance::new(SpriteKey::TowerTurret, turret_size)
             .with_offset(Some(centre_offset))
             .with_rotation(normalise_radians(heading_radians));
 
@@ -1081,22 +1081,15 @@ pub mod visuals {
         wrapped.clamp(-PI, PI)
     }
 
-    fn turret_side_length(base_size: Vec2) -> f32 {
+    fn turret_size(base_size: Vec2) -> Vec2 {
         let width = base_size.x.abs();
         let height = base_size.y.abs();
 
         if width <= f32::EPSILON && height <= f32::EPSILON {
-            return 0.0;
+            return Vec2::ZERO;
         }
 
-        if width <= f32::EPSILON {
-            return height;
-        }
-        if height <= f32::EPSILON {
-            return width;
-        }
-
-        width.min(height)
+        Vec2::new(width + 2.0, height + 2.0)
     }
 }
 
@@ -1156,7 +1149,7 @@ mod tests {
         assert_eq!(base.offset, Some(Vec2::new(1.5, 1.0)));
 
         assert_eq!(turret.sprite, SpriteKey::TowerTurret);
-        assert_eq!(turret.size, Vec2::splat(2.0));
+        assert_eq!(turret.size, Vec2::new(5.0, 4.0));
         assert_eq!(turret.offset, Some(Vec2::new(1.5, 1.0)));
         assert!((turret.rotation_radians + FRAC_PI_2).abs() <= f32::EPSILON);
     }

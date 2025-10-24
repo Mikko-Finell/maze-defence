@@ -2616,7 +2616,7 @@ mod tests {
         let second_fingerprint = scene_fingerprint(&second);
         assert_eq!(first_fingerprint, second_fingerprint);
 
-        let expected = 0x297f_60ca_97f3_17cf;
+        let expected = 0xe425_7ce6_4f4f_b7dc;
         assert_eq!(
             first_fingerprint, expected,
             "sprite scene fingerprint mismatch: {first_fingerprint:#x}"
@@ -2646,7 +2646,7 @@ mod tests {
         let second_fingerprint = scene_fingerprint(&second);
         assert_eq!(first_fingerprint, second_fingerprint);
 
-        let expected = 0x4b62_2b4e_1616_b14f;
+        let expected = 0x52ac_8d62_88e0_a775;
         assert_eq!(
             first_fingerprint, expected,
             "primitive scene fingerprint mismatch: {first_fingerprint:#x}"
