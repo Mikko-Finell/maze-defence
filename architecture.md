@@ -21,8 +21,8 @@ All cross-layer communication happens through the message contracts defined in `
 
 1. **Adapters emit `Command` values** to request state changes. Examples include `Command::ConfigureTileGrid`, `Command::Tick`, `Command::SpawnBug`, and `Command::PlaceTower`.
 2. **`world::apply` executes a single command at a time**, mutating the `World` and pushing resulting `Event` values into a caller-provided buffer. `Command::Tick` triggers most simulation work by advancing time, stepping projectiles, processing exits, and emitting `Event::TimeAdvanced`, `Event::BugAdvanced`, `Event::BugExited`, and tower-related events.
-3. **Systems react to events and read-only snapshots**. For example, `systems::movement::Movement::handle` reads a `BugView`, the dense `NavigationFieldView`, occupancy information, and the `ReservationLedgerView` to plan deterministic paths. Systems return new commands that adapters immediately feed back into `world::apply`.
-4. **Queries expose immutable state** so adapters and systems can reason about the world without breaking encapsulation. Key helpers include `world::query::play_mode`, `world::query::bug_view`, `world::query::navigation_field`, `world::query::bug_spawners`, and `world::query::is_cell_blocked`.
+3. **Systems react to events and read-only snapshots**. For example, `systems::movement::Movement::handle` reads a `BugView`, the dense `NavigationFieldView`, occupancy information, the `ReservationLedgerView`, and a closure that mirrors `world::query::is_cell_blocked` to plan deterministic paths. Systems return new commands that adapters immediately feed back into `world::apply`.
+4. **Queries expose immutable state** so adapters and systems can reason about the world without breaking encapsulation. Key helpers include `world::query::play_mode`, `world::query::bug_view`, `world::query::navigation_field`, `world::query::bug_spawners`, `world::query::reservation_ledger`, `world::query::tower_cooldowns`, and `world::query::target_cells`.
 
 This loop keeps the simulation deterministic: given an initial world snapshot, a command stream, and an RNG seed, the resulting event sequence and world state are reproducible.
 
@@ -37,8 +37,9 @@ The CLI adapter (`adapters/cli`) drives the simulation through the `Simulation` 
    * Routes events to auxiliary bookkeeping (bug interpolation, tower feedback).
    * Lets the spawning system (`systems::spawning::Spawning::handle`) emit `Command::SpawnBug` when attack mode is active and the accumulated time exceeds the configured interval.
    * Invokes the movement system (`systems::movement::Movement::handle`) with navigation and occupancy snapshots, emitting `Command::StepBug` for ready bugs while respecting congestion limits and reservations.
-   * Refreshes the target list using the tower targeting system (`systems::tower_targeting::TowerTargeting::handle`), then feeds those assignments into the tower combat system (`systems::tower_combat::TowerCombat::handle`) to emit `Command::FireProjectile` for towers whose cooldown snapshots show `ready_in == 0`.
-   * Delegates builder interactions to `systems::builder::Builder::handle`, converting preview confirmations and removal gestures into `Command::PlaceTower` or `Command::RemoveTower`.
+   * Refreshes the target list using the tower targeting system (`systems::tower_targeting::TowerTargeting::handle`), which reuses scratch buffers while iterating the deterministically sorted `TowerView` and `BugView` snapshots.
+   * Feeds targeting assignments and the sorted `TowerCooldownView` into the tower combat system (`systems::tower_combat::TowerCombat::handle`), emitting `Command::FireProjectile` for towers whose cooldown snapshots report `ready_in == 0`.
+   * Delegates builder interactions to `systems::builder::Builder::handle`, converting preview confirmations and removal gestures into `Command::PlaceTower` or `Command::RemoveTower` via a `world::query::tower_at` closure.
    * Applies every command immediately, folding resulting events back into the loop until no further events remain.
 5. Updates presentation caches (`Scene`, projectile snapshots, interpolated bug positions) using the latest world queries so the renderer can draw deterministic frames.
 
@@ -63,8 +64,8 @@ Each system crate focuses on a single responsibility:
 * **`systems/builder`** translates builder-mode inputs into placement and removal commands. It listens for `Event::PlayModeChanged` to determine when to accept input and relies on closures that mirror `world::query::tower_at` to identify hovered towers.
 * **`systems/movement`** consumes `Event::TimeAdvanced` and navigation snapshots to emit `Command::StepBug`. Its internal `CrowdPlanner` tracks congestion, detour queues, and per-bug reservations so that simultaneous moves remain deterministic.
 * **`systems/spawning`** accumulates elapsed time from `Event::TimeAdvanced`, advancing a simple linear congruential generator seeded at boot to choose spawn points and colours. It resets when switching to builder mode, ensuring deterministic waves.
-* **`systems/tower_targeting`** reconstructs tower and bug workspaces each frame, deriving the closest eligible target within each tower’s range (computed from `TowerKind::range_in_cells`). Results are sorted deterministically thanks to pre-allocated scratch buffers.
-* **`systems/tower_combat`** filters targeting results using `TowerCooldownView`, emitting `Command::FireProjectile` only when the cooldown snapshot reports readiness.
+* **`systems/tower_targeting`** reconstructs tower and bug workspaces each frame, deriving the closest eligible target within each tower’s range (computed from `TowerKind::range_in_cells`). Deterministic ordering comes from the sorted snapshots yielded by `TowerView::iter` and `BugView::iter`.
+* **`systems/tower_combat`** filters targeting results using `TowerCooldownView::into_vec()`, which sorts cooldown snapshots by tower ID before checking whether each tower reports readiness.
 
 When introducing a new system, mirror this pattern: accept events plus immutable views, emit commands, and keep all scratch state within the struct.
 
@@ -72,9 +73,9 @@ When introducing a new system, mirror this pattern: accept events plus immutable
 
 Adapters provide the IO edges for the engine:
 
-* **`adapters/cli`** wires everything together. It parses command-line options, instantiates the simulation, runs the main loop, and owns presentation state (`Scene`, `BugPresentation`, `TowerInteractionFeedback`). It also exposes utilities like `push_projectiles` and `push_tower_targets` to convert DTOs into rendering primitives.
-* **`adapters/rendering`** defines rendering-agnostic DTOs (`Scene`, `Presentation`, `TileGridPresentation`) and transformation helpers that both CLI and engine systems consume.
-* **`adapters/rendering_macroquad`** implements the `RenderingBackend` trait against Macroquad, handling window configuration (vsync toggling, FPS overlays) and delegating frame drawing to the DTOs built by the CLI adapter.
+* **`adapters/cli`** wires everything together. It parses command-line options, instantiates the simulation, runs the main loop, and owns presentation state (`Scene`, `BugPresentation`, `TowerInteractionFeedback`). Its `src` directory houses `main.rs` (the simulation loop) and `layout_transfer.rs` (import/export helpers), plus utilities like `push_projectiles` and `push_tower_targets` to convert DTOs into rendering primitives.
+* **`adapters/rendering`** defines rendering-agnostic DTOs (`Scene`, `Presentation`, `TileGridPresentation`) and transformation helpers that both CLI and engine systems consume from `src/lib.rs`.
+* **`adapters/rendering_macroquad`** implements the `RenderingBackend` trait against Macroquad. The crate’s `lib.rs`, `sprites.rs`, and `ui.rs` modules handle window configuration (vsync toggling, FPS overlays), sprite atlas plumbing, and UI composition before delegating frame drawing to the DTOs built by the CLI adapter.
 
 Adapter crates are the right place for new input pipelines or presentation layers. They may depend on systems and the world, but they must not introduce their own game logic.
 
@@ -110,12 +111,18 @@ Strictly avoid cross-system imports or world mutations outside `world::apply`; t
 │   ├── cli
 │   │   ├── Cargo.toml
 │   │   └── src
+│   │       ├── layout_transfer.rs
+│   │       └── main.rs
 │   ├── rendering
 │   │   ├── Cargo.toml
 │   │   └── src
+│   │       └── lib.rs
 │   └── rendering_macroquad
 │       ├── Cargo.toml
 │       └── src
+│           ├── lib.rs
+│           ├── sprites.rs
+│           └── ui.rs
 ├── assets
 │   ├── README.md
 │   ├── manifest.toml
@@ -129,9 +136,14 @@ Strictly avoid cross-system imports or world mutations outside `world::apply`; t
 │   ├── Cargo.toml
 │   └── src
 │       └── lib.rs
+├── gameplay.md
+├── macroquad-ui-impl.md
 ├── movement.md
 ├── path-impl.md
 ├── path-spec.md
+├── pressure-spec.md
+├── speed-impl.md
+├── speed-spec.md
 ├── sprite-impl.md
 ├── sprite-spec.md
 ├── systems
