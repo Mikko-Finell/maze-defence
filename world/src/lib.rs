@@ -989,7 +989,7 @@ fn cell_rect_contains(region: CellRect, cell: CellCoord) -> bool {
 
 /// Query functions that provide read-only access to the world state.
 pub mod query {
-    use super::World;
+    use super::{Bug, World};
     use maze_defence_core::{
         BugSnapshot, BugView, CellCoord, Goal, NavigationFieldView, OccupancyView, PlayMode,
         ProjectileSnapshot, ReservationLedgerView, Target, TileGrid,
@@ -1066,18 +1066,24 @@ pub mod query {
             .bugs
             .iter()
             .filter(|bug| !bug.health.is_zero())
-            .map(|bug| BugSnapshot {
-                id: bug.id,
-                cell: bug.cell,
-                color: bug.color,
-                max_health: bug.max_health(),
-                health: bug.health,
-                step_ms: bug.step_ms,
-                accum_ms: bug.accum_ms,
-                ready_for_step: bug.ready_for_step(),
-            })
+            .map(assemble_bug_snapshot)
             .collect();
         BugView::from_snapshots(snapshots)
+    }
+
+    fn assemble_bug_snapshot(bug: &Bug) -> BugSnapshot {
+        let ready_for_step = bug.ready_for_step();
+
+        BugSnapshot {
+            id: bug.id,
+            cell: bug.cell,
+            color: bug.color,
+            max_health: bug.max_health(),
+            health: bug.health,
+            step_ms: bug.step_ms,
+            accum_ms: bug.accum_ms,
+            ready_for_step,
+        }
     }
 
     /// Provides an immutable view of the pre-computed navigation distances.
@@ -1897,6 +1903,74 @@ mod tests {
         world.bugs[0].health = Health::ZERO;
         let filtered = query::bug_view(&world).into_vec();
         assert!(filtered.is_empty());
+    }
+
+    #[test]
+    fn bug_view_carries_cadence_state_through_queries() {
+        let mut world = World::new();
+        let mut events = Vec::new();
+
+        let spawner = query::bug_spawners(&world)
+            .into_iter()
+            .next()
+            .expect("expected bug spawner");
+        let step_ms = 320;
+
+        apply(
+            &mut world,
+            Command::SpawnBug {
+                spawner,
+                color: BugColor::from_rgb(0x44, 0x55, 0x66),
+                health: Health::new(3),
+                step_ms,
+            },
+            &mut events,
+        );
+
+        let bug_id = events
+            .iter()
+            .find_map(|event| {
+                if let Event::BugSpawned { bug_id, .. } = event {
+                    Some(*bug_id)
+                } else {
+                    None
+                }
+            })
+            .expect("spawn should emit bug identifier");
+        events.clear();
+
+        let snapshots = query::bug_view(&world).into_vec();
+        assert_eq!(snapshots.len(), 1);
+        let snapshot = &snapshots[0];
+        assert_eq!(snapshot.step_ms, step_ms);
+        assert_eq!(snapshot.accum_ms, step_ms);
+        assert!(snapshot.ready_for_step);
+
+        let index = world
+            .bug_index(bug_id)
+            .expect("bug should be tracked after spawning");
+        world.bugs[index].accum_ms = 0;
+
+        let stalled = query::bug_view(&world).into_vec();
+        assert_eq!(stalled.len(), 1);
+        let snapshot = &stalled[0];
+        assert_eq!(snapshot.accum_ms, 0);
+        assert!(!snapshot.ready_for_step);
+
+        apply(
+            &mut world,
+            Command::Tick {
+                dt: Duration::from_millis(u64::from(step_ms) * 2),
+            },
+            &mut events,
+        );
+        events.clear();
+
+        let refreshed = query::bug_view(&world).into_vec();
+        assert_eq!(refreshed.len(), 1);
+        let snapshot = &refreshed[0];
+        assert_eq!(snapshot.accum_ms, step_ms);
+        assert!(snapshot.ready_for_step);
     }
 
     #[test]

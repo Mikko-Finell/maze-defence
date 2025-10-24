@@ -29,7 +29,12 @@ fn emits_multiple_spawn_commands_for_large_dt() {
     let spawners = query::bug_spawners(&world);
     assert!(!spawners.is_empty(), "expected at least one spawner");
 
-    let mut spawning = Spawning::new(Config::new(Duration::from_millis(500), 0x1234_5678));
+    let cadence = Duration::from_millis(250);
+    let mut spawning = Spawning::new(Config::new(
+        Duration::from_millis(500),
+        cadence,
+        0x1234_5678,
+    ));
     let mut commands = Vec::new();
     spawning.handle(
         &[Event::TimeAdvanced {
@@ -49,8 +54,7 @@ fn emits_multiple_spawn_commands_for_large_dt() {
         BugColor::from_rgb(0x58, 0x47, 0xff),
     ];
 
-    let expected_step_ms =
-        u32::try_from(Duration::from_millis(500).as_millis()).expect("spawn interval fits u32");
+    let expected_step_ms = u32::try_from(cadence.as_millis()).expect("cadence fits u32");
 
     for (command, expected_color) in commands.iter().zip(expected_colors.iter().cycle()) {
         match command {
@@ -66,7 +70,11 @@ fn emits_multiple_spawn_commands_for_large_dt() {
 #[test]
 fn builder_mode_resets_accumulator() {
     let spawners = vec![CellCoord::new(0, 0)];
-    let mut spawning = Spawning::new(Config::new(Duration::from_secs(1), 0x4d59_5df4_d0f3_3173));
+    let mut spawning = Spawning::new(Config::new(
+        Duration::from_secs(1),
+        Duration::from_millis(250),
+        0x4d59_5df4_d0f3_3173,
+    ));
 
     let mut commands = Vec::new();
     spawning.handle(
@@ -121,6 +129,50 @@ fn builder_mode_resets_accumulator() {
 }
 
 #[test]
+fn updates_step_duration_for_future_spawns() {
+    let spawners = vec![CellCoord::new(0, 0)];
+    let spawn_interval = Duration::from_millis(100);
+    let mut spawning = Spawning::new(Config::new(
+        spawn_interval,
+        Duration::from_millis(200),
+        0x7c94_08f3_f9c2_4601,
+    ));
+
+    let mut commands = Vec::new();
+    spawning.handle(
+        &[Event::TimeAdvanced { dt: spawn_interval }],
+        PlayMode::Attack,
+        &spawners,
+        &mut commands,
+    );
+    assert_eq!(commands.len(), 1, "expected spawn using initial cadence");
+    let initial_step = match commands[0] {
+        Command::SpawnBug { step_ms, .. } => step_ms,
+        ref other => panic!("unexpected command emitted: {other:?}"),
+    };
+    let expected_initial =
+        u32::try_from(Duration::from_millis(200).as_millis()).expect("cadence fits u32");
+    assert_eq!(initial_step, expected_initial);
+
+    commands.clear();
+    let new_cadence = Duration::from_millis(450);
+    spawning.set_step_duration(new_cadence);
+    spawning.handle(
+        &[Event::TimeAdvanced { dt: spawn_interval }],
+        PlayMode::Attack,
+        &spawners,
+        &mut commands,
+    );
+    assert_eq!(commands.len(), 1, "expected spawn using updated cadence");
+    let updated_step = match commands[0] {
+        Command::SpawnBug { step_ms, .. } => step_ms,
+        ref other => panic!("unexpected command emitted: {other:?}"),
+    };
+    let expected = u32::try_from(new_cadence.as_millis()).expect("cadence fits u32");
+    assert_eq!(updated_step, expected);
+}
+
+#[test]
 fn deterministic_replay_produces_identical_sequence() {
     let first = replay(scripted_commands());
     let second = replay(scripted_commands());
@@ -128,7 +180,7 @@ fn deterministic_replay_produces_identical_sequence() {
     assert_eq!(first, second, "replay diverged between runs");
 
     let fingerprint = first.fingerprint();
-    let expected = 0x55c2_f129_5c38_33c8;
+    let expected = 0xf6c6_9e24_dd48_9c02;
     assert_eq!(
         fingerprint, expected,
         "fingerprint mismatch: {fingerprint:#x}",
@@ -139,6 +191,7 @@ fn replay(commands: Vec<Command>) -> ReplayOutcome {
     let mut world = World::new();
     let mut spawning = Spawning::new(Config::new(
         Duration::from_millis(750),
+        Duration::from_millis(250),
         0x4d59_5df4_d0f3_3173,
     ));
     let mut log = Vec::new();

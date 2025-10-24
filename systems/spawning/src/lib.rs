@@ -27,15 +27,18 @@ const DEFAULT_BUG_HEALTH: Health = Health::new(3);
 #[derive(Clone, Copy, Debug)]
 pub struct Config {
     spawn_interval: Duration,
+    step_duration: Duration,
     rng_seed: u64,
 }
 
 impl Config {
-    /// Creates a new configuration using the provided spawn cadence and seed.
+    /// Creates a new configuration using the provided spawn cadence, bug cadence,
+    /// and deterministic seed.
     #[must_use]
-    pub const fn new(spawn_interval: Duration, rng_seed: u64) -> Self {
+    pub const fn new(spawn_interval: Duration, step_duration: Duration, rng_seed: u64) -> Self {
         Self {
             spawn_interval,
+            step_duration,
             rng_seed,
         }
     }
@@ -48,6 +51,7 @@ pub struct Spawning {
     accumulator: Duration,
     rng_state: u64,
     color_index: usize,
+    step_ms: u32,
 }
 
 impl Spawning {
@@ -59,7 +63,13 @@ impl Spawning {
             accumulator: Duration::ZERO,
             rng_state: config.rng_seed,
             color_index: 0,
+            step_ms: duration_to_step_ms(config.step_duration),
         }
+    }
+
+    /// Updates the cadence applied to future spawn commands.
+    pub fn set_step_duration(&mut self, step_duration: Duration) {
+        self.step_ms = duration_to_step_ms(step_duration);
     }
 
     /// Consumes events and immutable views to emit spawn commands.
@@ -93,8 +103,6 @@ impl Spawning {
         self.accumulator = self.accumulator.saturating_add(accumulated);
         let spawn_attempts = self.resolve_spawn_attempts();
 
-        let step_ms = u32::try_from(self.spawn_interval.as_millis()).unwrap_or(u32::MAX);
-
         for _ in 0..spawn_attempts {
             let spawner = self.select_spawner(spawners);
             let color = self.next_color();
@@ -102,7 +110,7 @@ impl Spawning {
                 spawner,
                 color,
                 health: DEFAULT_BUG_HEALTH,
-                step_ms,
+                step_ms: self.step_ms,
             });
         }
     }
@@ -142,13 +150,18 @@ impl Spawning {
     }
 }
 
+fn duration_to_step_ms(step_duration: Duration) -> u32 {
+    u32::try_from(step_duration.as_millis()).unwrap_or(u32::MAX)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn resolves_spawn_attempts_without_interval() {
-        let mut spawning = Spawning::new(Config::new(Duration::ZERO, 1));
+        let mut spawning =
+            Spawning::new(Config::new(Duration::ZERO, Duration::from_millis(250), 1));
         spawning.accumulator = Duration::from_secs(10);
         assert_eq!(spawning.resolve_spawn_attempts(), 0);
     }
