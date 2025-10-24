@@ -234,6 +234,8 @@ pub struct FrameInput {
     pub confirm_action: bool,
     /// Whether the adapter detected a tower removal request on this frame.
     pub remove_action: bool,
+    /// Whether the adapter detected a wave spawn request on this frame.
+    pub spawn_wave: bool,
 }
 
 /// Per-frame diagnostics emitted by simulations to help adapters report performance breakdowns.

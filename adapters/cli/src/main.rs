@@ -11,10 +11,12 @@
 
 mod layout_transfer;
 
+use std::convert::TryFrom;
 use std::{
     collections::HashMap,
     f32::consts::{FRAC_PI_2, PI},
     fmt,
+    num::NonZeroU32,
     str::FromStr,
     time::{Duration, Instant},
 };
@@ -24,8 +26,9 @@ use clap::{Parser, ValueEnum};
 use glam::Vec2;
 use layout_transfer::{TowerLayoutSnapshot, TowerLayoutTower};
 use maze_defence_core::{
-    BugId, BugView, CellCoord, CellPointHalf, CellRect, CellRectSize, Command, Event, Gold,
-    PlacementError, PlayMode, ProjectileSnapshot, RemovalError, TileCoord, TowerCooldownView,
+    AttackBurst, AttackPlan, BugColor, BugId, BugView, CellCoord, CellPointHalf, CellRect,
+    CellRectSize, Command, Event, Gold, Health, PatchId, PlacementError, PlayMode, Pressure,
+    ProjectileSnapshot, RemovalError, SpeciesId, SpeciesTableVersion, TileCoord, TowerCooldownView,
     TowerId, TowerKind, TowerTarget,
 };
 use maze_defence_rendering::{
@@ -56,6 +59,14 @@ const SPAWN_RNG_SEED: u64 = 0x4d59_5df4_d0f3_3173;
 const TILE_LENGTH_TOLERANCE: f32 = 1e-3;
 const DEFAULT_BUG_HEADING: f32 = 0.0;
 const GROUND_TILE_MULTIPLIER: f32 = 4.0;
+const BASIC_WAVE_BUGS: u32 = 3;
+const BASIC_WAVE_CADENCE_MS: u32 = 1_000;
+const BASIC_WAVE_SPECIES_ID: SpeciesId = SpeciesId::new(0);
+const BASIC_WAVE_PATCH_ID: PatchId = PatchId::new(0);
+const BASIC_WAVE_PRESSURE: Pressure = Pressure::new(10);
+const BASIC_WAVE_SPECIES_TABLE: SpeciesTableVersion = SpeciesTableVersion::new(0);
+const BASIC_WAVE_COLOR: BugColor = BugColor::from_rgb(0x2f, 0x95, 0x32);
+const BASIC_WAVE_HEALTH: Health = Health::new(3);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct PlacementRejection {
@@ -68,6 +79,216 @@ struct PlacementRejection {
 struct RemovalRejection {
     tower: TowerId,
     reason: RemovalError,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct WaveSpawnAttributes {
+    color: BugColor,
+    health: Health,
+    step_ms: u32,
+}
+
+impl WaveSpawnAttributes {
+    const fn new(color: BugColor, health: Health, step_ms: u32) -> Self {
+        Self {
+            color,
+            health,
+            step_ms,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct WaveCompletion {
+    pressure: Pressure,
+    species_table_version: SpeciesTableVersion,
+}
+
+impl WaveCompletion {
+    const fn new(pressure: Pressure, species_table_version: SpeciesTableVersion) -> Self {
+        Self {
+            pressure,
+            species_table_version,
+        }
+    }
+
+    const fn pressure(self) -> Pressure {
+        self.pressure
+    }
+
+    const fn species_table_version(self) -> SpeciesTableVersion {
+        self.species_table_version
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum WaveAdvanceOutcome {
+    NoWave,
+    InProgress,
+    Completed(WaveCompletion),
+}
+
+#[derive(Debug, Default)]
+struct WaveManager {
+    active: Option<ActiveWave>,
+}
+
+impl WaveManager {
+    fn new() -> Self {
+        Self { active: None }
+    }
+
+    fn is_active(&self) -> bool {
+        self.active.is_some()
+    }
+
+    fn begin(&mut self, plan: AttackPlan) {
+        self.active = Some(ActiveWave::new(plan));
+    }
+
+    fn clear(&mut self) {
+        self.active = None;
+    }
+
+    fn advance(
+        &mut self,
+        dt: Duration,
+        play_mode: PlayMode,
+        spawners: &[CellCoord],
+        mut species_lookup: impl FnMut(SpeciesId) -> Option<WaveSpawnAttributes>,
+        mut apply_spawn: impl FnMut(Command) -> bool,
+    ) -> WaveAdvanceOutcome {
+        if play_mode != PlayMode::Attack {
+            self.clear();
+            return WaveAdvanceOutcome::NoWave;
+        }
+
+        let outcome = if let Some(active) = self.active.as_mut() {
+            active.advance(dt, spawners, &mut species_lookup, &mut apply_spawn);
+            if active.is_complete() {
+                WaveAdvanceOutcome::Completed(active.completion())
+            } else {
+                WaveAdvanceOutcome::InProgress
+            }
+        } else {
+            WaveAdvanceOutcome::NoWave
+        };
+
+        if matches!(outcome, WaveAdvanceOutcome::Completed(_)) {
+            self.clear();
+        }
+
+        outcome
+    }
+}
+
+#[derive(Debug)]
+struct ActiveWave {
+    elapsed: Duration,
+    bursts: Vec<ActiveBurst>,
+    pressure: Pressure,
+    species_table_version: SpeciesTableVersion,
+}
+
+impl ActiveWave {
+    fn new(plan: AttackPlan) -> Self {
+        let pressure = plan.pressure();
+        let species_table_version = plan.species_table_version();
+        let bursts = plan
+            .into_bursts()
+            .into_iter()
+            .map(ActiveBurst::from_plan)
+            .collect();
+        Self {
+            elapsed: Duration::ZERO,
+            bursts,
+            pressure,
+            species_table_version,
+        }
+    }
+
+    fn advance(
+        &mut self,
+        dt: Duration,
+        spawners: &[CellCoord],
+        species_lookup: &mut impl FnMut(SpeciesId) -> Option<WaveSpawnAttributes>,
+        apply_spawn: &mut impl FnMut(Command) -> bool,
+    ) {
+        let target_elapsed = self.elapsed.saturating_add(dt);
+        for burst in &mut self.bursts {
+            burst.emit_until(target_elapsed, spawners, species_lookup, apply_spawn);
+        }
+        self.elapsed = target_elapsed;
+    }
+
+    fn is_complete(&self) -> bool {
+        self.bursts.iter().all(|burst| burst.remaining == 0)
+    }
+
+    fn completion(&self) -> WaveCompletion {
+        WaveCompletion::new(self.pressure, self.species_table_version)
+    }
+}
+
+#[derive(Debug)]
+struct ActiveBurst {
+    species_id: SpeciesId,
+    patch_id: PatchId,
+    remaining: u32,
+    cadence: Duration,
+    next_spawn: Duration,
+}
+
+impl ActiveBurst {
+    fn from_plan(burst: AttackBurst) -> Self {
+        let cadence = Duration::from_millis(u64::from(burst.cadence_ms().get()));
+        let next_spawn = Duration::from_millis(u64::from(burst.start_ms()));
+        Self {
+            species_id: burst.species_id(),
+            patch_id: burst.patch_id(),
+            remaining: burst.count().get(),
+            cadence,
+            next_spawn,
+        }
+    }
+
+    fn emit_until(
+        &mut self,
+        target_elapsed: Duration,
+        spawners: &[CellCoord],
+        species_lookup: &mut impl FnMut(SpeciesId) -> Option<WaveSpawnAttributes>,
+        apply_spawn: &mut impl FnMut(Command) -> bool,
+    ) {
+        while self.remaining > 0 && self.next_spawn <= target_elapsed {
+            let Some(spawner) = self.resolve_spawner(spawners) else {
+                self.remaining = 0;
+                break;
+            };
+            let Some(attributes) = species_lookup(self.species_id) else {
+                self.remaining = 0;
+                break;
+            };
+            let command = Command::SpawnBug {
+                spawner,
+                color: attributes.color,
+                health: attributes.health,
+                step_ms: attributes.step_ms,
+            };
+            let success = apply_spawn(command);
+            if success {
+                self.remaining = self.remaining.saturating_sub(1);
+            }
+            self.next_spawn = self.next_spawn.saturating_add(self.cadence);
+            if !success {
+                break;
+            }
+        }
+    }
+
+    fn resolve_spawner(&self, spawners: &[CellCoord]) -> Option<CellCoord> {
+        let index = usize::try_from(self.patch_id.get()).ok()?;
+        spawners.get(index).copied()
+    }
 }
 
 /// Populates the scene with targeting beams derived from system DTOs.
@@ -388,6 +609,8 @@ struct Simulation {
     pending_events: Vec<Event>,
     scratch_commands: Vec<Command>,
     queued_commands: Vec<Command>,
+    wave_manager: WaveManager,
+    last_wave_completion: Option<WaveCompletion>,
     pending_input: FrameInput,
     builder_preview: Option<BuilderPlacementPreview>,
     tower_feedback: Option<TowerInteractionFeedback>,
@@ -564,6 +787,8 @@ impl Simulation {
             pending_events,
             scratch_commands: Vec::new(),
             queued_commands: Vec::new(),
+            wave_manager: WaveManager::new(),
+            last_wave_completion: None,
             pending_input: FrameInput::default(),
             builder_preview: None,
             tower_feedback: None,
@@ -602,10 +827,76 @@ impl Simulation {
                 .push(Command::SetPlayMode { mode: next_mode });
         }
 
+        if input.spawn_wave {
+            self.request_wave();
+        }
+
         self.pending_input = FrameInput {
             mode_toggle: false,
+            spawn_wave: false,
             ..input
         };
+    }
+
+    fn request_wave(&mut self) {
+        if self.wave_manager.is_active() {
+            return;
+        }
+
+        if query::bug_spawners(&self.world).is_empty() {
+            return;
+        }
+
+        self.wave_manager.begin(Self::basic_wave_plan());
+        self.last_wave_completion = None;
+        if query::play_mode(&self.world) != PlayMode::Attack {
+            self.queued_commands.push(Command::SetPlayMode {
+                mode: PlayMode::Attack,
+            });
+        }
+    }
+
+    fn basic_wave_plan() -> AttackPlan {
+        let count = NonZeroU32::new(BASIC_WAVE_BUGS).expect("wave bug count must be non-zero");
+        let cadence =
+            NonZeroU32::new(BASIC_WAVE_CADENCE_MS).expect("wave cadence must be non-zero");
+        let burst = AttackBurst::new(
+            BASIC_WAVE_SPECIES_ID,
+            BASIC_WAVE_PATCH_ID,
+            count,
+            cadence,
+            0,
+        );
+        AttackPlan::new(BASIC_WAVE_PRESSURE, BASIC_WAVE_SPECIES_TABLE, vec![burst])
+    }
+
+    fn wave_spawn_attributes(step_ms: u32, species: SpeciesId) -> Option<WaveSpawnAttributes> {
+        match species.get() {
+            0 => Some(WaveSpawnAttributes::new(
+                BASIC_WAVE_COLOR,
+                BASIC_WAVE_HEALTH,
+                step_ms,
+            )),
+            _ => None,
+        }
+    }
+
+    fn handle_wave_completed(&mut self, completion: WaveCompletion) {
+        self.last_wave_completion = Some(completion);
+        if query::play_mode(&self.world) == PlayMode::Attack {
+            let mut emitted = Vec::new();
+            self.apply_command(
+                Command::SetPlayMode {
+                    mode: PlayMode::Builder,
+                },
+                &mut emitted,
+            );
+            self.pending_events.append(&mut emitted);
+        }
+    }
+
+    fn bug_step_ms_value(&self) -> u32 {
+        u32::try_from(self.bug_step_duration.as_millis()).unwrap_or(u32::MAX)
     }
 
     fn capture_layout_snapshot(&self) -> TowerLayoutSnapshot {
@@ -726,6 +1017,25 @@ impl Simulation {
         self.pending_events.clear();
         self.flush_queued_commands();
 
+        let step_ms = self.bug_step_ms_value();
+        let play_mode = query::play_mode(&self.world);
+        let spawners = query::bug_spawners(&self.world);
+        let mut wave_manager = std::mem::take(&mut self.wave_manager);
+        let mut wave_completion = None;
+        {
+            let mut species_lookup = |species| Self::wave_spawn_attributes(step_ms, species);
+            let mut apply_spawn = |command| self.apply_wave_command(command);
+            if let WaveAdvanceOutcome::Completed(completion) = wave_manager.advance(
+                Duration::ZERO,
+                play_mode,
+                &spawners,
+                &mut species_lookup,
+                &mut apply_spawn,
+            ) {
+                wave_completion = Some(completion);
+            }
+        }
+
         self.advance_bug_motions(dt);
         if !dt.is_zero() {
             let mut emitted = Vec::new();
@@ -733,8 +1043,35 @@ impl Simulation {
             self.pending_events.append(&mut emitted);
         }
 
-        let events_profile = self.process_pending_events(builder_preview, builder_input);
+        let mut events_profile = self.process_pending_events(builder_preview, builder_input);
         self.builder_preview = self.compute_builder_preview();
+
+        let play_mode_after = query::play_mode(&self.world);
+        let spawners_after = query::bug_spawners(&self.world);
+        {
+            let mut species_lookup = |species| Self::wave_spawn_attributes(step_ms, species);
+            let mut apply_spawn = |command| self.apply_wave_command(command);
+            if let WaveAdvanceOutcome::Completed(completion) = wave_manager.advance(
+                dt,
+                play_mode_after,
+                &spawners_after,
+                &mut species_lookup,
+                &mut apply_spawn,
+            ) {
+                wave_completion = Some(completion);
+            }
+        }
+        if let Some(completion) = wave_completion {
+            self.handle_wave_completed(completion);
+        }
+        if !self.pending_events.is_empty() {
+            let extra_profile = self.process_pending_events(None, TowerBuilderInput::default());
+            events_profile.add_pathfinding(extra_profile.pathfinding);
+            self.builder_preview = self.compute_builder_preview();
+        }
+
+        self.wave_manager = wave_manager;
+
         self.last_advance_profile =
             AdvanceProfile::new(frame_start.elapsed(), events_profile.pathfinding);
         self.announce_builder_mode_if_changed();
@@ -1472,6 +1809,15 @@ impl Simulation {
         &self.queued_commands
     }
 
+    #[cfg(test)]
+    fn wave_is_active(&self) -> bool {
+        self.wave_manager.is_active()
+    }
+
+    fn last_wave_completion(&self) -> Option<WaveCompletion> {
+        self.last_wave_completion
+    }
+
     fn flush_queued_commands(&mut self) {
         if self.queued_commands.is_empty() {
             return;
@@ -1484,6 +1830,16 @@ impl Simulation {
             self.pending_events.append(&mut emitted);
         }
         self.queued_commands = queued;
+    }
+
+    fn apply_wave_command(&mut self, command: Command) -> bool {
+        let mut emitted = Vec::new();
+        self.apply_command(command, &mut emitted);
+        let success = emitted
+            .iter()
+            .any(|event| matches!(event, Event::BugSpawned { .. }));
+        self.pending_events.append(&mut emitted);
+        success
     }
 }
 
@@ -1524,6 +1880,13 @@ mod tests {
 
     fn new_simulation() -> Simulation {
         new_simulation_with_style(VisualStyle::Sprites)
+    }
+
+    fn count_bug_spawn_events(events: &[Event]) -> usize {
+        events
+            .iter()
+            .filter(|event| matches!(event, Event::BugSpawned { .. }))
+            .count()
     }
 
     fn make_scene() -> Scene {
@@ -2046,6 +2409,57 @@ mod tests {
 
         simulation.advance(Duration::from_millis(500));
         assert!(query::bug_view(simulation.world()).into_vec().is_empty());
+    }
+
+    #[test]
+    fn wave_request_switches_to_attack_mode() {
+        let mut simulation = new_simulation();
+        assert_eq!(query::play_mode(simulation.world()), PlayMode::Builder);
+
+        simulation.handle_input(FrameInput {
+            spawn_wave: true,
+            ..FrameInput::default()
+        });
+        simulation.advance(Duration::ZERO);
+
+        assert_eq!(query::play_mode(simulation.world()), PlayMode::Attack);
+        assert!(simulation.wave_is_active());
+    }
+
+    #[test]
+    fn wave_spawns_bugs_until_plan_completed() {
+        let mut simulation = new_simulation();
+
+        simulation.handle_input(FrameInput {
+            spawn_wave: true,
+            ..FrameInput::default()
+        });
+        simulation.advance(Duration::ZERO);
+        let mut spawned = count_bug_spawn_events(simulation.last_frame_events());
+
+        let cadence = Duration::from_millis(u64::from(BASIC_WAVE_CADENCE_MS));
+        let mut attempts = 0;
+        while spawned < usize::try_from(BASIC_WAVE_BUGS).expect("wave bug count fits")
+            && attempts < usize::try_from(BASIC_WAVE_BUGS * 4).expect("attempt bound fits")
+        {
+            simulation.advance(cadence);
+            spawned += count_bug_spawn_events(simulation.last_frame_events());
+            attempts += 1;
+        }
+
+        assert_eq!(
+            spawned,
+            usize::try_from(BASIC_WAVE_BUGS).expect("wave bug count fits"),
+            "wave should spawn configured bug count"
+        );
+        simulation.advance(cadence);
+        assert!(!simulation.wave_is_active());
+        assert_eq!(query::play_mode(simulation.world()), PlayMode::Builder);
+        let completion = simulation
+            .last_wave_completion()
+            .expect("wave completion should be recorded");
+        assert_eq!(completion.pressure(), BASIC_WAVE_PRESSURE);
+        assert_eq!(completion.species_table_version(), BASIC_WAVE_SPECIES_TABLE);
     }
 
     #[test]

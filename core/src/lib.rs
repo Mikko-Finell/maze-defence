@@ -149,6 +149,187 @@ pub enum PlayMode {
     Builder,
 }
 
+/// Deterministic plan that describes the contents of a single attack wave.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AttackPlan {
+    pressure: Pressure,
+    species_table_version: SpeciesTableVersion,
+    bursts: Vec<AttackBurst>,
+}
+
+impl AttackPlan {
+    /// Creates a new attack plan from the provided pressure, species table version, and bursts.
+    #[must_use]
+    pub fn new(
+        pressure: Pressure,
+        species_table_version: SpeciesTableVersion,
+        mut bursts: Vec<AttackBurst>,
+    ) -> Self {
+        bursts.sort_by_key(|burst| (burst.species_id, burst.patch_id, burst.start_ms));
+        Self {
+            pressure,
+            species_table_version,
+            bursts,
+        }
+    }
+
+    /// Total pressure budget allocated to the plan.
+    #[must_use]
+    pub const fn pressure(&self) -> Pressure {
+        self.pressure
+    }
+
+    /// Identifier of the species table used to interpret the plan.
+    #[must_use]
+    pub const fn species_table_version(&self) -> SpeciesTableVersion {
+        self.species_table_version
+    }
+
+    /// Ordered bursts scheduled in the plan.
+    #[must_use]
+    pub fn bursts(&self) -> &[AttackBurst] {
+        &self.bursts
+    }
+
+    /// Consumes the plan, yielding the scheduled bursts.
+    #[must_use]
+    pub fn into_bursts(self) -> Vec<AttackBurst> {
+        self.bursts
+    }
+}
+
+/// Burst descriptor that schedules homogeneous bug spawns.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AttackBurst {
+    species_id: SpeciesId,
+    patch_id: PatchId,
+    count: NonZeroU32,
+    cadence_ms: NonZeroU32,
+    start_ms: u32,
+}
+
+impl AttackBurst {
+    /// Creates a new burst descriptor.
+    #[must_use]
+    pub const fn new(
+        species_id: SpeciesId,
+        patch_id: PatchId,
+        count: NonZeroU32,
+        cadence_ms: NonZeroU32,
+        start_ms: u32,
+    ) -> Self {
+        Self {
+            species_id,
+            patch_id,
+            count,
+            cadence_ms,
+            start_ms,
+        }
+    }
+
+    /// Species spawned by this burst.
+    #[must_use]
+    pub const fn species_id(&self) -> SpeciesId {
+        self.species_id
+    }
+
+    /// Patch identifier used to locate spawn positions.
+    #[must_use]
+    pub const fn patch_id(&self) -> PatchId {
+        self.patch_id
+    }
+
+    /// Total number of spawns emitted by the burst.
+    #[must_use]
+    pub const fn count(&self) -> NonZeroU32 {
+        self.count
+    }
+
+    /// Milliseconds between consecutive spawns in the burst.
+    #[must_use]
+    pub const fn cadence_ms(&self) -> NonZeroU32 {
+        self.cadence_ms
+    }
+
+    /// Milliseconds offset from the start of the wave when the first spawn occurs.
+    #[must_use]
+    pub const fn start_ms(&self) -> u32 {
+        self.start_ms
+    }
+}
+
+/// Total pressure assigned to an attack plan.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct Pressure(u32);
+
+impl Pressure {
+    /// Creates a new pressure descriptor.
+    #[must_use]
+    pub const fn new(value: u32) -> Self {
+        Self(value)
+    }
+
+    /// Returns the underlying integer pressure budget.
+    #[must_use]
+    pub const fn get(self) -> u32 {
+        self.0
+    }
+}
+
+/// Identifier used to look up species definitions.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct SpeciesId(u32);
+
+impl SpeciesId {
+    /// Creates a new species identifier.
+    #[must_use]
+    pub const fn new(value: u32) -> Self {
+        Self(value)
+    }
+
+    /// Returns the underlying numeric identifier.
+    #[must_use]
+    pub const fn get(self) -> u32 {
+        self.0
+    }
+}
+
+/// Identifier of a spawn patch referenced by attack plans.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct PatchId(u32);
+
+impl PatchId {
+    /// Creates a new patch identifier.
+    #[must_use]
+    pub const fn new(value: u32) -> Self {
+        Self(value)
+    }
+
+    /// Returns the underlying numeric identifier.
+    #[must_use]
+    pub const fn get(self) -> u32 {
+        self.0
+    }
+}
+
+/// Version marker for the species table referenced by an attack plan.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct SpeciesTableVersion(u32);
+
+impl SpeciesTableVersion {
+    /// Creates a new species table version marker.
+    #[must_use]
+    pub const fn new(value: u32) -> Self {
+        Self(value)
+    }
+
+    /// Returns the underlying version number.
+    #[must_use]
+    pub const fn get(self) -> u32 {
+        self.0
+    }
+}
+
 /// Commands that express all permissible world mutations.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Command {
@@ -1459,9 +1640,10 @@ mod tests {
     use std::num::NonZeroU32;
 
     use super::{
-        CellCoord, CellRect, CellRectSize, Damage, Gold, Health, NavigationFieldView,
-        PlacementError, ProjectileId, ProjectileRejection, RemovalError, TowerId, TowerKind,
-        CONGESTION_LOOKAHEAD, CONGESTION_WEIGHT, DETOUR_RADIUS,
+        AttackBurst, AttackPlan, CellCoord, CellRect, CellRectSize, Damage, Gold, Health,
+        NavigationFieldView, PatchId, PlacementError, Pressure, ProjectileId, ProjectileRejection,
+        RemovalError, SpeciesId, SpeciesTableVersion, TowerId, TowerKind, CONGESTION_LOOKAHEAD,
+        CONGESTION_WEIGHT, DETOUR_RADIUS,
     };
     use serde::{de::DeserializeOwned, Serialize};
 
@@ -1513,6 +1695,15 @@ mod tests {
     fn gold_round_trips_through_bincode() {
         let gold = Gold::new(27);
         assert_round_trip(&gold);
+    }
+
+    #[test]
+    fn attack_plan_round_trips_through_bincode() {
+        let count = NonZeroU32::new(3).expect("non-zero count");
+        let cadence = NonZeroU32::new(250).expect("non-zero cadence");
+        let burst = AttackBurst::new(SpeciesId::new(7), PatchId::new(2), count, cadence, 1200);
+        let plan = AttackPlan::new(Pressure::new(15), SpeciesTableVersion::new(1), vec![burst]);
+        assert_round_trip(&plan);
     }
 
     #[test]

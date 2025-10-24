@@ -20,7 +20,7 @@ Objective: enable a trivial but repeatable “wave → kill → reward → build
 3. **Economy groundwork** [DONE]
    * Introduce global **gold resource** owned by the world state.
    * Award **gold per bug kill** (flat value is sufficient) and charge **tower placement cost**, rejecting placement when funds are insufficient.
-4. **Wave scaffolding** [TODO]
+4. **Wave scaffolding** [DONE]
    * Keep the existing manual “Spawn Wave” trigger but hardcode a basic wave (e.g. N slow bugs).
    * Define an initial `AttackPlan` representation that captures wave intent (per `pressure-spec.md`) without yet generating waves systemically.
 5. **Failure condition** [TODO]

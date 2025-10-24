@@ -24,7 +24,7 @@ use macroquad::math::Vec2 as MacroquadVec2;
 use macroquad::{
     color::{BLACK, WHITE},
     input::{is_key_pressed, is_mouse_button_pressed, mouse_position, KeyCode, MouseButton},
-    text::{draw_text_ex, TextParams},
+    text::{draw_text_ex, measure_text, TextParams},
 };
 use maze_defence_core::{CellRect, PlayMode, TowerId, TowerKind};
 use maze_defence_rendering::{
@@ -41,6 +41,13 @@ use std::{
 };
 
 use self::sprites::SpriteAtlas;
+
+const PANEL_PADDING: f32 = 16.0;
+const WAVE_BUTTON_HEIGHT: f32 = 56.0;
+const WAVE_BUTTON_COLOR: macroquad::color::Color =
+    macroquad::color::Color::new(0.16, 0.35, 0.2, 1.0);
+const WAVE_BUTTON_TEXT_COLOR: macroquad::color::Color = WHITE;
+const WAVE_BUTTON_LABEL: &str = "Spawn Wave";
 
 /// Rendering backend implemented on top of macroquad.
 #[derive(Debug)]
@@ -398,7 +405,7 @@ impl RenderingBackend for MacroquadBackend {
                 }
 
                 draw_projectiles(&scene.projectiles, &metrics);
-                draw_control_panel(&scene, screen_width, screen_height);
+                draw_control_panel(&scene, &metrics);
 
                 if show_tower_target_lines {
                     draw_tower_targets(&scene.tower_targets, &metrics);
@@ -460,6 +467,9 @@ struct SceneMetrics {
     bordered_grid_height_scaled: f32,
     tile_step: f32,
     cell_step: f32,
+    panel_left: f32,
+    panel_width: f32,
+    screen_height: f32,
 }
 
 impl SceneMetrics {
@@ -472,6 +482,7 @@ impl SceneMetrics {
             .map(|panel| panel.width.max(0.0))
             .unwrap_or(0.0)
             .min(screen_width);
+        let panel_left = (screen_width - panel_width).max(0.0);
         let available_width = (screen_width - panel_width).max(0.0);
         let scale = if world_width == 0.0 || world_height == 0.0 {
             1.0
@@ -516,6 +527,9 @@ impl SceneMetrics {
             bordered_grid_height_scaled,
             tile_step,
             cell_step,
+            panel_left,
+            panel_width,
+            screen_height,
         }
     }
 
@@ -525,6 +539,51 @@ impl SceneMetrics {
             self.offset_y + position.y * self.cell_step,
         )
     }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct ControlPanelButtonBounds {
+    left: f32,
+    top: f32,
+    width: f32,
+    height: f32,
+}
+
+impl ControlPanelButtonBounds {
+    fn contains(&self, x: f32, y: f32) -> bool {
+        x >= self.left
+            && x <= self.left + self.width
+            && y >= self.top
+            && y <= self.top + self.height
+    }
+}
+
+fn wave_button_bounds(metrics: &SceneMetrics) -> Option<ControlPanelButtonBounds> {
+    if metrics.panel_width <= f32::EPSILON {
+        return None;
+    }
+
+    let available_width = metrics.panel_width - PANEL_PADDING * 2.0;
+    if available_width <= f32::EPSILON {
+        return None;
+    }
+
+    let available_height = metrics.screen_height - PANEL_PADDING * 2.0;
+    if available_height <= f32::EPSILON {
+        return None;
+    }
+
+    let height = WAVE_BUTTON_HEIGHT.min(available_height);
+    if height <= f32::EPSILON {
+        return None;
+    }
+
+    Some(ControlPanelButtonBounds {
+        left: metrics.panel_left + PANEL_PADDING,
+        top: PANEL_PADDING,
+        width: available_width,
+        height,
+    })
 }
 
 fn gather_frame_input(scene: &Scene, metrics: &SceneMetrics) -> FrameInput {
@@ -592,22 +651,36 @@ fn gather_frame_input_from_observations(
 
     input.remove_action = remove_click || delete_pressed;
 
+    if confirm_click && !inside {
+        if let Some(bounds) = wave_button_bounds(metrics) {
+            if bounds.contains(cursor_x, cursor_y) {
+                input.spawn_wave = true;
+            }
+        }
+    }
+
     input
 }
 
-fn draw_control_panel(scene: &Scene, screen_width: f32, screen_height: f32) {
-    let Some(ControlPanelView { width, background }) = scene.control_panel else {
+fn draw_control_panel(scene: &Scene, metrics: &SceneMetrics) {
+    let Some(ControlPanelView { background, .. }) = scene.control_panel else {
         return;
     };
-    if width <= f32::EPSILON {
+    let panel_width = metrics.panel_width;
+    if panel_width <= f32::EPSILON {
         return;
     }
 
-    let left = (screen_width - width).max(0.0);
+    let screen_height = metrics.screen_height;
+    if screen_height <= f32::EPSILON {
+        return;
+    }
+
+    let left = metrics.panel_left;
     macroquad::shapes::draw_rectangle(
         left,
         0.0,
-        width,
+        panel_width,
         screen_height,
         to_macroquad_color(background),
     );
@@ -619,6 +692,33 @@ fn draw_control_panel(scene: &Scene, screen_width: f32, screen_height: f32) {
         params.font_scale = 1.0;
         params.color = WHITE;
         draw_text_ex(&text, left + 16.0, 40.0, params);
+    }
+
+    if let Some(bounds) = wave_button_bounds(metrics) {
+        macroquad::shapes::draw_rectangle(
+            bounds.left,
+            bounds.top,
+            bounds.width,
+            bounds.height,
+            WAVE_BUTTON_COLOR,
+        );
+        macroquad::shapes::draw_rectangle_lines(
+            bounds.left,
+            bounds.top,
+            bounds.width,
+            bounds.height,
+            2.0,
+            WHITE,
+        );
+
+        let mut params = TextParams::default();
+        params.font_size = 28;
+        params.font_scale = 1.0;
+        params.color = WAVE_BUTTON_TEXT_COLOR;
+        let dimensions = measure_text(WAVE_BUTTON_LABEL, None, params.font_size, params.font_scale);
+        let text_x = bounds.left + (bounds.width - dimensions.width) * 0.5;
+        let text_y = bounds.top + (bounds.height + dimensions.height) * 0.5 - dimensions.offset_y;
+        draw_text_ex(WAVE_BUTTON_LABEL, text_x, text_y, params);
     }
 }
 
@@ -1823,6 +1923,9 @@ mod tests {
             bordered_grid_height_scaled: 0.0,
             tile_step: 0.0,
             cell_step: 0.0,
+            panel_left: 0.0,
+            panel_width: 0.0,
+            screen_height: 0.0,
         };
         let texture_size = MacroquadVec2::new(64.0, 64.0);
 
