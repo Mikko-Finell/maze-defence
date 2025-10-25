@@ -1,6 +1,7 @@
 # Wave Generation — Final Authoritative Specification
 
-Intent
+This document is deprecated superseded by `pressure-spec-v2.md`.
+
 This document defines a deterministic, data-driven mechanism to generate an AttackPlan (one attack/wave) composed of multiple overlapping bursts of homogeneous enemy species spawned from patches outside the maze. The generator is a pure, seedable procedure: given the same inputs (global seed, difficulty state, species table, patch table and parameters) it SHALL produce bit-identical AttackPlans. This spec focuses strictly on wave generation mechanics; reward and loss systems are out of scope except for brief, non-normative asides.
 
 Principles (summary)
@@ -218,4 +219,4 @@ Every implementation of this generator MUST include unit/integration tests that 
 
 ---
 
-This specification is the single source of truth for wave generation. Implementations SHALL follow it exactly for deterministic compatibility; any deliberate deviation (e.g., different RNG branching or float-based weight rounding) MUST be noted and accompanied by a compatibility test that demonstrates AttackPlan parity with the canonical generator used for playtesting and CI.
+This specification is no longer the single source of truth for wave generation. Implementations SHALL NOT follow it exactly for deterministic compatibility; any deliberate deviation (e.g., different RNG branching or float-based weight rounding) MUST NOT be noted and accompanied by a compatibility test that demonstrates AttackPlan parity with the canonical generator used for playtesting and CI.
