@@ -9,7 +9,15 @@
 
 //! Deterministic pressure v2 wave generation system stub.
 
-use maze_defence_core::{PressureSpawnRecord, PressureWaveInputs};
+use maze_defence_core::{
+    DifficultyLevel, LevelId, PressureSpawnRecord, PressureWaveInputs, WaveId,
+};
+use rand::SeedableRng;
+use rand_chacha::ChaCha8Rng;
+
+const DEFAULT_RNG_SEED: u64 = 0x8955_06d3_3f6b_11d7;
+const FNV_OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
+const FNV_PRIME: u64 = 0x0000_0001_0000_01b3;
 
 /// Aggregated tuning knobs controlling every adjustable aspect of the pressure generator.
 #[derive(Clone, Debug)]
@@ -255,6 +263,8 @@ impl Default for CadenceTuning {
 #[derive(Debug)]
 pub struct PressureV2 {
     tuning: PressureTuning,
+    rng: ChaCha8Rng,
+    telemetry: PressureTelemetry,
 }
 
 impl Default for PressureV2 {
@@ -267,7 +277,11 @@ impl PressureV2 {
     /// Creates a new generator with the provided tuning surface.
     #[must_use]
     pub fn new(tuning: PressureTuning) -> Self {
-        Self { tuning }
+        Self {
+            tuning,
+            rng: ChaCha8Rng::seed_from_u64(DEFAULT_RNG_SEED),
+            telemetry: PressureTelemetry::default(),
+        }
     }
 
     /// Returns a mutable reference to the global tuning knobs so designers can adjust wave behaviour.
@@ -275,9 +289,326 @@ impl PressureV2 {
         &mut self.tuning
     }
 
+    /// Returns the most recent telemetry snapshot emitted by the generator.
+    pub fn telemetry(&self) -> &PressureTelemetry {
+        &self.telemetry
+    }
+
     /// Generates v2 pressure spawns according to the provided inputs.
-    pub fn generate(&mut self, _inputs: &PressureWaveInputs, out: &mut Vec<PressureSpawnRecord>) {
+    pub fn generate(&mut self, inputs: &PressureWaveInputs, out: &mut Vec<PressureSpawnRecord>) {
+        self.reseed_rng(inputs);
+        // RNG draw order (documented here for determinism auditing):
+        // 1) Difficulty latent draws (§3) consume the first sequence elements.
+        // 2) Species sampling (§4) consumes the subsequent draws in the order they appear in the spec.
+        // 3) Cadence sampling (§6) consumes the remaining draws before compression.
+        self.telemetry.reset();
+        self.telemetry.ensure_placeholders();
         out.clear();
         todo!("pressure v2 generation not implemented");
+    }
+
+    fn reseed_rng(&mut self, inputs: &PressureWaveInputs) {
+        let seed = wave_seed_hash(
+            inputs.game_seed(),
+            inputs.level_id(),
+            inputs.wave(),
+            inputs.difficulty(),
+        );
+        self.rng = ChaCha8Rng::seed_from_u64(seed);
+    }
+}
+
+fn wave_seed_hash(
+    game_seed: u64,
+    level_id: LevelId,
+    wave: WaveId,
+    difficulty: DifficultyLevel,
+) -> u64 {
+    let mut hash = FNV_OFFSET_BASIS;
+    hash = fnv1a(hash, &game_seed.to_le_bytes());
+    hash = fnv1a(hash, &level_id.get().to_le_bytes());
+    hash = fnv1a(hash, &wave.get().to_le_bytes());
+    fnv1a(hash, &difficulty.get().to_le_bytes())
+}
+
+fn fnv1a(mut state: u64, bytes: &[u8]) -> u64 {
+    for byte in bytes {
+        state ^= u64::from(*byte);
+        state = state.wrapping_mul(FNV_PRIME);
+    }
+    state
+}
+
+/// Telemetry accumulator for the pressure generator.
+#[derive(Clone, Debug, Default)]
+pub struct PressureTelemetry {
+    difficulty_latents: DifficultyLatentsTelemetry,
+    species_merge: Vec<SpeciesMergeTelemetry>,
+    eta_scaling: EtaScalingTelemetry,
+    cadence_compression: CadenceCompressionTelemetry,
+}
+
+impl PressureTelemetry {
+    /// Clears any accumulated telemetry back to placeholder defaults.
+    pub fn reset(&mut self) {
+        self.difficulty_latents = DifficultyLatentsTelemetry::default();
+        self.species_merge.clear();
+        self.eta_scaling = EtaScalingTelemetry::default();
+        self.cadence_compression = CadenceCompressionTelemetry::default();
+    }
+
+    /// Ensures that every telemetry stream has at least a placeholder record available.
+    pub fn ensure_placeholders(&mut self) {
+        self.difficulty_latents.recorded = false;
+        self.eta_scaling.recorded = false;
+        self.cadence_compression.recorded = false;
+        if self.species_merge.is_empty() {
+            self.species_merge.push(SpeciesMergeTelemetry::default());
+        }
+    }
+
+    /// Begins recording the difficulty latent telemetry entry.
+    pub fn difficulty_latents_mut(&mut self) -> &mut DifficultyLatentsTelemetry {
+        self.difficulty_latents.recorded = true;
+        &mut self.difficulty_latents
+    }
+
+    /// Appends a species merge record and marks it as an actual merge event.
+    pub fn push_species_merge(&mut self) -> &mut SpeciesMergeTelemetry {
+        self.species_merge
+            .push(SpeciesMergeTelemetry::merge_placeholder());
+        self.species_merge
+            .last_mut()
+            .expect("merge record should exist")
+    }
+
+    /// Accesses the currently accumulated species merge telemetry records.
+    pub fn species_merge(&self) -> &[SpeciesMergeTelemetry] {
+        &self.species_merge
+    }
+
+    /// Accesses the difficulty latent telemetry entry.
+    pub fn difficulty_latents(&self) -> &DifficultyLatentsTelemetry {
+        &self.difficulty_latents
+    }
+
+    /// Accesses the η scaling telemetry entry.
+    pub fn eta_scaling_mut(&mut self) -> &mut EtaScalingTelemetry {
+        self.eta_scaling.recorded = true;
+        &mut self.eta_scaling
+    }
+
+    /// Accesses the cadence compression telemetry entry.
+    pub fn cadence_compression_mut(&mut self) -> &mut CadenceCompressionTelemetry {
+        self.cadence_compression.recorded = true;
+        &mut self.cadence_compression
+    }
+
+    /// Returns the η scaling telemetry entry.
+    pub fn eta_scaling(&self) -> &EtaScalingTelemetry {
+        &self.eta_scaling
+    }
+
+    /// Returns the cadence compression telemetry entry.
+    pub fn cadence_compression(&self) -> &CadenceCompressionTelemetry {
+        &self.cadence_compression
+    }
+}
+
+/// Difficulty latent telemetry entry carrying placeholder values until the latent implementation lands.
+#[derive(Clone, Debug, Default)]
+pub struct DifficultyLatentsTelemetry {
+    recorded: bool,
+    /// Placeholder bug count mean stored for upcoming implementations.
+    pub bug_count_mean: f32,
+    /// Placeholder sampled bug count stored for upcoming implementations.
+    pub bug_count_sampled: u32,
+    /// Placeholder HP multiplier latent stored for upcoming implementations.
+    pub hp_multiplier: f32,
+    /// Placeholder speed multiplier latent stored for upcoming implementations.
+    pub speed_multiplier: f32,
+}
+
+impl DifficultyLatentsTelemetry {
+    /// Indicates whether real difficulty latent data has been populated.
+    #[must_use]
+    pub fn is_recorded(&self) -> bool {
+        self.recorded
+    }
+}
+
+/// Species merge telemetry entry which records each merge that occurs during §4.4.
+#[derive(Clone, Debug, Default)]
+pub struct SpeciesMergeTelemetry {
+    recorded: bool,
+    /// Placeholder index of the component that was merged away.
+    pub from_component: u32,
+    /// Placeholder index of the component that absorbed the merge prior to the operation.
+    pub to_component: u32,
+    /// Placeholder bug count of the merged component.
+    pub from_count: u32,
+    /// Placeholder bug count of the receiving component before the merge.
+    pub to_count_before: u32,
+    /// Placeholder bug count of the receiving component after the merge.
+    pub to_count_after: u32,
+    /// Placeholder log-distance used for merge selection.
+    pub log_distance: f32,
+}
+
+impl SpeciesMergeTelemetry {
+    /// Creates a placeholder merge record flagged as an actual merge.
+    #[must_use]
+    fn merge_placeholder() -> Self {
+        let mut record = Self::default();
+        record.recorded = true;
+        record
+    }
+
+    /// Indicates whether the record represents an actual merge (as opposed to a placeholder).
+    #[must_use]
+    pub fn is_recorded(&self) -> bool {
+        self.recorded
+    }
+}
+
+/// Telemetry entry describing the η scaling decision made in §5.
+#[derive(Clone, Debug, Default)]
+pub struct EtaScalingTelemetry {
+    recorded: bool,
+    /// Placeholder resolved η value.
+    pub eta_final: f32,
+    /// Placeholder clamp indicator describing whether η hit its bounds.
+    pub eta_clamped: bool,
+    /// Placeholder target pressure value `P_wave`.
+    pub pressure_target: f32,
+    /// Placeholder measured pressure after applying η.
+    pub pressure_after_eta: f32,
+}
+
+impl EtaScalingTelemetry {
+    /// Indicates whether real η scaling data has been populated.
+    #[must_use]
+    pub fn is_recorded(&self) -> bool {
+        self.recorded
+    }
+}
+
+/// Telemetry entry describing cadence compression results from §6.
+#[derive(Clone, Debug, Default)]
+pub struct CadenceCompressionTelemetry {
+    recorded: bool,
+    /// Placeholder maximum spawn time before compression.
+    pub t_end_before: u32,
+    /// Placeholder target deploy duration `T_target(D)`.
+    pub t_target: u32,
+    /// Placeholder compression factor applied to cadences.
+    pub compression_factor: f32,
+    /// Placeholder indicator describing whether any cadence hit the `cad_min` floor.
+    pub hit_cadence_min: bool,
+    /// Placeholder maximum spawn time after compression.
+    pub t_end_after: u32,
+}
+
+impl CadenceCompressionTelemetry {
+    /// Indicates whether real cadence compression data has been populated.
+    #[must_use]
+    pub fn is_recorded(&self) -> bool {
+        self.recorded
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rand::RngCore;
+
+    #[test]
+    fn wave_seed_hash_uses_all_inputs() {
+        let base_inputs =
+            PressureWaveInputs::new(7, LevelId::new(3), WaveId::new(1), DifficultyLevel::new(2));
+        let mut generator = PressureV2::default();
+        let base_seed = wave_seed_hash(
+            base_inputs.game_seed(),
+            base_inputs.level_id(),
+            base_inputs.wave(),
+            base_inputs.difficulty(),
+        );
+        let seeds = [
+            wave_seed_hash(
+                8,
+                base_inputs.level_id(),
+                base_inputs.wave(),
+                base_inputs.difficulty(),
+            ),
+            wave_seed_hash(
+                base_inputs.game_seed(),
+                LevelId::new(4),
+                base_inputs.wave(),
+                base_inputs.difficulty(),
+            ),
+            wave_seed_hash(
+                base_inputs.game_seed(),
+                base_inputs.level_id(),
+                WaveId::new(2),
+                base_inputs.difficulty(),
+            ),
+            wave_seed_hash(
+                base_inputs.game_seed(),
+                base_inputs.level_id(),
+                base_inputs.wave(),
+                DifficultyLevel::new(3),
+            ),
+        ];
+
+        for seed in seeds {
+            assert_ne!(base_seed, seed);
+        }
+
+        generator.reseed_rng(&base_inputs);
+        let first_draw = generator.rng.next_u32();
+        generator.reseed_rng(&base_inputs);
+        let second_draw = generator.rng.next_u32();
+        assert_eq!(first_draw, second_draw);
+    }
+
+    #[test]
+    fn rng_sequence_is_stable_across_instances() {
+        let inputs = PressureWaveInputs::new(
+            42,
+            LevelId::new(11),
+            WaveId::new(5),
+            DifficultyLevel::new(9),
+        );
+        let mut generator_a = PressureV2::default();
+        let mut generator_b = PressureV2::default();
+        generator_a.reseed_rng(&inputs);
+        generator_b.reseed_rng(&inputs);
+
+        let draws_a = [
+            generator_a.rng.next_u32(),
+            generator_a.rng.next_u32(),
+            generator_a.rng.next_u32(),
+        ];
+        let draws_b = [
+            generator_b.rng.next_u32(),
+            generator_b.rng.next_u32(),
+            generator_b.rng.next_u32(),
+        ];
+
+        assert_eq!(draws_a, draws_b);
+    }
+
+    #[test]
+    fn telemetry_placeholders_cover_all_streams() {
+        let mut telemetry = PressureTelemetry::default();
+        telemetry.ensure_placeholders();
+        assert!(!telemetry.species_merge().is_empty());
+        assert!(!telemetry.difficulty_latents().is_recorded());
+        assert!(!telemetry.eta_scaling().is_recorded());
+        assert!(!telemetry.cadence_compression().is_recorded());
+
+        let merge = telemetry.push_species_merge();
+        assert!(merge.is_recorded());
+        assert_eq!(telemetry.species_merge().len(), 2);
     }
 }

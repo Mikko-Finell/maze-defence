@@ -5,3 +5,5 @@ edition = "2021"
 
 [dependencies]
 maze-defence-core = { path = "../../core" }
+rand = { version = "0.8", default-features = false, features = ["std"] }
+rand_chacha = { version = "0.3", default-features = false, features = ["std"] }

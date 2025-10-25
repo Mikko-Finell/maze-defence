@@ -746,12 +746,17 @@ impl PressureWaveInputs {
     /// Creates a new set of inputs for the pressure v2 generator.
     #[must_use]
     pub fn new(
-        _game_seed: u64,
-        _level_id: LevelId,
-        _wave: WaveId,
-        _difficulty: DifficultyLevel,
+        game_seed: u64,
+        level_id: LevelId,
+        wave: WaveId,
+        difficulty: DifficultyLevel,
     ) -> Self {
-        todo!("pressure v2 inputs not implemented");
+        Self {
+            game_seed,
+            level_id,
+            wave,
+            difficulty,
+        }
     }
 
     /// Reports the difficulty scalar supplied to the generator.
@@ -791,8 +796,13 @@ pub struct PressureSpawnRecord {
 impl PressureSpawnRecord {
     /// Creates a new spawn record describing an individual bug spawn.
     #[must_use]
-    pub fn new(_time_ms: u32, _hp: u32, _speed_mult: f32, _species_id: u32) -> Self {
-        todo!("pressure v2 spawn record not implemented");
+    pub fn new(time_ms: u32, hp: u32, speed_mult: f32, species_id: u32) -> Self {
+        Self {
+            time_ms,
+            hp,
+            speed_mult,
+            species_id,
+        }
     }
 
     /// Reports the scheduled spawn time in milliseconds from wave start.
@@ -829,8 +839,8 @@ pub struct PressureWavePlan {
 impl PressureWavePlan {
     /// Creates a new spawn list populated with generator output.
     #[must_use]
-    pub fn new(_spawns: Vec<PressureSpawnRecord>) -> Self {
-        todo!("pressure v2 wave plan not implemented");
+    pub fn new(spawns: Vec<PressureSpawnRecord>) -> Self {
+        Self { spawns }
     }
 
     /// Returns the captured spawn descriptors in deterministic order.
