@@ -1,0 +1,8 @@
+[build]
+rustflags = ["-Dwarnings"]
+
+[target.'cfg(test)']
+rustflags = ["-Dwarnings"]
+
+[doc]
+rustdocflags = ["-Dwarnings"]
