@@ -1,362 +1,143 @@
-use std::{
-    collections::hash_map::DefaultHasher,
-    convert::TryFrom,
-    hash::{Hash, Hasher},
-    time::Duration,
-};
+use std::time::Duration;
 
 use maze_defence_core::{
-    BugColor, CellCoord, Command, Event, Health, NavigationFieldView, PlayMode, TileCoord,
+    AttackPlan, BurstPlan, Command, Event, PlayMode, Pressure, SpawnPatchId, SpeciesId,
+    WaveDifficulty,
 };
-use maze_defence_system_spawning::{Config, Spawning};
+use maze_defence_system_spawning::Spawning;
 use maze_defence_world::{self as world, query, World};
 
 #[test]
-fn emits_multiple_spawn_commands_for_large_dt() {
+fn spawning_consumes_cached_plan_and_emits_burst_events() {
     let mut world = World::new();
     let mut events = Vec::new();
     world::apply(
         &mut world,
         Command::ConfigureTileGrid {
-            columns: TileCoord::new(4),
-            rows: TileCoord::new(4),
+            columns: maze_defence_core::TileCoord::new(4),
+            rows: maze_defence_core::TileCoord::new(4),
             tile_length: 1.0,
             cells_per_tile: 1,
         },
         &mut events,
     );
+    events.clear();
 
-    let spawners = query::bug_spawners(&world);
-    assert!(!spawners.is_empty(), "expected at least one spawner");
-
-    let cadence = Duration::from_millis(250);
-    let mut spawning = Spawning::new(Config::new(
-        Duration::from_millis(500),
-        cadence,
-        0x1234_5678,
-    ));
-    let mut commands = Vec::new();
-    spawning.handle(
-        &[Event::TimeAdvanced {
-            dt: Duration::from_secs(2),
-        }],
-        PlayMode::Attack,
-        &spawners,
-        &mut commands,
+    let wave = query::wave_seed_context(&world).wave();
+    let species_table = query::species_table(&world);
+    let plan = AttackPlan::new(
+        Pressure::new(900),
+        species_table.version(),
+        vec![BurstPlan::new(
+            SpeciesId::new(0),
+            SpawnPatchId::new(0),
+            std::num::NonZeroU32::new(3).unwrap(),
+            std::num::NonZeroU32::new(100).unwrap(),
+            0,
+        )],
     );
 
-    assert_eq!(commands.len(), 4, "expected one spawn per interval");
-
-    let expected_colors = [
-        BugColor::from_rgb(0x2f, 0x95, 0x32),
-        BugColor::from_rgb(0xc8, 0x2a, 0x36),
-        BugColor::from_rgb(0xff, 0xc1, 0x07),
-        BugColor::from_rgb(0x58, 0x47, 0xff),
-    ];
-
-    let expected_step_ms = u32::try_from(cadence.as_millis()).expect("cadence fits u32");
-
-    for (command, expected_color) in commands.iter().zip(expected_colors.iter().cycle()) {
-        match command {
-            Command::SpawnBug { color, step_ms, .. } => {
-                assert_eq!(color, expected_color);
-                assert_eq!(step_ms, &expected_step_ms);
-            }
-            other => panic!("unexpected command emitted: {other:?}"),
-        }
-    }
-}
-
-#[test]
-fn builder_mode_resets_accumulator() {
-    let spawners = vec![CellCoord::new(0, 0)];
-    let mut spawning = Spawning::new(Config::new(
-        Duration::from_secs(1),
-        Duration::from_millis(250),
-        0x4d59_5df4_d0f3_3173,
-    ));
-
-    let mut commands = Vec::new();
-    spawning.handle(
-        &[Event::TimeAdvanced {
-            dt: Duration::from_millis(500),
-        }],
-        PlayMode::Attack,
-        &spawners,
-        &mut commands,
-    );
-    assert!(commands.is_empty(), "no spawn before full interval");
-
-    spawning.handle(
-        &[Event::PlayModeChanged {
-            mode: PlayMode::Builder,
-        }],
-        PlayMode::Builder,
-        &spawners,
-        &mut commands,
-    );
-    assert!(commands.is_empty(), "builder mode should not spawn");
-
-    spawning.handle(
-        &[Event::PlayModeChanged {
+    world::apply(
+        &mut world,
+        Command::SetPlayMode {
             mode: PlayMode::Attack,
-        }],
-        PlayMode::Attack,
-        &spawners,
-        &mut commands,
+        },
+        &mut events,
     );
-    assert!(commands.is_empty(), "mode changes do not spawn");
+    events.clear();
 
-    spawning.handle(
-        &[Event::TimeAdvanced {
-            dt: Duration::from_millis(500),
-        }],
-        PlayMode::Attack,
-        &spawners,
-        &mut commands,
+    world::apply(
+        &mut world,
+        Command::CacheAttackPlan {
+            wave,
+            difficulty: WaveDifficulty::Normal,
+            plan: plan.clone(),
+        },
+        &mut events,
     );
-    assert!(commands.is_empty(), "accumulator resets while builder");
+    events.clear();
 
-    spawning.handle(
-        &[Event::TimeAdvanced {
-            dt: Duration::from_millis(500),
-        }],
-        PlayMode::Attack,
-        &spawners,
-        &mut commands,
+    world::apply(
+        &mut world,
+        Command::StartWave {
+            wave,
+            difficulty: WaveDifficulty::Normal,
+        },
+        &mut events,
     );
-    assert_eq!(commands.len(), 1, "expected spawn after full interval");
-}
 
-#[test]
-fn updates_step_duration_for_future_spawns() {
-    let spawners = vec![CellCoord::new(0, 0)];
-    let spawn_interval = Duration::from_millis(100);
-    let mut spawning = Spawning::new(Config::new(
-        spawn_interval,
-        Duration::from_millis(200),
-        0x7c94_08f3_f9c2_4601,
-    ));
+    let mut spawning = Spawning::new();
+    let expected_spawns: u32 = plan.bursts().iter().map(|burst| burst.count().get()).sum();
+    let expected_bursts = plan.bursts().len();
 
+    let mut pending_events = events;
+    let mut system_events = Vec::new();
     let mut commands = Vec::new();
-    spawning.handle(
-        &[Event::TimeAdvanced { dt: spawn_interval }],
-        PlayMode::Attack,
-        &spawners,
-        &mut commands,
-    );
-    assert_eq!(commands.len(), 1, "expected spawn using initial cadence");
-    let initial_step = match commands[0] {
-        Command::SpawnBug { step_ms, .. } => step_ms,
-        ref other => panic!("unexpected command emitted: {other:?}"),
-    };
-    let expected_initial =
-        u32::try_from(Duration::from_millis(200).as_millis()).expect("cadence fits u32");
-    assert_eq!(initial_step, expected_initial);
+    let mut burst_events = Vec::new();
+    let mut spawned = 0u32;
 
-    commands.clear();
-    let new_cadence = Duration::from_millis(450);
-    spawning.set_step_duration(new_cadence);
-    spawning.handle(
-        &[Event::TimeAdvanced { dt: spawn_interval }],
-        PlayMode::Attack,
-        &spawners,
-        &mut commands,
-    );
-    assert_eq!(commands.len(), 1, "expected spawn using updated cadence");
-    let updated_step = match commands[0] {
-        Command::SpawnBug { step_ms, .. } => step_ms,
-        ref other => panic!("unexpected command emitted: {other:?}"),
-    };
-    let expected = u32::try_from(new_cadence.as_millis()).expect("cadence fits u32");
-    assert_eq!(updated_step, expected);
-}
+    for _ in 0..16 {
+        let play_mode = query::play_mode(&world);
+        let species_table = query::species_table(&world);
+        let patch_table = query::patch_table(&world);
+        let pressure_config = query::pressure_config(&world);
 
-#[test]
-fn deterministic_replay_produces_identical_sequence() {
-    let first = replay(scripted_commands());
-    let second = replay(scripted_commands());
+        spawning.handle(
+            &pending_events,
+            play_mode,
+            species_table,
+            patch_table,
+            pressure_config,
+            |wave_id| query::attack_plan(&world, wave_id).cloned(),
+            &mut commands,
+            &mut system_events,
+        );
 
-    assert_eq!(first, second, "replay diverged between runs");
+        let mut next_events = Vec::new();
 
-    let fingerprint = first.fingerprint();
-    let expected = 0xf6c6_9e24_dd48_9c02;
-    assert_eq!(
-        fingerprint, expected,
-        "fingerprint mismatch: {fingerprint:#x}",
-    );
-}
+        for event in system_events.drain(..) {
+            if let Event::BurstDepleted { .. } = &event {
+                burst_events.push(event.clone());
+            }
+            next_events.push(event);
+        }
 
-fn replay(commands: Vec<Command>) -> ReplayOutcome {
-    let mut world = World::new();
-    let mut spawning = Spawning::new(Config::new(
-        Duration::from_millis(750),
-        Duration::from_millis(250),
-        0x4d59_5df4_d0f3_3173,
-    ));
-    let mut log = Vec::new();
+        let mut world_events = Vec::new();
+        for command in commands.drain(..) {
+            spawned += 1;
+            world::apply(&mut world, command, &mut world_events);
+        }
+        next_events.extend(world_events);
 
-    for command in commands {
-        let mut events = Vec::new();
-        world::apply(&mut world, command, &mut events);
-        process_spawning(&mut world, &mut spawning, events, &mut log);
-    }
-
-    let bugs = query::bug_view(&world)
-        .into_vec()
-        .into_iter()
-        .map(BugState::from)
-        .collect();
-
-    let navigation = query::navigation_field(&world);
-    let navigation_fingerprint = navigation_fingerprint(&navigation);
-
-    ReplayOutcome {
-        bugs,
-        spawns: log,
-        navigation_fingerprint,
-    }
-}
-
-fn process_spawning(
-    world: &mut World,
-    spawning: &mut Spawning,
-    pending_events: Vec<Event>,
-    log: &mut Vec<SpawnRecord>,
-) {
-    let mut events = pending_events;
-
-    loop {
-        if events.is_empty() {
+        if spawned >= expected_spawns {
             break;
         }
 
-        let play_mode = query::play_mode(world);
-        let spawners = query::bug_spawners(world);
-        let mut commands = Vec::new();
-        spawning.handle(&events, play_mode, &spawners, &mut commands);
+        let mut tick_events = Vec::new();
+        world::apply(
+            &mut world,
+            Command::Tick {
+                dt: Duration::from_millis(100),
+            },
+            &mut tick_events,
+        );
+        next_events.extend(tick_events);
 
-        if commands.is_empty() {
-            break;
-        }
-
-        events.clear();
-
-        for command in commands {
-            if let Command::SpawnBug {
-                spawner,
-                color,
-                health,
-                step_ms,
-            } = command
-            {
-                log.push(SpawnRecord {
-                    spawner,
-                    color,
-                    health,
-                    step_ms,
-                });
-                let mut generated_events = Vec::new();
-                world::apply(
-                    world,
-                    Command::SpawnBug {
-                        spawner,
-                        color,
-                        health,
-                        step_ms,
-                    },
-                    &mut generated_events,
-                );
-                events.extend(generated_events);
-            }
-        }
+        pending_events = next_events;
     }
-}
 
-fn scripted_commands() -> Vec<Command> {
-    vec![
-        Command::ConfigureTileGrid {
-            columns: TileCoord::new(6),
-            rows: TileCoord::new(6),
-            tile_length: 1.0,
-            cells_per_tile: 1,
-        },
-        Command::SetPlayMode {
-            mode: PlayMode::Attack,
-        },
-        Command::Tick {
-            dt: Duration::from_millis(500),
-        },
-        Command::Tick {
-            dt: Duration::from_millis(500),
-        },
-        Command::SetPlayMode {
-            mode: PlayMode::Builder,
-        },
-        Command::SetPlayMode {
-            mode: PlayMode::Attack,
-        },
-        Command::Tick {
-            dt: Duration::from_secs(1),
-        },
-        Command::Tick {
-            dt: Duration::from_secs(2),
-        },
-    ]
-}
+    assert_eq!(spawned, expected_spawns);
+    assert_eq!(burst_events.len(), expected_bursts);
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-struct ReplayOutcome {
-    bugs: Vec<BugState>,
-    spawns: Vec<SpawnRecord>,
-    navigation_fingerprint: u64,
-}
-
-fn navigation_fingerprint(view: &NavigationFieldView<'_>) -> u64 {
-    let mut hasher = DefaultHasher::new();
-    view.width().hash(&mut hasher);
-    view.height().hash(&mut hasher);
-    view.cells().hash(&mut hasher);
-    hasher.finish()
-}
-
-impl ReplayOutcome {
-    fn fingerprint(&self) -> u64 {
-        let mut hasher = DefaultHasher::new();
-        self.hash(&mut hasher);
-        hasher.finish()
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-struct SpawnRecord {
-    spawner: CellCoord,
-    color: BugColor,
-    health: Health,
-    step_ms: u32,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-struct BugState {
-    cell: CellCoord,
-    color: BugColor,
-    step_ms: u32,
-    accum_ms: u32,
-    ready_for_step: bool,
-    max_health: Health,
-    health: Health,
-}
-
-impl From<maze_defence_core::BugSnapshot> for BugState {
-    fn from(snapshot: maze_defence_core::BugSnapshot) -> Self {
-        Self {
-            cell: snapshot.cell,
-            color: snapshot.color,
-            step_ms: snapshot.step_ms,
-            accum_ms: snapshot.accum_ms,
-            ready_for_step: snapshot.ready_for_step,
-            max_health: snapshot.max_health,
-            health: snapshot.health,
-        }
-    }
+    let Event::BurstDepleted {
+        wave: event_wave,
+        species,
+        patch,
+    } = &burst_events[0]
+    else {
+        panic!("expected burst depleted event");
+    };
+    assert_eq!(*event_wave, wave);
+    assert_eq!(*species, SpeciesId::new(0));
+    assert_eq!(*patch, SpawnPatchId::new(0));
 }

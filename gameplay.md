@@ -119,8 +119,8 @@ This phase migrates the wave pipeline to the normative rules in `pressure-spec.m
 4. **Adapter/world orchestration for generated plans** 
   * [DONE] Adjust the CLI adapter so difficulty buttons enqueue plan generation before launching a wave, holding `Event::AttackPlanReady` snapshots for UI previews (pressure totals, per-species counts, burst cadence windows).
    * [DONE] Update `world::apply` to persist the generated plan keyed by `wave_id`, include plan metadata in `Event::WaveStarted`, and guarantee replays never re-sample randomness when resuming or inspecting old waves.
-5. **Spawning consumption of AttackPlans** [TODO]
-   * Refactor `systems/spawning` so it iterates stored `AttackPlan` bursts, emitting `Command::SpawnBug` according to cadence/start times while enforcing the global `spawn_per_tick_max` cap and reporting `Event::BurstDepleted` when each burst finishes.
+5. **Spawning consumption of AttackPlans** [DONE]
+   * Refactored `systems/spawning` to consume cached `AttackPlan` bursts, honouring cadence/start offsets, respecting the global `spawn_per_tick_max` cap, and emitting `Event::BurstDepleted` once each burst exhausts its count.
 6. **Hardening and determinism** (split into sub tasks)
    * [TODO] Provide harness tests that drive `GenerateAttackPlan → StartWave → ResolveRound` loops across Normal/Hard selections to prove message ordering stays deterministic.
    * [TODO] Capture headless integration tests (`tests/wave_generation_replay.rs`) that simulate multi-wave sessions with varied seeds, asserting identical event timelines, spawn counts, and replay hashes across runs.
