@@ -8,5 +8,8 @@ fn cli_compiles_without_warnings() {
         .status()
         .expect("failed to invoke cargo check for maze-defence CLI binary");
 
-    assert!(status.success(), "cargo check --bin maze-defence should succeed");
+    assert!(
+        status.success(),
+        "cargo check --bin maze-defence should succeed"
+    );
 }

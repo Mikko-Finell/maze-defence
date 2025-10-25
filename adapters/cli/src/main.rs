@@ -32,10 +32,11 @@ use maze_defence_core::{
 };
 use maze_defence_rendering::{
     visuals, BugHealthPresentation, BugPresentation, BugVisual, Color, ControlPanelView,
-    FrameInput, FrameSimulationBreakdown, GoldPresentation, GroundKind, GroundSpriteTiles,
-    Presentation, RenderingBackend, Scene, SceneProjectile, SceneTower, SceneWall, SpriteKey,
-    TierPresentation, TileGridPresentation, TileSpacePosition, TowerInteractionFeedback,
-    TowerPreview, TowerTargetLine,
+    DifficultyButtonPresentation, DifficultySelectionPresentation, FrameInput,
+    FrameSimulationBreakdown, GoldPresentation, GroundKind, GroundSpriteTiles, Presentation,
+    RenderingBackend, Scene, SceneProjectile, SceneTower, SceneWall, SpriteKey, TierPresentation,
+    TileGridPresentation, TileSpacePosition, TowerInteractionFeedback, TowerPreview,
+    TowerTargetLine,
 };
 use maze_defence_rendering_macroquad::MacroquadBackend;
 use maze_defence_system_bootstrap::Bootstrap;
@@ -365,6 +366,7 @@ fn main() -> Result<()> {
         Some(TierPresentation::new(query::difficulty_tier(
             simulation.world(),
         ))),
+        None,
     );
     simulation.populate_scene(&mut scene);
 
@@ -552,6 +554,7 @@ impl ScheduledSpawn {
 
 #[derive(Clone, Debug)]
 struct WaveState {
+    #[cfg(test)]
     plan: AttackPlan,
     scheduled: Vec<ScheduledSpawn>,
     next_spawn: usize,
@@ -574,8 +577,12 @@ impl WaveState {
             }
         }
         scheduled.sort_by_key(|spawn| spawn.at);
+        #[cfg(test)]
+        let plan_for_state = plan.clone();
+
         Self {
-            plan,
+            #[cfg(test)]
+            plan: plan_for_state,
             scheduled,
             next_spawn: 0,
             elapsed: Duration::ZERO,
@@ -1150,6 +1157,35 @@ impl Simulation {
         scene.tower_feedback = self.tower_feedback;
         scene.gold = Some(GoldPresentation::new(self.gold));
         scene.tier = Some(TierPresentation::new(self.difficulty_tier));
+        scene.difficulty_selection = Some(self.difficulty_selection_presentation());
+    }
+
+    fn difficulty_selection_presentation(&self) -> DifficultySelectionPresentation {
+        let (normal_selected, hard_selected) = match self.pending_wave_difficulty {
+            PendingWaveDifficulty::Selected(WaveDifficulty::Normal) => (true, false),
+            PendingWaveDifficulty::Selected(WaveDifficulty::Hard) => (false, true),
+            PendingWaveDifficulty::Unset => (false, false),
+        };
+
+        let normal_tier = self.difficulty_tier;
+        let hard_tier = self.difficulty_tier.saturating_add(1);
+        let normal_multiplier = normal_tier.saturating_add(1);
+        let hard_multiplier = hard_tier.saturating_add(1);
+
+        DifficultySelectionPresentation::new(
+            DifficultyButtonPresentation::new(
+                WaveDifficulty::Normal,
+                normal_selected,
+                normal_tier,
+                normal_multiplier,
+            ),
+            DifficultyButtonPresentation::new(
+                WaveDifficulty::Hard,
+                hard_selected,
+                hard_tier,
+                hard_multiplier,
+            ),
+        )
     }
 
     fn process_pending_events(
@@ -1807,6 +1843,7 @@ mod tests {
             Some(ControlPanelView::new(200.0, Color::from_rgb_u8(0, 0, 0))),
             Some(GoldPresentation::new(Gold::new(0))),
             Some(TierPresentation::new(0)),
+            None,
         )
     }
 
@@ -2172,6 +2209,47 @@ mod tests {
         assert!(scene.ground.is_none());
     }
 
+    #[test]
+    fn populate_scene_surfaces_difficulty_selection_previews() {
+        let mut simulation = new_simulation();
+        simulation.difficulty_tier = 2;
+
+        let mut scene = make_scene();
+        simulation.populate_scene(&mut scene);
+
+        let selection = scene
+            .difficulty_selection
+            .expect("difficulty selection should be populated");
+
+        let normal = selection.normal();
+        assert_eq!(normal.difficulty(), WaveDifficulty::Normal);
+        assert!(!normal.selected());
+        assert_eq!(normal.effective_tier(), 2);
+        assert_eq!(normal.reward_multiplier(), 3);
+
+        let hard = selection.hard();
+        assert_eq!(hard.difficulty(), WaveDifficulty::Hard);
+        assert!(!hard.selected());
+        assert_eq!(hard.effective_tier(), 3);
+        assert_eq!(hard.reward_multiplier(), 4);
+    }
+
+    #[test]
+    fn populate_scene_highlights_pending_hard_difficulty() {
+        let mut simulation = new_simulation();
+        simulation.pending_wave_difficulty = PendingWaveDifficulty::Selected(WaveDifficulty::Hard);
+
+        let mut scene = make_scene();
+        simulation.populate_scene(&mut scene);
+
+        let selection = scene
+            .difficulty_selection
+            .expect("difficulty selection should be populated");
+
+        assert!(!selection.normal().selected());
+        assert!(selection.hard().selected());
+    }
+
     fn enter_builder_mode(simulation: &mut Simulation) {
         if query::play_mode(simulation.world()) == PlayMode::Builder {
             simulation.advance(Duration::ZERO);
@@ -2525,9 +2603,8 @@ mod tests {
 
         let final_tier = query::difficulty_tier(simulation.world());
         assert_eq!(
-            final_tier,
-            initial_tier.saturating_add(1),
-            "round win should increment difficulty tier",
+            final_tier, initial_tier,
+            "normal round win should leave the difficulty tier unchanged",
         );
         let final_gold = query::gold(simulation.world());
         assert_eq!(

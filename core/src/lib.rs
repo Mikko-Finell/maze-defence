@@ -442,6 +442,15 @@ pub enum Event {
         /// Scalar applied to pressure calculations for the wave contents.
         pressure_scalar: u32,
     },
+    /// Reports that a Hard wave victory granted a permanent tier promotion.
+    HardWinAchieved {
+        /// Identifier of the wave cleared on Hard difficulty.
+        wave: WaveId,
+        /// Difficulty tier before applying the Hard victory promotion.
+        previous_tier: u32,
+        /// Difficulty tier after applying the Hard victory promotion.
+        new_tier: u32,
+    },
     /// Reports that the experience's difficulty tier changed.
     DifficultyTierChanged {
         /// Difficulty tier active after the adjustment.
