@@ -5,8 +5,8 @@ use std::{
 
 use maze_defence_core::{
     BugColor, BugId, CellCoord, CellPoint, CellRect, Command, Event, Gold, Health,
-    NavigationFieldView, PendingWaveDifficulty, PlayMode, TileCoord, TowerId, TowerKind,
-    TowerTarget, WaveDifficulty, WaveId,
+    NavigationFieldView, PendingWaveDifficulty, PlayMode, SpeciesTableVersion, TileCoord, TowerId,
+    TowerKind, TowerTarget, WaveDifficulty, WaveId,
 };
 use maze_defence_system_tower_targeting::TowerTargeting;
 use maze_defence_world::{self as world, query, World};
@@ -22,7 +22,7 @@ fn deterministic_replay_handles_equidistant_bugs_and_builder_mode() {
     assert_eq!(first.assignments.len(), script_len);
 
     let fingerprint = first.fingerprint();
-    let expected = 0x1eb2_ba0e_13a2_9bce;
+    let expected = 0x2cb7_7569_1b43_0c73;
     assert_eq!(
         fingerprint, expected,
         "fingerprint mismatch: {fingerprint:#x}"
@@ -297,6 +297,9 @@ enum EventRecord {
     PendingWaveDifficultyChanged {
         pending: PendingWaveDifficulty,
     },
+    PressureConfigChanged {
+        species_table_version: SpeciesTableVersion,
+    },
     WaveStarted {
         wave: WaveId,
         difficulty: WaveDifficulty,
@@ -334,6 +337,12 @@ impl From<Event> for EventRecord {
             Event::PendingWaveDifficultyChanged { pending } => {
                 Self::PendingWaveDifficultyChanged { pending }
             }
+            Event::PressureConfigChanged {
+                species_table_version,
+                ..
+            } => Self::PressureConfigChanged {
+                species_table_version,
+            },
             Event::WaveStarted {
                 wave,
                 difficulty,
