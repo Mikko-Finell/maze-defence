@@ -4,23 +4,23 @@ the v2 contract. Every checkpoint below is mergeable, keeps the architecture gua
 intact, and assumes we are ripping out the old system immediately—no shims, no dual
 writes, no long migrations.
 
-# 1) [TODO] Cut over to empty v2 scaffolding (core + systems)
+# 1) [DONE] Cut over to empty v2 scaffolding (core + systems)
 
 **Goal:** Remove the existing pressure generator entirely and replace it with stub
 surfaces that match the v2 data flow.
 
 **Deliverables:**
 
-- [ ] Delete the old wave/pressure modules, messages, and tests. Remove `tier` naming and
+- [x] Delete the old wave/pressure modules, messages, and tests. Remove `tier` naming and
   replace call sites with the new `difficulty` terminology even if values are temporary.
-- [ ] Introduce new core message types that mirror the `pressure-spec-v2.md` inputs/outputs
+- [x] Introduce new core message types that mirror the `pressure-spec-v2.md` inputs/outputs
   (seed, level id, wave index, difficulty, plus spawn records with `hp`, `speed_mult`,
   `species_id`, and `time_ms`). Leave constructors unimplemented (`todo!()`) so no code
   depends on behaviour yet.
-- [ ] Create a fresh `systems/pressure_v2` crate exposing a deterministic `PressureV2`
+- [x] Create a fresh `systems/pressure_v2` crate exposing a deterministic `PressureV2`
   struct with `generate(&mut self, inputs, out: &mut Vec<SpawnRecord>)`. Stub it to
   clear the output and `todo!()` for now.
-- [ ] Update any adapters or tests that referenced the old system to fail fast (panic with
+- [x] Update any adapters or tests that referenced the old system to fail fast (panic with
   "pressure v2 not implemented") so there is no lingering legacy path.
 
 **Exit checks:** No references to the legacy generator remain; all compile errors stem

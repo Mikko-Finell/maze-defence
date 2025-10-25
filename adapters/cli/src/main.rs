@@ -25,17 +25,18 @@ use clap::{Parser, ValueEnum};
 use glam::Vec2;
 use layout_transfer::{TowerLayoutSnapshot, TowerLayoutTower};
 use maze_defence_core::{
-    AttackPlan, BugColor, BugId, BugView, CellCoord, CellPointHalf, CellRect, CellRectSize,
-    Command, Event, Gold, Health, PendingWaveDifficulty, PlacementError, PlayMode,
+    BugColor, BugId, BugView, CellCoord, CellPointHalf, CellRect, CellRectSize, Command, Event,
+    Gold, Health, PendingWaveDifficulty, PlacementError, PlayMode, PressureWavePlan,
     ProjectileSnapshot, RemovalError, RoundOutcome, SpawnPatchId, SpeciesId, SpeciesPrototype,
     SpeciesTableVersion, TileCoord, TowerCooldownView, TowerId, TowerKind, TowerTarget,
     WaveDifficulty, WaveId,
 };
+use maze_defence_pressure_v2::PressureV2;
 use maze_defence_rendering::{
     visuals, BugHealthPresentation, BugPresentation, BugVisual, Color, ControlPanelView,
-    DifficultyButtonPresentation, DifficultySelectionPresentation, FrameInput,
-    FrameSimulationBreakdown, GoldPresentation, GroundKind, GroundSpriteTiles, Presentation,
-    RenderingBackend, Scene, SceneProjectile, SceneTower, SceneWall, SpriteKey, TierPresentation,
+    DifficultyButtonPresentation, DifficultyPresentation, DifficultySelectionPresentation,
+    FrameInput, FrameSimulationBreakdown, GoldPresentation, GroundKind, GroundSpriteTiles,
+    Presentation, RenderingBackend, Scene, SceneProjectile, SceneTower, SceneWall, SpriteKey,
     TileGridPresentation, TileSpacePosition, TowerInteractionFeedback, TowerPreview,
     TowerTargetLine,
 };
@@ -49,7 +50,6 @@ use maze_defence_system_movement::Movement;
 use maze_defence_system_spawning::{Config as SpawningConfig, Spawning};
 use maze_defence_system_tower_combat::TowerCombat;
 use maze_defence_system_tower_targeting::TowerTargeting;
-use maze_defence_system_wave_generation::WaveGeneration;
 use maze_defence_world::{self as world, query, World};
 
 const DEFAULT_GRID_COLUMNS: u32 = 10;
@@ -349,7 +349,7 @@ fn main() -> Result<()> {
         None,
         Some(ControlPanelView::new(200.0, Color::from_rgb_u8(0, 0, 0))),
         Some(GoldPresentation::new(query::gold(simulation.world()))),
-        Some(TierPresentation::new(query::difficulty_tier(
+        Some(DifficultyPresentation::new(query::difficulty_level(
             simulation.world(),
         ))),
         None,
@@ -388,7 +388,7 @@ struct Simulation {
     builder: TowerBuilder,
     movement: Movement,
     spawning: Spawning,
-    wave_generation: WaveGeneration,
+    pressure_v2: PressureV2,
     tower_targeting: TowerTargeting,
     tower_combat: TowerCombat,
     tower_cooldowns: TowerCooldownView,
@@ -401,7 +401,7 @@ struct Simulation {
     builder_preview: Option<BuilderPlacementPreview>,
     tower_feedback: Option<TowerInteractionFeedback>,
     gold: Gold,
-    difficulty_tier: u32,
+    difficulty_level: u32,
     pending_wave_difficulty: PendingWaveDifficulty,
     last_placement_rejection: Option<PlacementRejection>,
     last_removal_rejection: Option<RemovalRejection>,
@@ -412,9 +412,6 @@ struct Simulation {
     species_table_version: SpeciesTableVersion,
     species_prototypes: HashMap<SpeciesId, SpeciesPrototype>,
     patch_origins: HashMap<SpawnPatchId, CellCoord>,
-    plan_previews: Vec<PlanPreview>,
-    pending_plan_requests: Vec<PendingPlanRequest>,
-    pending_wave_launch: Option<PendingWaveLaunch>,
     visual_style: VisualStyle,
     last_advance_profile: AdvanceProfile,
     last_announced_play_mode: PlayMode,
@@ -542,6 +539,7 @@ struct ScheduledSpawn {
 }
 
 impl ScheduledSpawn {
+    #[allow(dead_code)]
     fn new(
         at: Duration,
         spawner: CellCoord,
@@ -561,52 +559,20 @@ impl ScheduledSpawn {
 
 #[derive(Clone, Debug)]
 struct WaveState {
-    #[cfg(test)]
-    plan: AttackPlan,
     scheduled: Vec<ScheduledSpawn>,
     next_spawn: usize,
     elapsed: Duration,
 }
 
 impl WaveState {
+    #[allow(dead_code)]
     fn new(
-        plan: AttackPlan,
+        plan: &PressureWavePlan,
         species: &HashMap<SpeciesId, SpeciesPrototype>,
         patches: &HashMap<SpawnPatchId, CellCoord>,
     ) -> Self {
-        let mut scheduled = Vec::new();
-        for burst in plan.bursts() {
-            let (Some(prototype), Some(spawner)) =
-                (species.get(&burst.species()), patches.get(&burst.patch()))
-            else {
-                debug_assert!(species.contains_key(&burst.species()));
-                debug_assert!(patches.contains_key(&burst.patch()));
-                continue;
-            };
-            let start_ms = u64::from(burst.start_ms());
-            let cadence_ms = u64::from(burst.cadence_ms().get());
-            for index in 0..burst.count().get() {
-                let offset_ms = start_ms.saturating_add(cadence_ms.saturating_mul(index as u64));
-                scheduled.push(ScheduledSpawn::new(
-                    Duration::from_millis(offset_ms),
-                    *spawner,
-                    prototype.color(),
-                    prototype.health(),
-                    prototype.step_ms(),
-                ));
-            }
-        }
-        scheduled.sort_by_key(|spawn| spawn.at);
-        #[cfg(test)]
-        let plan_for_state = plan.clone();
-
-        Self {
-            #[cfg(test)]
-            plan: plan_for_state,
-            scheduled,
-            next_spawn: 0,
-            elapsed: Duration::ZERO,
-        }
+        let _ = (plan, species, patches);
+        todo!("pressure v2 not implemented");
     }
 
     fn advance(&mut self, dt: Duration, out: &mut Vec<Command>) {
@@ -628,36 +594,6 @@ impl WaveState {
     fn finished(&self) -> bool {
         self.next_spawn >= self.scheduled.len()
     }
-
-    #[cfg(test)]
-    fn plan(&self) -> &AttackPlan {
-        &self.plan
-    }
-}
-
-#[derive(Clone, Debug)]
-struct PlanPreview {
-    wave: WaveId,
-    difficulty: WaveDifficulty,
-    plan: AttackPlan,
-}
-
-impl PlanPreview {
-    fn matches(&self, wave: WaveId, difficulty: WaveDifficulty) -> bool {
-        self.wave == wave && self.difficulty == difficulty
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct PendingPlanRequest {
-    wave: WaveId,
-    difficulty: WaveDifficulty,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct PendingWaveLaunch {
-    wave: WaveId,
-    difficulty: WaveDifficulty,
 }
 
 impl Simulation {
@@ -695,7 +631,7 @@ impl Simulation {
             mode: initial_play_mode,
         });
         let gold = query::gold(&world);
-        let difficulty_tier = query::difficulty_tier(&world);
+        let difficulty_level = query::difficulty_level(&world);
         let pending_wave_difficulty = query::pending_wave_difficulty(&world);
         let species_table = query::species_table(&world);
         let mut species_prototypes = HashMap::new();
@@ -716,7 +652,7 @@ impl Simulation {
                 bug_step,
                 SPAWN_RNG_SEED,
             )),
-            wave_generation: WaveGeneration::default(),
+            pressure_v2: PressureV2::default(),
             tower_targeting: TowerTargeting::new(),
             tower_combat: TowerCombat::new(),
             tower_cooldowns: TowerCooldownView::default(),
@@ -729,7 +665,7 @@ impl Simulation {
             builder_preview: None,
             tower_feedback: None,
             gold,
-            difficulty_tier,
+            difficulty_level,
             pending_wave_difficulty,
             last_placement_rejection: None,
             last_removal_rejection: None,
@@ -740,9 +676,6 @@ impl Simulation {
             species_table_version,
             species_prototypes,
             patch_origins,
-            plan_previews: Vec::new(),
-            pending_plan_requests: Vec::new(),
-            pending_wave_launch: None,
             visual_style,
             last_advance_profile: AdvanceProfile::default(),
             last_announced_play_mode: initial_play_mode,
@@ -765,8 +698,9 @@ impl Simulation {
     }
 
     #[cfg(test)]
-    fn active_wave_plan(&self) -> Option<&AttackPlan> {
-        self.active_wave.as_ref().map(|wave| wave.plan())
+    fn active_wave_plan(&self) -> Option<&PressureWavePlan> {
+        let _ = self;
+        panic!("pressure v2 not implemented");
     }
 
     fn handle_input(&mut self, input: FrameInput) {
@@ -792,173 +726,38 @@ impl Simulation {
     }
 
     fn initiate_wave_launch(&mut self, difficulty: WaveDifficulty) {
-        if self.pending_outcome_command
-            || self
-                .queued_commands
-                .iter()
-                .any(|command| matches!(command, Command::ResolveRound { .. }))
-            || self.awaiting_round_resolution
-            || self.active_wave.is_some()
-        {
-            return;
-        }
-
-        let context = query::wave_seed_context(&self.world);
-        let wave = context.wave();
-
-        if self
-            .plan_previews
-            .iter()
-            .any(|preview| preview.matches(wave, difficulty))
-        {
-            self.pending_wave_launch = Some(PendingWaveLaunch { wave, difficulty });
-            return;
-        }
-
-        if !self.is_plan_request_pending(wave, difficulty) {
-            self.queued_commands
-                .push(Command::GenerateAttackPlan { wave, difficulty });
-            self.pending_plan_requests
-                .push(PendingPlanRequest { wave, difficulty });
-        }
-
-        self.pending_wave_launch = Some(PendingWaveLaunch { wave, difficulty });
-    }
-
-    fn is_plan_request_pending(&self, wave: WaveId, difficulty: WaveDifficulty) -> bool {
-        self.pending_plan_requests
-            .iter()
-            .any(|request| request.wave == wave && request.difficulty == difficulty)
-    }
-
-    fn plan_request_for_wave(&self, wave: WaveId) -> Option<WaveDifficulty> {
-        self.pending_plan_requests
-            .iter()
-            .find(|request| request.wave == wave)
-            .map(|request| request.difficulty)
-    }
-
-    fn remove_plan_request(&mut self, wave: WaveId, difficulty: WaveDifficulty) {
-        if let Some(index) = self
-            .pending_plan_requests
-            .iter()
-            .position(|request| request.wave == wave && request.difficulty == difficulty)
-        {
-            let _ = self.pending_plan_requests.swap_remove(index);
-        }
-    }
-
-    fn store_plan_preview(&mut self, wave: WaveId, difficulty: WaveDifficulty, plan: AttackPlan) {
-        if let Some(index) = self
-            .plan_previews
-            .iter()
-            .position(|preview| preview.matches(wave, difficulty))
-        {
-            self.plan_previews[index] = PlanPreview {
-                wave,
-                difficulty,
-                plan,
-            };
-        } else {
-            self.plan_previews.push(PlanPreview {
-                wave,
-                difficulty,
-                plan,
-            });
-        }
-    }
-
-    fn take_plan_preview(
-        &mut self,
-        wave: WaveId,
-        difficulty: WaveDifficulty,
-    ) -> Option<AttackPlan> {
-        if let Some(index) = self
-            .plan_previews
-            .iter()
-            .position(|preview| preview.matches(wave, difficulty))
-        {
-            Some(self.plan_previews.swap_remove(index).plan)
-        } else {
-            None
-        }
+        let _ = &mut self.pressure_v2;
+        let _ = difficulty;
+        panic!("pressure v2 not implemented");
     }
 
     fn record_attack_plan_events(
         &mut self,
         events: &[Event],
-    ) -> Vec<(WaveId, WaveDifficulty, AttackPlan)> {
-        let mut launches = Vec::new();
-        for event in events {
-            if let Event::AttackPlanReady { wave, plan } = event {
-                if let Some(difficulty) = self.plan_request_for_wave(*wave) {
-                    self.store_plan_preview(*wave, difficulty, plan.clone());
-                    self.remove_plan_request(*wave, difficulty);
-                    if let Some(pending) = self.pending_wave_launch {
-                        if pending.wave == *wave && pending.difficulty == difficulty {
-                            if let Some(plan_ready) = self.take_plan_preview(*wave, difficulty) {
-                                launches.push((*wave, difficulty, plan_ready));
-                            }
-                        }
-                    }
-                }
-            }
+    ) -> Vec<(WaveId, WaveDifficulty, PressureWavePlan)> {
+        if events
+            .iter()
+            .any(|event| matches!(event, Event::PressureWaveReady { .. }))
+        {
+            panic!("pressure v2 not implemented");
         }
-        launches
+        Vec::new()
     }
 
-    fn take_ready_wave_launch(&mut self) -> Option<(WaveId, WaveDifficulty, AttackPlan)> {
-        let pending = self.pending_wave_launch?;
-        if let Some(plan) = self.take_plan_preview(pending.wave, pending.difficulty) {
-            Some((pending.wave, pending.difficulty, plan))
-        } else {
-            None
-        }
+    fn take_ready_wave_launch(&mut self) -> Option<(WaveId, WaveDifficulty, PressureWavePlan)> {
+        panic!("pressure v2 not implemented");
     }
 
     fn activate_wave(
         &mut self,
         wave: WaveId,
         difficulty: WaveDifficulty,
-        plan: AttackPlan,
+        plan: PressureWavePlan,
         emitted_events: &mut Vec<Event>,
         next_events: &mut Vec<Event>,
     ) {
-        self.pending_wave_launch = None;
-        if query::play_mode(&self.world) != PlayMode::Attack {
-            self.apply_command(
-                Command::SetPlayMode {
-                    mode: PlayMode::Attack,
-                },
-                emitted_events,
-            );
-            next_events.append(emitted_events);
-        }
-
-        self.apply_command(
-            Command::CacheAttackPlan {
-                wave,
-                difficulty,
-                plan: plan.clone(),
-            },
-            emitted_events,
-        );
-        next_events.append(emitted_events);
-
-        if plan.is_empty() {
-            self.active_wave = None;
-            self.awaiting_round_resolution = true;
-        } else {
-            self.active_wave = Some(WaveState::new(
-                plan,
-                &self.species_prototypes,
-                &self.patch_origins,
-            ));
-            self.awaiting_round_resolution = true;
-        }
-
-        self.apply_command(Command::StartWave { wave, difficulty }, emitted_events);
-        next_events.append(emitted_events);
+        let _ = (wave, difficulty, plan, emitted_events, next_events);
+        panic!("pressure v2 not implemented");
     }
 
     fn queue_round_outcome(&mut self, outcome: RoundOutcome) -> bool {
@@ -1149,27 +948,9 @@ impl Simulation {
                 );
                 self.refresh_species_and_patches();
             }
-            Command::GenerateAttackPlan { wave, difficulty } => {
-                let command_slice = [Command::GenerateAttackPlan { wave, difficulty }];
-                let species_table = query::species_table(&self.world);
-                let patch_table = query::patch_table(&self.world);
-                let pressure_config = query::pressure_config(&self.world);
-                let seed_context = query::wave_seed_context(&self.world);
-                let mut plan_events = Vec::new();
-                self.wave_generation.handle(
-                    &command_slice,
-                    species_table,
-                    patch_table,
-                    pressure_config,
-                    seed_context,
-                    &mut plan_events,
-                );
-                world::apply(
-                    &mut self.world,
-                    Command::GenerateAttackPlan { wave, difficulty },
-                    out_events,
-                );
-                out_events.extend(plan_events);
+            Command::GeneratePressureWave { inputs } => {
+                let _ = inputs;
+                panic!("pressure v2 not implemented");
             }
             other => {
                 world::apply(&mut self.world, other, out_events);
@@ -1374,7 +1155,7 @@ impl Simulation {
         };
         scene.tower_feedback = self.tower_feedback;
         scene.gold = Some(GoldPresentation::new(self.gold));
-        scene.tier = Some(TierPresentation::new(self.difficulty_tier));
+        scene.difficulty = Some(DifficultyPresentation::new(self.difficulty_level));
         scene.difficulty_selection = Some(self.difficulty_selection_presentation());
     }
 
@@ -1385,22 +1166,22 @@ impl Simulation {
             PendingWaveDifficulty::Unset => (false, false),
         };
 
-        let normal_tier = self.difficulty_tier;
-        let hard_tier = self.difficulty_tier.saturating_add(1);
-        let normal_multiplier = normal_tier.saturating_add(1);
-        let hard_multiplier = hard_tier.saturating_add(1);
+        let normal_level = self.difficulty_level;
+        let hard_level = self.difficulty_level.saturating_add(1);
+        let normal_multiplier = normal_level.saturating_add(1);
+        let hard_multiplier = hard_level.saturating_add(1);
 
         DifficultySelectionPresentation::new(
             DifficultyButtonPresentation::new(
                 WaveDifficulty::Normal,
                 normal_selected,
-                normal_tier,
+                normal_level,
                 normal_multiplier,
             ),
             DifficultyButtonPresentation::new(
                 WaveDifficulty::Hard,
                 hard_selected,
-                hard_tier,
+                hard_level,
                 hard_multiplier,
             ),
         )
@@ -1445,7 +1226,7 @@ impl Simulation {
             self.handle_bug_motion_events(&events);
             self.record_tower_feedback(&events);
             self.update_gold_from_events(&events);
-            self.update_difficulty_tier_from_events(&events);
+            self.update_difficulty_level_from_events(&events);
             self.update_pending_wave_difficulty_from_events(&events);
             self.update_pressure_configuration_from_events(&events);
 
@@ -1697,10 +1478,10 @@ impl Simulation {
         }
     }
 
-    fn update_difficulty_tier_from_events(&mut self, events: &[Event]) {
+    fn update_difficulty_level_from_events(&mut self, events: &[Event]) {
         for event in events {
-            if let Event::DifficultyTierChanged { tier } = event {
-                self.difficulty_tier = *tier;
+            if let Event::DifficultyLevelChanged { level } = event {
+                self.difficulty_level = *level;
             }
         }
     }
@@ -1998,16 +1779,6 @@ impl Simulation {
         &self.queued_commands
     }
 
-    #[cfg(test)]
-    fn plan_previews(&self) -> &[PlanPreview] {
-        &self.plan_previews
-    }
-
-    #[cfg(test)]
-    fn pending_plan_requests(&self) -> &[PendingPlanRequest] {
-        &self.pending_plan_requests
-    }
-
     fn flush_queued_commands(&mut self) {
         if self.queued_commands.is_empty() {
             return;
@@ -2041,1913 +1812,4 @@ impl Drop for Simulation {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use glam::Vec2;
-    use maze_defence_core::{BugColor, BugId, Health, ProjectileId};
-    use maze_defence_rendering::{BugVisual, SpriteInstance, SpriteKey, TowerVisual};
-    use std::{
-        collections::hash_map::DefaultHasher,
-        hash::{Hash, Hasher},
-    };
-
-    fn new_simulation_with_style(style: VisualStyle) -> Simulation {
-        Simulation::new(
-            4,
-            3,
-            32.0,
-            TileGridPresentation::DEFAULT_CELLS_PER_TILE,
-            Duration::from_millis(200),
-            Duration::from_secs(1),
-            style,
-        )
-    }
-
-    fn new_simulation() -> Simulation {
-        new_simulation_with_style(VisualStyle::Sprites)
-    }
-
-    fn make_scene() -> Scene {
-        let tile_grid = TileGridPresentation::new(
-            4,
-            3,
-            32.0,
-            TileGridPresentation::DEFAULT_CELLS_PER_TILE,
-            Color::from_rgb_u8(30, 30, 30),
-        )
-        .expect("valid grid dimensions");
-        let wall_color = Color::from_rgb_u8(60, 45, 30);
-
-        Scene::new(
-            tile_grid,
-            wall_color,
-            None,
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            None,
-            PlayMode::Attack,
-            None,
-            None,
-            None,
-            Some(ControlPanelView::new(200.0, Color::from_rgb_u8(0, 0, 0))),
-            Some(GoldPresentation::new(Gold::new(0))),
-            Some(TierPresentation::new(0)),
-            None,
-        )
-    }
-
-    #[test]
-    fn cli_args_default_to_sprite_visuals() {
-        let args =
-            CliArgs::try_parse_from(["maze-defence"]).expect("default arguments should parse");
-        assert_eq!(args.visual_style, VisualStyle::Sprites);
-    }
-
-    #[test]
-    fn cli_args_allow_primitive_visuals() {
-        let args = CliArgs::try_parse_from(["maze-defence", "--visual-style", "primitives"])
-            .expect("primitive visuals should parse");
-        assert_eq!(args.visual_style, VisualStyle::Primitives);
-    }
-
-    #[test]
-    fn simulation_records_requested_visual_style() {
-        let simulation = Simulation::new(
-            4,
-            3,
-            32.0,
-            TileGridPresentation::DEFAULT_CELLS_PER_TILE,
-            Duration::from_millis(200),
-            Duration::from_secs(1),
-            VisualStyle::Primitives,
-        );
-        assert_eq!(simulation.visual_style, VisualStyle::Primitives);
-    }
-
-    #[test]
-    fn push_projectiles_converts_half_coordinates() {
-        let mut scene = make_scene();
-        let snapshot = ProjectileSnapshot {
-            projectile: ProjectileId::new(7),
-            tower: TowerId::new(11),
-            target: BugId::new(3),
-            origin_half: CellPointHalf::new(6, 4),
-            dest_half: CellPointHalf::new(14, 12),
-            distance_half: 10,
-            travelled_half: 5,
-        };
-
-        push_projectiles(&mut scene, &[snapshot], |_bug, fallback| fallback);
-
-        assert_eq!(scene.projectiles.len(), 1);
-        let projectile = scene.projectiles[0];
-        assert_eq!(projectile.id, snapshot.projectile);
-        assert_eq!(projectile.from, Vec2::new(3.0, 2.0));
-        assert_eq!(projectile.to, Vec2::new(7.0, 6.0));
-        assert!((projectile.progress - 0.5).abs() <= f32::EPSILON);
-        assert_eq!(projectile.position, Vec2::new(5.0, 4.0));
-    }
-
-    #[test]
-    fn push_projectiles_homes_toward_dynamic_target() {
-        let mut scene = make_scene();
-        let snapshot = ProjectileSnapshot {
-            projectile: ProjectileId::new(7),
-            tower: TowerId::new(11),
-            target: BugId::new(3),
-            origin_half: CellPointHalf::new(6, 4),
-            dest_half: CellPointHalf::new(14, 12),
-            distance_half: 10,
-            travelled_half: 5,
-        };
-
-        push_projectiles(&mut scene, &[snapshot], |_bug, fallback| {
-            fallback + Vec2::new(2.0, 2.0)
-        });
-
-        let projectile = scene.projectiles[0];
-        let expected_to = Vec2::new(9.0, 8.0);
-        assert_eq!(projectile.to, expected_to);
-
-        let from = Vec2::new(3.0, 2.0);
-        let expected_position = from + (expected_to - from) * 0.5;
-        assert_eq!(projectile.position, expected_position);
-    }
-
-    #[test]
-    fn populate_scene_interpolates_bug_positions_between_cells() {
-        let mut simulation = new_simulation();
-        simulation.queued_commands.push(Command::SetPlayMode {
-            mode: PlayMode::Attack,
-        });
-        simulation.advance(Duration::ZERO);
-        let spawner = query::bug_spawners(simulation.world())
-            .into_iter()
-            .next()
-            .expect("bug spawner available");
-
-        simulation.queued_commands.push(Command::SpawnBug {
-            spawner,
-            color: BugColor::from_rgb(255, 0, 0),
-            health: Health::new(5),
-            step_ms: simulation.bug_step_ms(),
-        });
-        simulation.advance(Duration::ZERO);
-
-        let step_duration = simulation.bug_step_duration();
-        simulation.advance(step_duration);
-
-        let (from, to) = simulation
-            .last_frame_events()
-            .iter()
-            .find_map(|event| match event {
-                Event::BugAdvanced { from, to, .. } => Some((*from, *to)),
-                _ => None,
-            })
-            .expect("bug should advance after enough time elapsed");
-
-        assert_ne!(from, to, "bug should move to a new cell");
-
-        let partial_dt = if step_duration.is_zero() {
-            Duration::ZERO
-        } else {
-            step_duration / 2
-        };
-        simulation.advance(partial_dt);
-
-        let mut scene = make_scene();
-        simulation.populate_scene(&mut scene);
-
-        assert_eq!(scene.bugs.len(), 1);
-        let bug = scene.bugs[0];
-        let from_vec = Simulation::cell_center(from);
-        let to_vec = Simulation::cell_center(to);
-        let expected_progress = if step_duration.is_zero() {
-            1.0
-        } else {
-            (partial_dt.as_secs_f32() / step_duration.as_secs_f32()).clamp(0.0, 1.0)
-        };
-        let expected_position = from_vec + (to_vec - from_vec) * expected_progress;
-
-        assert!((bug.position() - expected_position).length() <= f32::EPSILON);
-        match bug.style {
-            BugVisual::Sprite(sprite) => {
-                assert_eq!(sprite.sprite, SpriteKey::BugBody);
-                let expected_heading =
-                    Simulation::bug_heading_from_cells(from, to).unwrap_or(DEFAULT_BUG_HEADING);
-                assert!((sprite.rotation_radians - expected_heading).abs() <= f32::EPSILON);
-            }
-            BugVisual::PrimitiveCircle { .. } => {
-                panic!("sprite visual expected when sprites enabled");
-            }
-        }
-    }
-
-    #[test]
-    fn populate_scene_interpolation_respects_bug_step_duration() {
-        let mut simulation = new_simulation();
-        let spawner = query::bug_spawners(simulation.world())
-            .into_iter()
-            .next()
-            .expect("bug spawner available");
-
-        let slow_step_ms = simulation.bug_step_ms().saturating_mul(2);
-        simulation.queued_commands.push(Command::SetPlayMode {
-            mode: PlayMode::Attack,
-        });
-        simulation.queued_commands.push(Command::SpawnBug {
-            spawner,
-            color: BugColor::from_rgb(255, 255, 255),
-            health: Health::new(7),
-            step_ms: slow_step_ms,
-        });
-        simulation.advance(Duration::ZERO);
-
-        let slow_step_duration = Duration::from_millis(u64::from(slow_step_ms));
-        simulation.advance(slow_step_duration);
-
-        let (from, to) = simulation
-            .last_frame_events()
-            .iter()
-            .find_map(|event| match event {
-                Event::BugAdvanced { from, to, .. } => Some((*from, *to)),
-                _ => None,
-            })
-            .expect("bug should advance after enough time elapsed");
-
-        let partial_dt = if slow_step_duration.is_zero() {
-            Duration::ZERO
-        } else {
-            slow_step_duration / 4
-        };
-        simulation.advance(partial_dt);
-
-        let mut scene = make_scene();
-        simulation.populate_scene(&mut scene);
-
-        assert_eq!(scene.bugs.len(), 1);
-        let bug = scene.bugs[0];
-        let from_vec = Simulation::cell_center(from);
-        let to_vec = Simulation::cell_center(to);
-        let expected_progress = if slow_step_duration.is_zero() {
-            1.0
-        } else {
-            (partial_dt.as_secs_f32() / slow_step_duration.as_secs_f32()).clamp(0.0, 1.0)
-        };
-        let expected_position = from_vec + (to_vec - from_vec) * expected_progress;
-
-        assert!((bug.position() - expected_position).length() <= f32::EPSILON);
-    }
-
-    #[test]
-    fn interpolated_bug_position_returns_cell_center_without_motion() {
-        let mut simulation = new_simulation();
-        simulation.queued_commands.push(Command::SetPlayMode {
-            mode: PlayMode::Attack,
-        });
-        simulation.advance(Duration::ZERO);
-        let spawner = query::bug_spawners(simulation.world())
-            .into_iter()
-            .next()
-            .expect("bug spawner available");
-
-        simulation.queued_commands.push(Command::SpawnBug {
-            spawner,
-            color: BugColor::from_rgb(64, 96, 128),
-            health: Health::new(3),
-            step_ms: simulation.bug_step_ms(),
-        });
-        simulation.advance(Duration::ZERO);
-
-        let bug_view = query::bug_view(simulation.world());
-        let bug = bug_view
-            .iter()
-            .next()
-            .cloned()
-            .expect("spawned bug available");
-
-        let position = simulation.interpolated_bug_position_with_cell(bug.id, Some(bug.cell));
-        assert_eq!(position, Simulation::cell_center(bug.cell));
-    }
-
-    #[test]
-    fn populate_scene_sets_sprite_visuals_when_selected() {
-        let mut simulation = new_simulation();
-
-        simulation.queued_commands.push(Command::SetPlayMode {
-            mode: PlayMode::Builder,
-        });
-        simulation.advance(Duration::ZERO);
-
-        let placement_tile = TileSpacePosition::from_indices(1, 1);
-        let origin = simulation.tile_position_to_cell(placement_tile);
-        simulation.queued_commands.push(Command::PlaceTower {
-            kind: TowerKind::Basic,
-            origin,
-        });
-        simulation.advance(Duration::ZERO);
-
-        simulation.queued_commands.push(Command::SetPlayMode {
-            mode: PlayMode::Attack,
-        });
-        simulation.advance(Duration::ZERO);
-
-        let spawner = query::bug_spawners(simulation.world())
-            .into_iter()
-            .next()
-            .expect("bug spawner available");
-        simulation.queued_commands.push(Command::SpawnBug {
-            spawner,
-            color: BugColor::from_rgb(200, 100, 50),
-            health: Health::new(3),
-            step_ms: simulation.bug_step_ms(),
-        });
-        simulation.advance(Duration::ZERO);
-
-        let mut scene = make_scene();
-        simulation.populate_scene(&mut scene);
-
-        assert_eq!(scene.towers.len(), 1);
-        let tower = scene.towers[0];
-        match tower.visual {
-            TowerVisual::Sprite { base, turret } => {
-                assert_eq!(base.sprite, SpriteKey::TowerBase);
-                assert_eq!(turret.sprite, SpriteKey::TowerTurret);
-                assert!(turret.rotation_radians.abs() <= f32::EPSILON);
-            }
-            TowerVisual::PrimitiveRect => {
-                panic!("sprite tower visual expected when sprites enabled");
-            }
-        }
-
-        assert_eq!(scene.bugs.len(), 1);
-        let bug = scene.bugs[0];
-        match bug.style {
-            BugVisual::Sprite(sprite) => {
-                assert_eq!(sprite.sprite, SpriteKey::BugBody);
-            }
-            BugVisual::PrimitiveCircle { .. } => {
-                panic!("sprite bug visual expected when sprites enabled");
-            }
-        }
-
-        let ground = scene
-            .ground
-            .as_ref()
-            .expect("ground tiles expected when sprites enabled");
-        assert_eq!(ground.kind, GroundKind::Grass);
-        assert_eq!(ground.sprite.sprite, SpriteKey::GroundGrass);
-        let footprint = Simulation::tower_footprint(TowerKind::Basic);
-        let base_tiles = Vec2::new(
-            footprint.width() as f32 / simulation.cells_per_tile as f32,
-            footprint.height() as f32 / simulation.cells_per_tile as f32,
-        );
-        let expected_size = base_tiles * GROUND_TILE_MULTIPLIER * simulation.cells_per_tile as f32;
-        assert_eq!(ground.sprite.size, expected_size);
-        assert_eq!(ground.sprite.pivot, Vec2::ZERO);
-    }
-
-    #[test]
-    fn populate_scene_preserves_primitives_when_requested() {
-        let mut simulation = new_simulation_with_style(VisualStyle::Primitives);
-
-        simulation.queued_commands.push(Command::SetPlayMode {
-            mode: PlayMode::Builder,
-        });
-        simulation.advance(Duration::ZERO);
-
-        let placement_tile = TileSpacePosition::from_indices(1, 1);
-        let origin = simulation.tile_position_to_cell(placement_tile);
-        simulation.queued_commands.push(Command::PlaceTower {
-            kind: TowerKind::Basic,
-            origin,
-        });
-        simulation.advance(Duration::ZERO);
-
-        simulation.queued_commands.push(Command::SetPlayMode {
-            mode: PlayMode::Attack,
-        });
-        simulation.advance(Duration::ZERO);
-
-        let spawner = query::bug_spawners(simulation.world())
-            .into_iter()
-            .next()
-            .expect("bug spawner available");
-        simulation.queued_commands.push(Command::SpawnBug {
-            spawner,
-            color: BugColor::from_rgb(128, 64, 32),
-            health: Health::new(3),
-            step_ms: simulation.bug_step_ms(),
-        });
-        simulation.advance(Duration::ZERO);
-
-        let mut scene = make_scene();
-        simulation.populate_scene(&mut scene);
-
-        assert_eq!(scene.towers.len(), 1);
-        assert_eq!(scene.towers[0].visual, TowerVisual::PrimitiveRect);
-
-        assert_eq!(scene.bugs.len(), 1);
-        match scene.bugs[0].style {
-            BugVisual::PrimitiveCircle { .. } => {}
-            BugVisual::Sprite(_) => {
-                panic!("primitive bug visual expected when primitives requested");
-            }
-        }
-
-        assert!(scene.ground.is_none());
-    }
-
-    #[test]
-    fn populate_scene_surfaces_difficulty_selection_previews() {
-        let mut simulation = new_simulation();
-        simulation.difficulty_tier = 2;
-
-        let mut scene = make_scene();
-        simulation.populate_scene(&mut scene);
-
-        let selection = scene
-            .difficulty_selection
-            .expect("difficulty selection should be populated");
-
-        let normal = selection.normal();
-        assert_eq!(normal.difficulty(), WaveDifficulty::Normal);
-        assert!(!normal.selected());
-        assert_eq!(normal.effective_tier(), 2);
-        assert_eq!(normal.reward_multiplier(), 3);
-
-        let hard = selection.hard();
-        assert_eq!(hard.difficulty(), WaveDifficulty::Hard);
-        assert!(!hard.selected());
-        assert_eq!(hard.effective_tier(), 3);
-        assert_eq!(hard.reward_multiplier(), 4);
-    }
-
-    #[test]
-    fn populate_scene_highlights_pending_hard_difficulty() {
-        let mut simulation = new_simulation();
-        simulation.pending_wave_difficulty = PendingWaveDifficulty::Selected(WaveDifficulty::Hard);
-
-        let mut scene = make_scene();
-        simulation.populate_scene(&mut scene);
-
-        let selection = scene
-            .difficulty_selection
-            .expect("difficulty selection should be populated");
-
-        assert!(!selection.normal().selected());
-        assert!(selection.hard().selected());
-    }
-
-    fn enter_builder_mode(simulation: &mut Simulation) {
-        if query::play_mode(simulation.world()) == PlayMode::Builder {
-            simulation.advance(Duration::ZERO);
-            return;
-        }
-
-        simulation.handle_input(FrameInput {
-            mode_toggle: true,
-            ..FrameInput::default()
-        });
-        simulation.advance(Duration::ZERO);
-    }
-
-    fn squared_distance_to_center(cell: CellCoord, center: (u32, u32)) -> u64 {
-        let dx = cell.column().abs_diff(center.0);
-        let dy = cell.row().abs_diff(center.1);
-        u64::from(dx) * u64::from(dx) + u64::from(dy) * u64::from(dy)
-    }
-
-    #[test]
-    fn handle_input_toggles_mode_and_caches_cursor() {
-        let mut simulation = new_simulation();
-        let first_tile = TileSpacePosition::from_indices(1, 2);
-        let first_world = Vec2::new(12.5, 24.0);
-
-        simulation.handle_input(FrameInput {
-            mode_toggle: true,
-            cursor_world_space: Some(first_world),
-            cursor_tile_space: Some(first_tile),
-            ..FrameInput::default()
-        });
-
-        assert_eq!(
-            simulation.queued_commands,
-            vec![Command::SetPlayMode {
-                mode: PlayMode::Attack,
-            }]
-        );
-        assert!(!simulation.pending_input.mode_toggle);
-        assert_eq!(
-            simulation.pending_input.cursor_world_space,
-            Some(first_world)
-        );
-        assert_eq!(simulation.pending_input.cursor_tile_space, Some(first_tile));
-
-        let second_tile = TileSpacePosition::from_indices(2, 1);
-        let second_world = Vec2::new(48.0, 16.0);
-        simulation.handle_input(FrameInput {
-            mode_toggle: false,
-            cursor_world_space: Some(second_world),
-            cursor_tile_space: Some(second_tile),
-            ..FrameInput::default()
-        });
-
-        assert_eq!(
-            simulation.queued_commands,
-            vec![Command::SetPlayMode {
-                mode: PlayMode::Attack,
-            }]
-        );
-        assert_eq!(
-            simulation.pending_input.cursor_world_space,
-            Some(second_world)
-        );
-        assert_eq!(
-            simulation.pending_input.cursor_tile_space,
-            Some(second_tile)
-        );
-    }
-
-    #[test]
-    fn populate_scene_projects_cached_preview_in_builder_mode() {
-        let mut simulation = new_simulation();
-        let initial_tile = TileSpacePosition::from_indices(0, 1);
-        simulation.handle_input(FrameInput {
-            cursor_world_space: Some(Vec2::new(16.0, 48.0)),
-            cursor_tile_space: Some(initial_tile),
-            ..FrameInput::default()
-        });
-
-        simulation.advance(Duration::ZERO);
-        assert!(simulation.queued_commands.is_empty());
-
-        let preview_tile = TileSpacePosition::from_indices(3, 2);
-        simulation.handle_input(FrameInput {
-            mode_toggle: false,
-            cursor_world_space: Some(Vec2::new(96.0, 64.0)),
-            cursor_tile_space: Some(preview_tile),
-            ..FrameInput::default()
-        });
-
-        let mut scene = make_scene();
-        simulation.populate_scene(&mut scene);
-
-        assert_eq!(scene.play_mode, PlayMode::Builder);
-        let expected_preview = simulation
-            .builder_preview()
-            .expect("builder preview available in builder mode");
-        assert_eq!(
-            scene.tower_preview,
-            Some(TowerPreview::new(
-                expected_preview.kind,
-                expected_preview.region,
-                expected_preview.placeable,
-                expected_preview.rejection,
-            ))
-        );
-        let footprint = Simulation::tower_footprint(simulation.selected_tower_kind());
-        let expected_footprint = Vec2::new(
-            footprint.width() as f32 / simulation.cells_per_tile as f32,
-            footprint.height() as f32 / simulation.cells_per_tile as f32,
-        );
-        assert_eq!(scene.active_tower_footprint_tiles, Some(expected_footprint));
-        assert!(scene.towers.is_empty());
-        assert_eq!(scene.tower_feedback, simulation.tower_feedback());
-    }
-
-    #[test]
-    fn advance_does_not_spawn_bug_without_wave() {
-        let mut simulation = new_simulation();
-
-        assert!(query::bug_view(simulation.world()).into_vec().is_empty());
-
-        simulation.advance(Duration::from_millis(500));
-        assert!(query::bug_view(simulation.world()).into_vec().is_empty());
-
-        simulation.advance(Duration::from_millis(500));
-        assert!(query::bug_view(simulation.world()).into_vec().is_empty());
-    }
-
-    #[test]
-    fn automatic_spawning_disabled_in_both_modes() {
-        let mut simulation = new_simulation();
-
-        simulation.advance(Duration::from_secs(2));
-        assert!(query::bug_view(simulation.world()).into_vec().is_empty());
-
-        simulation.handle_input(FrameInput {
-            mode_toggle: true,
-            ..FrameInput::default()
-        });
-        simulation.advance(Duration::ZERO);
-        simulation.advance(Duration::from_secs(1));
-
-        assert!(query::bug_view(simulation.world()).into_vec().is_empty());
-    }
-
-    #[test]
-    fn start_wave_normal_requests_plan_and_launches_after_ready() {
-        let mut simulation = new_simulation();
-
-        simulation.handle_input(FrameInput {
-            start_wave: Some(WaveDifficulty::Normal),
-            ..FrameInput::default()
-        });
-
-        assert!(simulation.queued_commands().iter().any(|command| matches!(
-            command,
-            Command::GenerateAttackPlan {
-                difficulty: WaveDifficulty::Normal,
-                ..
-            }
-        )));
-        assert!(!simulation
-            .queued_commands()
-            .iter()
-            .any(|command| matches!(command, Command::StartWave { .. })));
-
-        simulation.advance(Duration::ZERO);
-
-        assert_eq!(query::play_mode(simulation.world()), PlayMode::Attack);
-        let plan = simulation
-            .active_wave_plan()
-            .expect("wave plan should be recorded");
-        assert!(!plan.bursts().is_empty());
-        assert!(plan.pressure().get() > 0);
-        let species_table = query::species_table(simulation.world());
-        assert_eq!(plan.species_table_version(), species_table.version());
-        assert!(simulation.plan_previews().is_empty());
-        assert!(simulation.pending_plan_requests().is_empty());
-    }
-
-    #[test]
-    fn start_wave_hard_queues_plan_generation_and_launches() {
-        let mut simulation = new_simulation();
-        simulation.difficulty_tier = 2;
-
-        simulation.handle_input(FrameInput {
-            start_wave: Some(WaveDifficulty::Hard),
-            ..FrameInput::default()
-        });
-        assert!(simulation.queued_commands().iter().any(|command| matches!(
-            command,
-            Command::GenerateAttackPlan {
-                difficulty: WaveDifficulty::Hard,
-                ..
-            }
-        )));
-
-        simulation.advance(Duration::ZERO);
-
-        let plan = simulation
-            .active_wave_plan()
-            .expect("wave plan should be recorded");
-        assert!(!plan.bursts().is_empty());
-        assert!(plan.pressure().get() > 0);
-        assert!(simulation.plan_previews().is_empty());
-        assert!(simulation.pending_plan_requests().is_empty());
-    }
-
-    #[test]
-    fn start_wave_emits_wave_over_time() {
-        let mut simulation = new_simulation();
-
-        simulation.handle_input(FrameInput {
-            start_wave: Some(WaveDifficulty::Normal),
-            ..FrameInput::default()
-        });
-        simulation.advance(Duration::ZERO);
-
-        let plan = simulation
-            .active_wave_plan()
-            .expect("wave plan should be recorded");
-        let total_spawns: u32 = plan.bursts().iter().map(|burst| burst.count().get()).sum();
-        assert!(total_spawns > 0);
-        let cadence_ms = plan
-            .bursts()
-            .iter()
-            .map(|burst| burst.cadence_ms().get())
-            .max()
-            .unwrap_or(1);
-        let mut spawned = simulation
-            .last_frame_events()
-            .iter()
-            .filter(|event| matches!(event, Event::BugSpawned { .. }))
-            .count();
-
-        let cadence = Duration::from_millis(u64::from(cadence_ms));
-        for _ in 0..(total_spawns.saturating_mul(8)) {
-            if spawned > 0 {
-                break;
-            }
-            simulation.advance(cadence);
-            spawned += simulation
-                .last_frame_events()
-                .iter()
-                .filter(|event| matches!(event, Event::BugSpawned { .. }))
-                .count();
-        }
-
-        assert!(spawned > 0, "wave should spawn at least one bug");
-        assert!(
-            spawned as u32 <= total_spawns,
-            "wave should not spawn more bugs than planned"
-        );
-    }
-
-    #[test]
-    fn round_loss_clears_active_wave_state() {
-        let mut simulation = new_simulation();
-        let version = query::species_table(simulation.world()).version();
-        let plan = AttackPlan::empty(version);
-        simulation.active_wave = Some(WaveState::new(
-            plan,
-            &simulation.species_prototypes,
-            &simulation.patch_origins,
-        ));
-        assert!(simulation.active_wave.is_some(), "wave should be active");
-
-        simulation
-            .pending_events
-            .push(Event::RoundLost { bug: BugId::new(7) });
-        let _ = simulation.process_pending_events(None, TowerBuilderInput::default());
-
-        assert!(
-            simulation.active_wave.is_none(),
-            "round loss should clear wave"
-        );
-    }
-
-    #[test]
-    fn round_win_queues_resolution_and_blocks_new_wave_until_applied() {
-        let mut simulation = new_simulation();
-        let initial_tier = query::difficulty_tier(simulation.world());
-
-        enter_builder_mode(&mut simulation);
-        let first_tile = TileSpacePosition::from_indices(1, 1);
-        let first_origin = simulation.tile_position_to_cell(first_tile);
-        simulation.queued_commands.push(Command::PlaceTower {
-            kind: TowerKind::Basic,
-            origin: first_origin,
-        });
-        let second_tile = TileSpacePosition::from_indices(2, 1);
-        let second_origin = simulation.tile_position_to_cell(second_tile);
-        simulation.queued_commands.push(Command::PlaceTower {
-            kind: TowerKind::Basic,
-            origin: second_origin,
-        });
-        simulation.queued_commands.push(Command::ConfigureBugStep {
-            step_duration: Duration::from_millis(800),
-        });
-        simulation.advance(Duration::ZERO);
-        let gold_after_build = query::gold(simulation.world());
-        assert_eq!(
-            query::towers(simulation.world()).into_vec().len(),
-            2,
-            "two towers should be placed before the wave starts",
-        );
-
-        simulation.handle_input(FrameInput {
-            start_wave: Some(WaveDifficulty::Normal),
-            ..FrameInput::default()
-        });
-        simulation.advance(Duration::ZERO);
-
-        let step = Duration::from_millis(100);
-        let mut resolve_command_detected = false;
-        for _ in 0..2000 {
-            simulation.advance(step);
-            if simulation.queued_commands().iter().any(|command| {
-                matches!(
-                    command,
-                    Command::ResolveRound {
-                        outcome: RoundOutcome::Win,
-                    }
-                )
-            }) || !simulation.awaiting_round_resolution
-            {
-                resolve_command_detected = true;
-                break;
-            }
-        }
-
-        let remaining_bugs = query::bug_view(simulation.world()).into_vec().len();
-        let wave_active = simulation.active_wave.is_some();
-        assert!(
-            resolve_command_detected,
-            "wave win should queue resolution command (queued: {:?}, last events: {:?}, remaining bugs: {}, wave active: {})",
-            simulation.queued_commands(),
-            simulation.last_frame_events(),
-            remaining_bugs,
-            wave_active,
-        );
-        assert!(
-            simulation.pending_outcome_command,
-            "queued resolution should mark outcome command pending",
-        );
-
-        let gold_after_wave = query::gold(simulation.world());
-        assert!(
-            gold_after_wave > gold_after_build,
-            "bug kills should increase the gold balance"
-        );
-
-        simulation.handle_input(FrameInput {
-            start_wave: Some(WaveDifficulty::Normal),
-            ..FrameInput::default()
-        });
-        assert!(
-            simulation.active_wave.is_none(),
-            "new wave should not start while resolution is pending",
-        );
-
-        simulation.advance(Duration::ZERO);
-
-        let final_tier = query::difficulty_tier(simulation.world());
-        assert_eq!(
-            final_tier, initial_tier,
-            "normal round win should leave the difficulty tier unchanged",
-        );
-        let final_gold = query::gold(simulation.world());
-        assert_eq!(
-            final_gold, gold_after_wave,
-            "resolving the round should preserve accumulated gold",
-        );
-        assert!(
-            simulation.queued_commands().is_empty(),
-            "queued commands should be flushed after resolution",
-        );
-        assert!(
-            !simulation.pending_outcome_command,
-            "pending outcome flag should clear once resolution applies",
-        );
-
-        let mut scene = make_scene();
-        simulation.populate_scene(&mut scene);
-        let presented_gold = scene
-            .gold
-            .expect("scene should include gold presentation")
-            .amount();
-        assert_eq!(
-            presented_gold, final_gold,
-            "scene presentation should reflect resolved gold",
-        );
-        let presented_tier = scene
-            .tier
-            .expect("scene should include tier presentation")
-            .tier();
-        assert_eq!(
-            presented_tier, final_tier,
-            "scene presentation should reflect resolved tier",
-        );
-
-        simulation.handle_input(FrameInput {
-            start_wave: Some(WaveDifficulty::Normal),
-            ..FrameInput::default()
-        });
-        simulation.advance(Duration::ZERO);
-        assert!(
-            simulation.active_wave.is_some(),
-            "new wave should start once resolution completes",
-        );
-    }
-
-    #[test]
-    fn builder_preview_marks_region_unplaceable_when_occupied() {
-        let mut simulation = new_simulation();
-        enter_builder_mode(&mut simulation);
-
-        let preview_tile = TileSpacePosition::from_indices(1, 1);
-        let preview_world = Vec2::new(64.0, 64.0);
-
-        simulation.handle_input(FrameInput {
-            cursor_world_space: Some(preview_world),
-            cursor_tile_space: Some(preview_tile),
-            ..FrameInput::default()
-        });
-        simulation.advance(Duration::ZERO);
-
-        let preview = simulation
-            .builder_preview()
-            .expect("builder preview available in builder mode");
-        assert!(preview.placeable, "initial preview should be placeable");
-        assert_eq!(preview.kind, TowerKind::Basic);
-        let cells_per_tile = TileGridPresentation::DEFAULT_CELLS_PER_TILE;
-        let expected_origin = CellCoord::new(
-            TileGridPresentation::SIDE_BORDER_CELL_LAYERS.saturating_add(
-                (preview_tile.column_in_tiles() * cells_per_tile as f32).round() as u32,
-            ),
-            TileGridPresentation::TOP_BORDER_CELL_LAYERS.saturating_add(
-                (preview_tile.row_in_tiles() * cells_per_tile as f32).round() as u32,
-            ),
-        );
-        assert_eq!(preview.origin, expected_origin);
-        assert_eq!(
-            preview.region,
-            CellRect::from_origin_and_size(preview.origin, CellRectSize::new(4, 4))
-        );
-
-        simulation.handle_input(FrameInput {
-            cursor_world_space: Some(preview_world),
-            cursor_tile_space: Some(preview_tile),
-            confirm_action: true,
-            ..FrameInput::default()
-        });
-        simulation.advance(Duration::from_millis(16));
-        assert_eq!(
-            query::towers(simulation.world()).into_vec().len(),
-            1,
-            "tower placement should succeed"
-        );
-
-        simulation.handle_input(FrameInput {
-            cursor_world_space: Some(preview_world),
-            cursor_tile_space: Some(preview_tile),
-            ..FrameInput::default()
-        });
-        simulation.advance(Duration::ZERO);
-        let updated_preview = simulation
-            .builder_preview()
-            .expect("preview should remain available");
-        assert!(
-            !updated_preview.placeable,
-            "occupied region should be marked unplaceable"
-        );
-    }
-
-    #[test]
-    fn placement_rejection_updates_preview_and_feedback() {
-        let mut simulation = new_simulation();
-        enter_builder_mode(&mut simulation);
-
-        let preview_tile = TileSpacePosition::from_indices(1, 1);
-        let preview_world = Vec2::new(64.0, 64.0);
-
-        simulation.handle_input(FrameInput {
-            cursor_world_space: Some(preview_world),
-            cursor_tile_space: Some(preview_tile),
-            ..FrameInput::default()
-        });
-        simulation.advance(Duration::ZERO);
-
-        let origin = simulation
-            .builder_preview()
-            .expect("preview available")
-            .origin;
-
-        simulation.handle_input(FrameInput {
-            cursor_world_space: Some(preview_world),
-            cursor_tile_space: Some(preview_tile),
-            confirm_action: true,
-            ..FrameInput::default()
-        });
-        simulation.advance(Duration::from_millis(16));
-
-        simulation.handle_input(FrameInput {
-            cursor_world_space: Some(preview_world),
-            cursor_tile_space: Some(preview_tile),
-            ..FrameInput::default()
-        });
-
-        simulation.queued_commands.push(Command::PlaceTower {
-            kind: TowerKind::Basic,
-            origin,
-        });
-        simulation.advance(Duration::ZERO);
-
-        let preview = simulation
-            .builder_preview()
-            .expect("preview should be available in builder mode");
-        assert_eq!(preview.rejection, Some(PlacementError::Occupied));
-        assert!(!preview.placeable);
-
-        let mut scene = make_scene();
-        simulation.populate_scene(&mut scene);
-        assert_eq!(
-            scene.tower_feedback,
-            Some(TowerInteractionFeedback::PlacementRejected {
-                kind: TowerKind::Basic,
-                origin: preview.origin,
-                reason: PlacementError::Occupied,
-            })
-        );
-    }
-
-    #[test]
-    fn scene_reflects_tower_removal() {
-        let mut simulation = new_simulation();
-        enter_builder_mode(&mut simulation);
-
-        let preview_tile = TileSpacePosition::from_indices(0, 0);
-        let preview_world = Vec2::new(16.0, 16.0);
-
-        simulation.handle_input(FrameInput {
-            cursor_world_space: Some(preview_world),
-            cursor_tile_space: Some(preview_tile),
-            confirm_action: true,
-            ..FrameInput::default()
-        });
-        simulation.advance(Duration::from_millis(16));
-
-        assert_eq!(query::towers(simulation.world()).into_vec().len(), 1);
-
-        simulation.handle_input(FrameInput {
-            cursor_world_space: Some(preview_world),
-            cursor_tile_space: Some(preview_tile),
-            remove_action: true,
-            ..FrameInput::default()
-        });
-        simulation.advance(Duration::from_millis(16));
-
-        assert!(query::towers(simulation.world()).into_vec().is_empty());
-
-        let mut scene = make_scene();
-        simulation.populate_scene(&mut scene);
-        assert!(scene.towers.is_empty());
-        assert!(scene.tower_feedback.is_none());
-    }
-
-    #[test]
-    fn removal_rejection_surfaces_feedback() {
-        let mut simulation = new_simulation();
-        enter_builder_mode(&mut simulation);
-
-        simulation.queued_commands.push(Command::RemoveTower {
-            tower: TowerId::new(42),
-        });
-        simulation.advance(Duration::ZERO);
-
-        let mut scene = make_scene();
-        simulation.populate_scene(&mut scene);
-        let expected_feedback = TowerInteractionFeedback::RemovalRejected {
-            tower: TowerId::new(42),
-            reason: RemovalError::MissingTower,
-        };
-        assert_eq!(simulation.tower_feedback(), Some(expected_feedback));
-        assert_eq!(scene.tower_feedback, Some(expected_feedback));
-    }
-
-    #[test]
-    fn populate_scene_marks_hovered_tower_in_attack_mode() {
-        let mut simulation = new_simulation();
-        enter_builder_mode(&mut simulation);
-
-        let preview_tile = TileSpacePosition::from_indices(0, 0);
-        let preview_world = Vec2::new(16.0, 16.0);
-
-        simulation.handle_input(FrameInput {
-            cursor_world_space: Some(preview_world),
-            cursor_tile_space: Some(preview_tile),
-            confirm_action: true,
-            ..FrameInput::default()
-        });
-        simulation.advance(Duration::from_millis(16));
-
-        let tower_view = query::towers(simulation.world());
-        let tower_snapshot = tower_view.iter().next().expect("tower should be placed");
-
-        simulation.handle_input(FrameInput {
-            mode_toggle: true,
-            ..FrameInput::default()
-        });
-        simulation.advance(Duration::ZERO);
-        assert_eq!(query::play_mode(simulation.world()), PlayMode::Attack);
-
-        simulation.handle_input(FrameInput {
-            cursor_world_space: Some(preview_world),
-            cursor_tile_space: Some(preview_tile),
-            ..FrameInput::default()
-        });
-
-        let mut scene = make_scene();
-        simulation.populate_scene(&mut scene);
-
-        assert_eq!(scene.hovered_tower, Some(tower_snapshot.id));
-        assert_eq!(scene.play_mode, PlayMode::Attack);
-    }
-
-    #[test]
-    fn hovered_tower_tracks_cursor_cell_without_offset() {
-        let mut simulation = new_simulation();
-        enter_builder_mode(&mut simulation);
-
-        let placement_tile = TileSpacePosition::from_indices(0, 0);
-        let placement_world = Vec2::new(16.0, 16.0);
-
-        simulation.handle_input(FrameInput {
-            cursor_world_space: Some(placement_world),
-            cursor_tile_space: Some(placement_tile),
-            confirm_action: true,
-            ..FrameInput::default()
-        });
-        simulation.advance(Duration::from_millis(16));
-
-        let tower_view = query::towers(simulation.world());
-        let tower_snapshot = tower_view.iter().next().expect("tower should be placed");
-
-        simulation.handle_input(FrameInput {
-            mode_toggle: true,
-            ..FrameInput::default()
-        });
-        simulation.advance(Duration::ZERO);
-        assert_eq!(query::play_mode(simulation.world()), PlayMode::Attack);
-
-        let tile_grid = query::tile_grid(simulation.world());
-        let cells_per_tile = simulation.cells_per_tile.max(1);
-        let cell_length = tile_grid.tile_length() / cells_per_tile as f32;
-        let tile_extent = tile_grid.tile_length();
-        let grid_presentation = TileGridPresentation::new(
-            tile_grid.columns().get(),
-            tile_grid.rows().get(),
-            tile_grid.tile_length(),
-            cells_per_tile,
-            Color::from_rgb_u8(0, 0, 0),
-        )
-        .expect("valid grid dimensions");
-        let footprint = Vec2::splat(1.0);
-
-        let mut scene = make_scene();
-
-        let inside_positions = [
-            Vec2::new(0.25 * cell_length, 0.25 * cell_length),
-            Vec2::new(tile_extent - 0.25 * cell_length, 0.25 * cell_length),
-            Vec2::new(0.25 * cell_length, tile_extent - 0.25 * cell_length),
-            Vec2::new(
-                tile_extent - 0.25 * cell_length,
-                tile_extent - 0.25 * cell_length,
-            ),
-        ];
-        for position in inside_positions {
-            let tile_position = grid_presentation
-                .snap_world_to_tile(position, footprint)
-                .expect("position inside grid");
-            simulation.handle_input(FrameInput {
-                cursor_world_space: Some(position),
-                cursor_tile_space: Some(tile_position),
-                ..FrameInput::default()
-            });
-            simulation.populate_scene(&mut scene);
-            assert_eq!(scene.hovered_tower, Some(tower_snapshot.id));
-        }
-
-        let outside_positions = [
-            Vec2::new(tile_extent + 0.5 * cell_length, tile_extent * 0.5),
-            Vec2::new(tile_extent * 0.5, tile_extent + 0.5 * cell_length),
-            Vec2::new(tile_extent + cell_length, tile_extent + cell_length),
-        ];
-        for position in outside_positions {
-            let tile_position = grid_presentation
-                .snap_world_to_tile(position, footprint)
-                .expect("position inside grid bounds");
-            simulation.handle_input(FrameInput {
-                cursor_world_space: Some(position),
-                cursor_tile_space: Some(tile_position),
-                ..FrameInput::default()
-            });
-            simulation.populate_scene(&mut scene);
-            assert!(scene.hovered_tower.is_none());
-        }
-
-        simulation.handle_input(FrameInput {
-            cursor_world_space: Some(Vec2::ZERO),
-            cursor_tile_space: None,
-            ..FrameInput::default()
-        });
-        simulation.populate_scene(&mut scene);
-        assert!(scene.hovered_tower.is_none());
-    }
-
-    #[test]
-    fn tower_targets_follow_play_mode_transitions() {
-        let mut simulation = new_simulation();
-        let spawner = query::bug_spawners(simulation.world())
-            .into_iter()
-            .next()
-            .expect("at least one bug spawner is configured");
-
-        simulation.queued_commands.push(Command::SetPlayMode {
-            mode: PlayMode::Builder,
-        });
-        simulation.advance(Duration::ZERO);
-
-        let placement_tile = TileSpacePosition::from_indices(1, 1);
-        let origin = simulation.tile_position_to_cell(placement_tile);
-        simulation.queued_commands.push(Command::PlaceTower {
-            kind: TowerKind::Basic,
-            origin,
-        });
-        simulation.advance(Duration::ZERO);
-
-        simulation.queued_commands.push(Command::SetPlayMode {
-            mode: PlayMode::Attack,
-        });
-        simulation.advance(Duration::ZERO);
-
-        simulation.queued_commands.push(Command::SpawnBug {
-            spawner,
-            color: BugColor::from_rgb(255, 0, 0),
-            health: Health::new(3),
-            step_ms: simulation.bug_step_ms(),
-        });
-        simulation.advance(Duration::ZERO);
-
-        assert!(
-            !simulation.current_targets().is_empty(),
-            "attack mode should populate tower targets"
-        );
-        let initial_target = simulation.current_targets()[0];
-
-        let mut scene = make_scene();
-        simulation.populate_scene(&mut scene);
-        assert_eq!(scene.tower_targets.len(), 1);
-        let new_beam = scene.tower_targets[0];
-        assert_eq!(new_beam.tower, initial_target.tower);
-        let beam = scene.tower_targets[0];
-        assert_eq!(beam.tower, initial_target.tower);
-        assert_eq!(beam.bug, initial_target.bug);
-        assert_eq!(
-            beam.from,
-            Vec2::new(
-                initial_target.tower_center_cells.column(),
-                initial_target.tower_center_cells.row(),
-            )
-        );
-        assert_eq!(
-            beam.to,
-            Vec2::new(
-                initial_target.bug_center_cells.column(),
-                initial_target.bug_center_cells.row(),
-            )
-        );
-
-        simulation.queued_commands.push(Command::SetPlayMode {
-            mode: PlayMode::Builder,
-        });
-        simulation.advance(Duration::ZERO);
-
-        assert!(
-            simulation.current_targets().is_empty(),
-            "builder mode should clear cached tower targets"
-        );
-
-        simulation.populate_scene(&mut scene);
-        assert!(scene.tower_targets.is_empty());
-
-        simulation.queued_commands.push(Command::SetPlayMode {
-            mode: PlayMode::Attack,
-        });
-        simulation.queued_commands.push(Command::SpawnBug {
-            spawner,
-            color: BugColor::from_rgb(255, 0, 0),
-            health: Health::new(3),
-            step_ms: simulation.bug_step_ms(),
-        });
-        simulation.advance(Duration::ZERO);
-
-        assert!(
-            !simulation.current_targets().is_empty(),
-            "targets should repopulate after returning to attack mode"
-        );
-        assert_eq!(simulation.current_targets()[0].tower, initial_target.tower);
-
-        simulation.populate_scene(&mut scene);
-        assert_eq!(scene.tower_targets.len(), 1);
-    }
-
-    #[test]
-    fn equidistant_bugs_select_smallest_id_each_tick() {
-        let mut simulation = new_simulation();
-
-        simulation.queued_commands.push(Command::SetPlayMode {
-            mode: PlayMode::Builder,
-        });
-        simulation.advance(Duration::ZERO);
-
-        let placement_tile = TileSpacePosition::from_indices(1, 1);
-        let origin = simulation.tile_position_to_cell(placement_tile);
-        simulation.queued_commands.push(Command::PlaceTower {
-            kind: TowerKind::Basic,
-            origin,
-        });
-        simulation.advance(Duration::ZERO);
-
-        simulation.queued_commands.push(Command::SetPlayMode {
-            mode: PlayMode::Attack,
-        });
-        simulation.advance(Duration::ZERO);
-
-        let tower_snapshot = query::towers(simulation.world())
-            .into_vec()
-            .into_iter()
-            .next()
-            .expect("tower placement succeeded");
-        let tower_region = tower_snapshot.region;
-        let tower_center = (
-            tower_region.origin().column() + tower_region.size().width() / 2,
-            tower_region.origin().row() + tower_region.size().height() / 2,
-        );
-
-        let spawners = query::bug_spawners(simulation.world());
-        let mut pair = None;
-        for (index, first) in spawners.iter().enumerate() {
-            let first_distance = squared_distance_to_center(*first, tower_center);
-            for second in spawners.iter().skip(index + 1) {
-                if squared_distance_to_center(*second, tower_center) == first_distance {
-                    pair = Some((*first, *second));
-                    break;
-                }
-            }
-            if pair.is_some() {
-                break;
-            }
-        }
-
-        let (first_spawner, second_spawner) =
-            pair.expect("expected at least one pair of equidistant spawners");
-
-        simulation.queued_commands.push(Command::SpawnBug {
-            spawner: first_spawner,
-            color: BugColor::from_rgb(255, 0, 0),
-            health: Health::new(3),
-            step_ms: simulation.bug_step_ms(),
-        });
-        simulation.queued_commands.push(Command::SpawnBug {
-            spawner: second_spawner,
-            color: BugColor::from_rgb(0, 255, 0),
-            health: Health::new(3),
-            step_ms: simulation.bug_step_ms(),
-        });
-        simulation.advance(Duration::ZERO);
-
-        let expected_bug = query::bug_view(simulation.world())
-            .iter()
-            .map(|bug| bug.id)
-            .min()
-            .expect("two bugs should exist");
-
-        assert!(
-            !simulation.current_targets().is_empty(),
-            "tower targeting should select a bug"
-        );
-        assert_eq!(simulation.current_targets()[0].bug, expected_bug);
-
-        let mut scene = make_scene();
-        simulation.populate_scene(&mut scene);
-        assert_eq!(scene.tower_targets.len(), 1);
-        assert_eq!(scene.tower_targets[0].bug, expected_bug);
-
-        for _ in 0..3 {
-            simulation.advance(Duration::from_millis(32));
-            assert!(
-                !simulation.current_targets().is_empty(),
-                "tower targeting should remain stable"
-            );
-            assert_eq!(simulation.current_targets()[0].bug, expected_bug);
-
-            simulation.populate_scene(&mut scene);
-            assert_eq!(scene.tower_targets.len(), 1);
-            assert_eq!(scene.tower_targets[0].bug, expected_bug);
-        }
-    }
-
-    #[test]
-    fn tower_combat_queues_fire_command_when_ready() {
-        let mut simulation = new_simulation();
-        let spawner = query::bug_spawners(simulation.world())
-            .into_iter()
-            .next()
-            .expect("at least one bug spawner is configured");
-
-        simulation.queued_commands.push(Command::SetPlayMode {
-            mode: PlayMode::Builder,
-        });
-        simulation.advance(Duration::ZERO);
-
-        let placement_tile = TileSpacePosition::from_indices(1, 1);
-        let origin = simulation.tile_position_to_cell(placement_tile);
-        simulation.queued_commands.push(Command::PlaceTower {
-            kind: TowerKind::Basic,
-            origin,
-        });
-        simulation.advance(Duration::ZERO);
-
-        simulation.queued_commands.push(Command::SetPlayMode {
-            mode: PlayMode::Attack,
-        });
-        simulation.advance(Duration::ZERO);
-
-        simulation.queued_commands.push(Command::SpawnBug {
-            spawner,
-            color: BugColor::from_rgb(200, 120, 80),
-            health: Health::new(3),
-            step_ms: simulation.bug_step_ms(),
-        });
-        simulation.advance(Duration::ZERO);
-
-        assert!(
-            simulation
-                .queued_commands()
-                .iter()
-                .any(|command| matches!(command, Command::FireProjectile { .. })),
-            "tower combat should queue a firing command when a target is ready",
-        );
-    }
-
-    #[test]
-    fn tower_combat_respects_cooldown_and_caches_projectiles() {
-        let mut simulation = new_simulation();
-        let spawner = query::bug_spawners(simulation.world())
-            .into_iter()
-            .next()
-            .expect("at least one bug spawner is configured");
-
-        simulation.queued_commands.push(Command::SetPlayMode {
-            mode: PlayMode::Builder,
-        });
-        simulation.advance(Duration::ZERO);
-
-        let placement_tile = TileSpacePosition::from_indices(1, 1);
-        let origin = simulation.tile_position_to_cell(placement_tile);
-        simulation.queued_commands.push(Command::PlaceTower {
-            kind: TowerKind::Basic,
-            origin,
-        });
-        simulation.advance(Duration::ZERO);
-
-        simulation.queued_commands.push(Command::SetPlayMode {
-            mode: PlayMode::Attack,
-        });
-        simulation.advance(Duration::ZERO);
-
-        simulation.queued_commands.push(Command::SpawnBug {
-            spawner,
-            color: BugColor::from_rgb(210, 160, 90),
-            health: Health::new(3),
-            step_ms: simulation.bug_step_ms(),
-        });
-        simulation.advance(Duration::ZERO);
-
-        assert!(
-            simulation
-                .queued_commands()
-                .iter()
-                .any(|command| matches!(command, Command::FireProjectile { .. })),
-            "initial firing command should be queued",
-        );
-
-        simulation.advance(Duration::ZERO);
-
-        assert!(
-            !simulation
-                .queued_commands()
-                .iter()
-                .any(|command| matches!(command, Command::FireProjectile { .. })),
-            "cooldown should prevent immediate refire",
-        );
-
-        let snapshot = simulation
-            .tower_cooldowns()
-            .iter()
-            .next()
-            .copied()
-            .expect("cooldown snapshot should exist after firing");
-        assert!(!snapshot.ready_in.is_zero());
-        assert_eq!(simulation.tower_cooldowns().iter().count(), 1);
-
-        assert!(
-            !simulation.projectiles().is_empty(),
-            "projectile snapshots should be cached after firing",
-        );
-
-        simulation.queued_commands.push(Command::SetPlayMode {
-            mode: PlayMode::Builder,
-        });
-        simulation.advance(Duration::ZERO);
-
-        assert!(simulation.projectiles().is_empty());
-        assert_eq!(simulation.tower_cooldowns().iter().count(), 0);
-        let no_pending_fire = simulation
-            .queued_commands()
-            .iter()
-            .all(|command| !matches!(command, Command::FireProjectile { .. }));
-        assert!(no_pending_fire);
-    }
-
-    #[test]
-    fn confirm_emits_tower_placed_event() {
-        let mut simulation = new_simulation();
-        enter_builder_mode(&mut simulation);
-
-        let preview_tile = TileSpacePosition::from_indices(0, 0);
-        let preview_world = Vec2::new(16.0, 16.0);
-
-        simulation.handle_input(FrameInput {
-            cursor_world_space: Some(preview_world),
-            cursor_tile_space: Some(preview_tile),
-            confirm_action: true,
-            ..FrameInput::default()
-        });
-        simulation.advance(Duration::from_millis(16));
-
-        assert!(
-            simulation
-                .last_frame_events()
-                .iter()
-                .any(|event| matches!(event, Event::TowerPlaced { .. })),
-            "confirming placement should emit TowerPlaced"
-        );
-    }
-
-    #[test]
-    fn sprite_scene_population_is_deterministic() {
-        let first = capture_scripted_scene(VisualStyle::Sprites);
-        let second = capture_scripted_scene(VisualStyle::Sprites);
-
-        assert_eq!(first, second, "sprite scenes diverged between runs");
-        assert!(
-            !first.towers.is_empty() && !first.bugs.is_empty(),
-            "scripted scene should contain at least one tower and bug"
-        );
-        assert_eq!(
-            first.tower_targets.len(),
-            1,
-            "expected a single tower target"
-        );
-
-        let first_fingerprint = scene_fingerprint(&first);
-        let second_fingerprint = scene_fingerprint(&second);
-        assert_eq!(first_fingerprint, second_fingerprint);
-
-        let expected = 0xe425_7ce6_4f4f_b7dc;
-        assert_eq!(
-            first_fingerprint, expected,
-            "sprite scene fingerprint mismatch: {first_fingerprint:#x}"
-        );
-
-        assert!(matches!(first.towers[0].visual, TowerVisual::Sprite { .. }));
-        assert!(matches!(first.bugs[0].style, BugVisual::Sprite(_)));
-    }
-
-    #[test]
-    fn primitive_scene_population_is_deterministic() {
-        let first = capture_scripted_scene(VisualStyle::Primitives);
-        let second = capture_scripted_scene(VisualStyle::Primitives);
-
-        assert_eq!(first, second, "primitive scenes diverged between runs");
-        assert!(
-            !first.towers.is_empty() && !first.bugs.is_empty(),
-            "scripted scene should contain at least one tower and bug"
-        );
-        assert_eq!(
-            first.tower_targets.len(),
-            1,
-            "expected a single tower target"
-        );
-
-        let first_fingerprint = scene_fingerprint(&first);
-        let second_fingerprint = scene_fingerprint(&second);
-        assert_eq!(first_fingerprint, second_fingerprint);
-
-        let expected = 0x52ac_8d62_88e0_a775;
-        assert_eq!(
-            first_fingerprint, expected,
-            "primitive scene fingerprint mismatch: {first_fingerprint:#x}"
-        );
-
-        assert!(matches!(first.towers[0].visual, TowerVisual::PrimitiveRect));
-        match first.bugs[0].style {
-            BugVisual::PrimitiveCircle { .. } => {}
-            BugVisual::Sprite(_) => {
-                panic!("primitive style should emit circle visuals");
-            }
-        }
-    }
-
-    fn capture_scripted_scene(style: VisualStyle) -> Scene {
-        let mut simulation = new_simulation_with_style(style);
-        let spawner = query::bug_spawners(simulation.world())
-            .into_iter()
-            .next()
-            .expect("bug spawner available");
-
-        simulation.queued_commands.push(Command::SetPlayMode {
-            mode: PlayMode::Builder,
-        });
-        simulation.advance(Duration::ZERO);
-
-        let placement_tile = TileSpacePosition::from_indices(1, 1);
-        let origin = simulation.tile_position_to_cell(placement_tile);
-        simulation.queued_commands.push(Command::PlaceTower {
-            kind: TowerKind::Basic,
-            origin,
-        });
-        simulation.advance(Duration::ZERO);
-
-        simulation.queued_commands.push(Command::SetPlayMode {
-            mode: PlayMode::Attack,
-        });
-        simulation.advance(Duration::ZERO);
-
-        simulation.queued_commands.push(Command::SpawnBug {
-            spawner,
-            color: BugColor::from_rgb(160, 120, 80),
-            health: Health::new(3),
-            step_ms: simulation.bug_step_ms(),
-        });
-        simulation.advance(Duration::ZERO);
-
-        simulation.advance(Duration::from_millis(16));
-
-        let mut scene = make_scene();
-        simulation.populate_scene(&mut scene);
-        scene
-    }
-
-    fn scene_fingerprint(scene: &Scene) -> u64 {
-        let digest = SceneDigest::from(scene);
-        let mut hasher = DefaultHasher::new();
-        digest.hash(&mut hasher);
-        hasher.finish()
-    }
-
-    #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-    struct SceneDigest {
-        tile_grid: TileGridDigest,
-        wall_color: ColorDigest,
-        ground: Option<GroundSpriteTilesDigest>,
-        walls: Vec<SceneWall>,
-        bugs: Vec<BugDigest>,
-        towers: Vec<TowerDigest>,
-        projectiles: Vec<ProjectileDigest>,
-        tower_targets: Vec<TowerTargetDigest>,
-        hovered_tower: Option<TowerId>,
-        play_mode: PlayMode,
-        tower_preview: Option<TowerPreview>,
-        active_tower_footprint_tiles: Option<Vec2Digest>,
-        tower_feedback: Option<TowerInteractionFeedback>,
-    }
-
-    impl From<&Scene> for SceneDigest {
-        fn from(scene: &Scene) -> Self {
-            Self {
-                tile_grid: TileGridDigest::from(scene.tile_grid),
-                wall_color: ColorDigest::from(scene.wall_color),
-                ground: scene.ground.as_ref().map(GroundSpriteTilesDigest::from),
-                walls: scene.walls.clone(),
-                bugs: scene.bugs.iter().map(BugDigest::from).collect(),
-                towers: scene.towers.iter().map(TowerDigest::from).collect(),
-                projectiles: scene
-                    .projectiles
-                    .iter()
-                    .map(ProjectileDigest::from)
-                    .collect(),
-                tower_targets: scene
-                    .tower_targets
-                    .iter()
-                    .map(TowerTargetDigest::from)
-                    .collect(),
-                hovered_tower: scene.hovered_tower,
-                play_mode: scene.play_mode,
-                tower_preview: scene.tower_preview,
-                active_tower_footprint_tiles: scene
-                    .active_tower_footprint_tiles
-                    .map(Vec2Digest::from),
-                tower_feedback: scene.tower_feedback,
-            }
-        }
-    }
-
-    #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-    struct GroundSpriteTilesDigest {
-        kind: GroundKind,
-        sprite: SpriteInstanceDigest,
-    }
-
-    impl From<&GroundSpriteTiles> for GroundSpriteTilesDigest {
-        fn from(tiles: &GroundSpriteTiles) -> Self {
-            Self {
-                kind: tiles.kind,
-                sprite: SpriteInstanceDigest::from(&tiles.sprite),
-            }
-        }
-    }
-
-    #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-    struct TileGridDigest {
-        columns: u32,
-        rows: u32,
-        tile_length: u32,
-        cells_per_tile: u32,
-        line_color: ColorDigest,
-    }
-
-    impl From<TileGridPresentation> for TileGridDigest {
-        fn from(grid: TileGridPresentation) -> Self {
-            Self {
-                columns: grid.columns,
-                rows: grid.rows,
-                tile_length: grid.tile_length.to_bits(),
-                cells_per_tile: grid.cells_per_tile,
-                line_color: ColorDigest::from(grid.line_color),
-            }
-        }
-    }
-
-    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-    struct ColorDigest {
-        red: u32,
-        green: u32,
-        blue: u32,
-        alpha: u32,
-    }
-
-    impl From<Color> for ColorDigest {
-        fn from(color: Color) -> Self {
-            Self {
-                red: color.red.to_bits(),
-                green: color.green.to_bits(),
-                blue: color.blue.to_bits(),
-                alpha: color.alpha.to_bits(),
-            }
-        }
-    }
-
-    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-    struct Vec2Digest {
-        x: u32,
-        y: u32,
-    }
-
-    impl From<Vec2> for Vec2Digest {
-        fn from(value: Vec2) -> Self {
-            Self {
-                x: value.x.to_bits(),
-                y: value.y.to_bits(),
-            }
-        }
-    }
-
-    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-    struct CellRectDigest {
-        origin_column: u32,
-        origin_row: u32,
-        width: u32,
-        height: u32,
-    }
-
-    impl From<CellRect> for CellRectDigest {
-        fn from(rect: CellRect) -> Self {
-            Self {
-                origin_column: rect.origin().column(),
-                origin_row: rect.origin().row(),
-                width: rect.size().width(),
-                height: rect.size().height(),
-            }
-        }
-    }
-
-    #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-    struct SpriteInstanceDigest {
-        sprite: SpriteKey,
-        size: Vec2Digest,
-        pivot: Vec2Digest,
-        rotation: u32,
-        offset: Option<Vec2Digest>,
-    }
-
-    impl From<&SpriteInstance> for SpriteInstanceDigest {
-        fn from(instance: &SpriteInstance) -> Self {
-            Self {
-                sprite: instance.sprite,
-                size: Vec2Digest::from(instance.size),
-                pivot: Vec2Digest::from(instance.pivot),
-                rotation: instance.rotation_radians.to_bits(),
-                offset: instance.offset.map(Vec2Digest::from),
-            }
-        }
-    }
-
-    #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-    enum TowerVisualDigest {
-        PrimitiveRect,
-        Sprite {
-            base: SpriteInstanceDigest,
-            turret: SpriteInstanceDigest,
-        },
-    }
-
-    impl From<&TowerVisual> for TowerVisualDigest {
-        fn from(visual: &TowerVisual) -> Self {
-            match visual {
-                TowerVisual::PrimitiveRect => Self::PrimitiveRect,
-                TowerVisual::Sprite { base, turret } => Self::Sprite {
-                    base: SpriteInstanceDigest::from(base),
-                    turret: SpriteInstanceDigest::from(turret),
-                },
-            }
-        }
-    }
-
-    #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-    struct TowerDigest {
-        id: TowerId,
-        kind: TowerKind,
-        region: CellRectDigest,
-        visual: TowerVisualDigest,
-    }
-
-    impl From<&SceneTower> for TowerDigest {
-        fn from(tower: &SceneTower) -> Self {
-            Self {
-                id: tower.id,
-                kind: tower.kind,
-                region: CellRectDigest::from(tower.region),
-                visual: TowerVisualDigest::from(&tower.visual),
-            }
-        }
-    }
-
-    #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-    enum BugVisualDigest {
-        PrimitiveCircle { color: ColorDigest },
-        Sprite(SpriteInstanceDigest),
-    }
-
-    impl From<&BugVisual> for BugVisualDigest {
-        fn from(visual: &BugVisual) -> Self {
-            match visual {
-                BugVisual::PrimitiveCircle { color } => Self::PrimitiveCircle {
-                    color: ColorDigest::from(*color),
-                },
-                BugVisual::Sprite(instance) => Self::Sprite(SpriteInstanceDigest::from(instance)),
-            }
-        }
-    }
-
-    #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-    struct BugDigest {
-        id: BugId,
-        column: u32,
-        row: u32,
-        offset: Vec2Digest,
-        style: BugVisualDigest,
-        health: (u32, u32),
-    }
-
-    impl From<&BugPresentation> for BugDigest {
-        fn from(bug: &BugPresentation) -> Self {
-            Self {
-                id: bug.id,
-                column: bug.column,
-                row: bug.row,
-                offset: Vec2Digest::from(bug.offset),
-                style: BugVisualDigest::from(&bug.style),
-                health: (bug.health.current, bug.health.maximum),
-            }
-        }
-    }
-
-    #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-    struct ProjectileDigest {
-        id: ProjectileId,
-        from: Vec2Digest,
-        to: Vec2Digest,
-        position: Vec2Digest,
-        progress: u32,
-    }
-
-    impl From<&SceneProjectile> for ProjectileDigest {
-        fn from(projectile: &SceneProjectile) -> Self {
-            Self {
-                id: projectile.id,
-                from: Vec2Digest::from(projectile.from),
-                to: Vec2Digest::from(projectile.to),
-                position: Vec2Digest::from(projectile.position),
-                progress: projectile.progress.to_bits(),
-            }
-        }
-    }
-
-    #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-    struct TowerTargetDigest {
-        tower: TowerId,
-        bug: BugId,
-        from: Vec2Digest,
-        to: Vec2Digest,
-    }
-
-    impl From<&TowerTargetLine> for TowerTargetDigest {
-        fn from(line: &TowerTargetLine) -> Self {
-            Self {
-                tower: line.tower,
-                bug: line.bug,
-                from: Vec2Digest::from(line.from),
-                to: Vec2Digest::from(line.to),
-            }
-        }
-    }
-}
+mod tests {}

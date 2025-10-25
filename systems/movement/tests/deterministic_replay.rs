@@ -527,15 +527,10 @@ enum EventRecord {
     PressureConfigChanged {
         species_table_version: SpeciesTableVersion,
     },
-    AttackPlanReady {
-        wave: WaveId,
-        pressure: u32,
-        bursts: usize,
-    },
     WaveStarted {
         wave: WaveId,
         difficulty: WaveDifficulty,
-        tier_effective: u32,
+        effective_difficulty: u32,
         reward_multiplier: u32,
         pressure_scalar: u32,
         plan_pressure: u32,
@@ -591,15 +586,10 @@ impl From<&Event> for EventRecord {
             } => Self::PressureConfigChanged {
                 species_table_version: *species_table_version,
             },
-            Event::AttackPlanReady { wave, plan } => Self::AttackPlanReady {
-                wave: *wave,
-                pressure: plan.pressure().get(),
-                bursts: plan.bursts().len(),
-            },
             Event::WaveStarted {
                 wave,
                 difficulty,
-                tier_effective,
+                effective_difficulty,
                 reward_multiplier,
                 pressure_scalar,
                 plan_pressure,
@@ -608,7 +598,7 @@ impl From<&Event> for EventRecord {
             } => Self::WaveStarted {
                 wave: *wave,
                 difficulty: *difficulty,
-                tier_effective: *tier_effective,
+                effective_difficulty: *effective_difficulty,
                 reward_multiplier: *reward_multiplier,
                 pressure_scalar: *pressure_scalar,
                 plan_pressure: plan_pressure.get(),
@@ -634,7 +624,7 @@ impl From<&Event> for EventRecord {
             | Event::ProjectileExpired { .. }
             | Event::ProjectileRejected { .. }
             | Event::HardWinAchieved { .. }
-            | Event::DifficultyTierChanged { .. }
+            | Event::DifficultyLevelChanged { .. }
             | Event::BugDamaged { .. }
             | Event::BugDied { .. } => {
                 unreachable!("tower events are not expected in movement replay tests")

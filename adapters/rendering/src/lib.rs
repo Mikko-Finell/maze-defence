@@ -872,23 +872,23 @@ impl GoldPresentation {
     }
 }
 
-/// Snapshot of the active difficulty tier for UI presentation.
+/// Snapshot of the active difficulty level for UI presentation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct TierPresentation {
-    tier: u32,
+pub struct DifficultyPresentation {
+    level: u32,
 }
 
-impl TierPresentation {
-    /// Creates a new difficulty tier descriptor for presentation purposes.
+impl DifficultyPresentation {
+    /// Creates a new difficulty descriptor for presentation purposes.
     #[must_use]
-    pub const fn new(tier: u32) -> Self {
-        Self { tier }
+    pub const fn new(level: u32) -> Self {
+        Self { level }
     }
 
-    /// Returns the active difficulty tier carried by this descriptor.
+    /// Returns the active difficulty level carried by this descriptor.
     #[must_use]
-    pub const fn tier(&self) -> u32 {
-        self.tier
+    pub const fn level(&self) -> u32 {
+        self.level
     }
 }
 
@@ -897,7 +897,7 @@ impl TierPresentation {
 pub struct DifficultyButtonPresentation {
     difficulty: WaveDifficulty,
     selected: bool,
-    effective_tier: u32,
+    effective_level: u32,
     reward_multiplier: u32,
 }
 
@@ -907,13 +907,13 @@ impl DifficultyButtonPresentation {
     pub const fn new(
         difficulty: WaveDifficulty,
         selected: bool,
-        effective_tier: u32,
+        effective_level: u32,
         reward_multiplier: u32,
     ) -> Self {
         Self {
             difficulty,
             selected,
-            effective_tier,
+            effective_level,
             reward_multiplier,
         }
     }
@@ -930,10 +930,10 @@ impl DifficultyButtonPresentation {
         self.selected
     }
 
-    /// Returns the effective tier that will be used when launching this difficulty.
+    /// Returns the effective difficulty that will be used when launching this option.
     #[must_use]
-    pub const fn effective_tier(&self) -> u32 {
-        self.effective_tier
+    pub const fn effective_level(&self) -> u32 {
+        self.effective_level
     }
 
     /// Returns the gold reward multiplier preview for this difficulty.
@@ -1006,8 +1006,8 @@ pub struct Scene {
     pub control_panel: Option<ControlPanelView>,
     /// Current gold balance presented to the player.
     pub gold: Option<GoldPresentation>,
-    /// Current difficulty tier presented to the player.
-    pub tier: Option<TierPresentation>,
+    /// Current difficulty level presented to the player.
+    pub difficulty: Option<DifficultyPresentation>,
     /// Presentation state for the Normal/Hard difficulty buttons.
     pub difficulty_selection: Option<DifficultySelectionPresentation>,
 }
@@ -1032,7 +1032,7 @@ impl Scene {
         tower_feedback: Option<TowerInteractionFeedback>,
         control_panel: Option<ControlPanelView>,
         gold: Option<GoldPresentation>,
-        tier: Option<TierPresentation>,
+        difficulty: Option<DifficultyPresentation>,
         difficulty_selection: Option<DifficultySelectionPresentation>,
     ) -> Self {
         Self {
@@ -1051,7 +1051,7 @@ impl Scene {
             tower_feedback,
             control_panel,
             gold,
-            tier,
+            difficulty,
             difficulty_selection,
         }
     }
@@ -1535,7 +1535,7 @@ mod tests {
         assert!(scene.ground.is_none());
         assert!(scene.control_panel.is_none());
         assert!(scene.gold.is_none());
-        assert!(scene.tier.is_none());
+        assert!(scene.difficulty.is_none());
         assert!(scene.difficulty_selection.is_none());
     }
 
@@ -1617,7 +1617,7 @@ mod tests {
         assert!(scene.projectiles.is_empty());
         assert!(scene.ground.is_none());
         assert!(scene.gold.is_none());
-        assert!(scene.tier.is_none());
+        assert!(scene.difficulty.is_none());
         assert!(scene.difficulty_selection.is_none());
     }
 

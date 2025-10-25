@@ -152,9 +152,9 @@ pub enum PlayMode {
 /// Difficulty selections available when launching a wave.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum WaveDifficulty {
-    /// Launch the wave at the current base tier with standard rewards.
+    /// Launch the wave at the current base difficulty level with standard rewards.
     Normal,
-    /// Launch the wave at `tier + 1` with increased rewards and higher risk.
+    /// Launch the wave at one level above the base with increased rewards and higher risk.
     Hard,
 }
 
@@ -697,125 +697,146 @@ pub const RNG_STREAM_PATCH_PREFIX: &str = "patch";
 
 /// Canonical attack plan generated from the pressure-based wave specification.
 ///
-/// The plan is serialised in a stable order so deterministic replays can hash the
-/// resulting bytes. Bursts must be recorded in ascending [`SpeciesId`] order and
-/// retain their computed start times to preserve the canonical ordering described
-/// in `pressure-spec.md`.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct AttackPlan {
-    pressure: Pressure,
-    species_table_version: SpeciesTableVersion,
-    bursts: Vec<BurstPlan>,
+/// Unique identifier assigned to a level layout.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct LevelId(u32);
+
+impl LevelId {
+    /// Creates a new level identifier from the provided numeric value.
+    #[must_use]
+    pub const fn new(value: u32) -> Self {
+        Self(value)
+    }
+
+    /// Returns the numeric representation of the identifier.
+    #[must_use]
+    pub const fn get(&self) -> u32 {
+        self.0
+    }
 }
 
-impl AttackPlan {
-    /// Creates a new attack plan populated with deterministic burst descriptors.
+/// Monotonic difficulty scalar tracked by the world.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct DifficultyLevel(u32);
+
+impl DifficultyLevel {
+    /// Creates a new difficulty scalar.
+    #[must_use]
+    pub const fn new(value: u32) -> Self {
+        Self(value)
+    }
+
+    /// Returns the numeric representation of the scalar.
+    #[must_use]
+    pub const fn get(&self) -> u32 {
+        self.0
+    }
+}
+
+/// Inputs required by the pressure v2 wave generator.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PressureWaveInputs {
+    game_seed: u64,
+    level_id: LevelId,
+    wave: WaveId,
+    difficulty: DifficultyLevel,
+}
+
+impl PressureWaveInputs {
+    /// Creates a new set of inputs for the pressure v2 generator.
     #[must_use]
     pub fn new(
-        pressure: Pressure,
-        species_table_version: SpeciesTableVersion,
-        bursts: Vec<BurstPlan>,
+        _game_seed: u64,
+        _level_id: LevelId,
+        _wave: WaveId,
+        _difficulty: DifficultyLevel,
     ) -> Self {
-        Self {
-            pressure,
-            species_table_version,
-            bursts,
-        }
+        todo!("pressure v2 inputs not implemented");
     }
 
-    /// Creates an empty attack plan with zero pressure for compatibility with
-    /// waves that intentionally spawn nothing.
+    /// Reports the difficulty scalar supplied to the generator.
     #[must_use]
-    pub fn empty(species_table_version: SpeciesTableVersion) -> Self {
-        Self {
-            pressure: Pressure::new(0),
-            species_table_version,
-            bursts: Vec::new(),
-        }
+    pub fn difficulty(&self) -> DifficultyLevel {
+        self.difficulty
     }
 
-    /// Returns the total pressure budget for this plan.
+    /// Reports the level identifier supplied to the generator.
     #[must_use]
-    pub const fn pressure(&self) -> Pressure {
-        self.pressure
+    pub fn level_id(&self) -> LevelId {
+        self.level_id
     }
 
-    /// Returns the species table version used when the plan was generated.
+    /// Reports the wave identifier supplied to the generator.
     #[must_use]
-    pub const fn species_table_version(&self) -> SpeciesTableVersion {
-        self.species_table_version
+    pub fn wave(&self) -> WaveId {
+        self.wave
     }
 
-    /// Provides immutable access to the burst descriptors in deterministic order.
+    /// Reports the global seed supplied to the generator.
     #[must_use]
-    pub fn bursts(&self) -> &[BurstPlan] {
-        &self.bursts
-    }
-
-    /// Returns whether the plan contains no bursts.
-    #[must_use]
-    pub fn is_empty(&self) -> bool {
-        self.bursts.is_empty()
+    pub fn game_seed(&self) -> u64 {
+        self.game_seed
     }
 }
 
-/// Homogeneous burst scheduled within an [`AttackPlan`].
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct BurstPlan {
-    species: SpeciesId,
-    patch: SpawnPatchId,
-    count: NonZeroU32,
-    cadence_ms: NonZeroU32,
-    start_ms: u32,
+/// Spawn descriptor emitted by the pressure v2 generator.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PressureSpawnRecord {
+    time_ms: u32,
+    hp: u32,
+    speed_mult: f32,
+    species_id: u32,
 }
 
-impl BurstPlan {
-    /// Creates a new burst plan containing deterministic scheduling metadata.
+impl PressureSpawnRecord {
+    /// Creates a new spawn record describing an individual bug spawn.
     #[must_use]
-    pub const fn new(
-        species: SpeciesId,
-        patch: SpawnPatchId,
-        count: NonZeroU32,
-        cadence_ms: NonZeroU32,
-        start_ms: u32,
-    ) -> Self {
-        Self {
-            species,
-            patch,
-            count,
-            cadence_ms,
-            start_ms,
-        }
+    pub fn new(_time_ms: u32, _hp: u32, _speed_mult: f32, _species_id: u32) -> Self {
+        todo!("pressure v2 spawn record not implemented");
     }
 
-    /// Returns the identifier of the species spawned by this burst.
+    /// Reports the scheduled spawn time in milliseconds from wave start.
     #[must_use]
-    pub const fn species(&self) -> SpeciesId {
-        self.species
+    pub fn time_ms(&self) -> u32 {
+        self.time_ms
     }
 
-    /// Returns the identifier of the patch that emits this burst.
+    /// Reports the resolved hit points for the spawn.
     #[must_use]
-    pub const fn patch(&self) -> SpawnPatchId {
-        self.patch
+    pub fn hp(&self) -> u32 {
+        self.hp
     }
 
-    /// Returns the number of units emitted by the burst.
+    /// Reports the resolved speed multiplier for the spawn.
     #[must_use]
-    pub const fn count(&self) -> NonZeroU32 {
-        self.count
+    pub fn speed_mult(&self) -> f32 {
+        self.speed_mult
     }
 
-    /// Returns the cadence in milliseconds between successive spawns.
+    /// Reports the generated species identifier for the spawn.
     #[must_use]
-    pub const fn cadence_ms(&self) -> NonZeroU32 {
-        self.cadence_ms
+    pub fn species_id(&self) -> u32 {
+        self.species_id
+    }
+}
+
+/// Canonical spawn list returned by the pressure v2 generator.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PressureWavePlan {
+    spawns: Vec<PressureSpawnRecord>,
+}
+
+impl PressureWavePlan {
+    /// Creates a new spawn list populated with generator output.
+    #[must_use]
+    pub fn new(_spawns: Vec<PressureSpawnRecord>) -> Self {
+        todo!("pressure v2 wave plan not implemented");
     }
 
-    /// Returns the start offset in milliseconds relative to the wave start.
+    /// Returns the captured spawn descriptors in deterministic order.
     #[must_use]
-    pub const fn start_ms(&self) -> u32 {
-        self.start_ms
+    pub fn spawns(&self) -> &[PressureSpawnRecord] {
+        &self.spawns
     }
 }
 
@@ -899,33 +920,29 @@ pub enum Command {
         /// Outcome that should be applied to the world state.
         outcome: RoundOutcome,
     },
-    /// Requests generation of a deterministic attack plan for the provided wave.
-    GenerateAttackPlan {
-        /// Identifier of the wave awaiting plan generation.
-        wave: WaveId,
-        /// Difficulty selection used to resolve the plan parameters.
-        difficulty: WaveDifficulty,
+    /// Requests generation of a deterministic pressure v2 wave for the provided inputs.
+    GeneratePressureWave {
+        /// Inputs describing the requested wave.
+        inputs: PressureWaveInputs,
     },
-    /// Caches a generated attack plan inside the world for later reuse.
-    CacheAttackPlan {
-        /// Identifier of the wave associated with the cached plan.
-        wave: WaveId,
-        /// Difficulty that produced the cached plan.
-        difficulty: WaveDifficulty,
-        /// Canonical plan describing the wave contents.
-        plan: AttackPlan,
+    /// Caches a generated pressure v2 wave inside the world for later reuse.
+    CachePressureWave {
+        /// Inputs used to generate the cached wave.
+        inputs: PressureWaveInputs,
+        /// Canonical spawn list describing the wave contents.
+        plan: PressureWavePlan,
     },
     /// Requests that the next wave launch at the provided difficulty.
     StartWave {
         /// Identifier of the wave to launch.
         wave: WaveId,
-        /// Difficulty tier selection used for the wave launch.
+        /// Difficulty level selection used for the wave launch.
         difficulty: WaveDifficulty,
     },
 }
 
 /// Events broadcast by the world after processing commands.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Event {
     /// Indicates that the simulation clock advanced.
     TimeAdvanced {
@@ -975,12 +992,12 @@ pub enum Event {
         /// Canonical pressure sampling configuration now active.
         pressure: PressureConfig,
     },
-    /// Reports that a deterministic attack plan has been generated.
-    AttackPlanReady {
-        /// Identifier of the wave for which the plan was generated.
-        wave: WaveId,
-        /// Canonical plan describing the wave contents.
-        plan: AttackPlan,
+    /// Reports that a deterministic pressure v2 wave has been generated.
+    PressureWaveReady {
+        /// Inputs describing the generated wave.
+        inputs: PressureWaveInputs,
+        /// Canonical spawn list describing the wave contents.
+        plan: PressureWavePlan,
     },
     /// Announces that a wave launched with resolved parameters.
     WaveStarted {
@@ -988,8 +1005,8 @@ pub enum Event {
         wave: WaveId,
         /// Difficulty selection applied to the launch.
         difficulty: WaveDifficulty,
-        /// Effective tier applied for this wave, including Hard escalations.
-        tier_effective: u32,
+        /// Effective difficulty applied for this wave, including Hard escalations.
+        effective_difficulty: u32,
         /// Multiplier applied to gold rewards while the wave is active.
         reward_multiplier: u32,
         /// Scalar applied to pressure calculations for the wave contents.
@@ -1001,19 +1018,19 @@ pub enum Event {
         /// Total number of bursts scheduled by the cached plan.
         plan_burst_count: u32,
     },
-    /// Reports that a Hard wave victory granted a permanent tier promotion.
+    /// Reports that a Hard wave victory granted a permanent difficulty promotion.
     HardWinAchieved {
         /// Identifier of the wave cleared on Hard difficulty.
         wave: WaveId,
-        /// Difficulty tier before applying the Hard victory promotion.
-        previous_tier: u32,
-        /// Difficulty tier after applying the Hard victory promotion.
-        new_tier: u32,
+        /// Difficulty level before applying the Hard victory promotion.
+        previous_level: u32,
+        /// Difficulty level after applying the Hard victory promotion.
+        new_level: u32,
     },
-    /// Reports that the experience's difficulty tier changed.
-    DifficultyTierChanged {
-        /// Difficulty tier active after the adjustment.
-        tier: u32,
+    /// Reports that the experience's difficulty level changed.
+    DifficultyLevelChanged {
+        /// Difficulty level active after the adjustment.
+        level: u32,
     },
     /// Confirms that a bug was created by a spawner.
     BugSpawned {
@@ -1298,17 +1315,17 @@ impl WaveId {
 pub struct WaveSeedContext {
     global_seed: u64,
     wave: WaveId,
-    difficulty_tier: u32,
+    difficulty_level: u32,
 }
 
 impl WaveSeedContext {
     /// Creates a new seed context for the provided wave.
     #[must_use]
-    pub const fn new(global_seed: u64, wave: WaveId, difficulty_tier: u32) -> Self {
+    pub const fn new(global_seed: u64, wave: WaveId, difficulty_level: u32) -> Self {
         Self {
             global_seed,
             wave,
-            difficulty_tier,
+            difficulty_level,
         }
     }
 
@@ -1324,10 +1341,10 @@ impl WaveSeedContext {
         self.wave
     }
 
-    /// Returns the difficulty tier active when the context was recorded.
+    /// Returns the difficulty level active when the context was recorded.
     #[must_use]
-    pub const fn difficulty_tier(&self) -> u32 {
-        self.difficulty_tier
+    pub const fn difficulty_level(&self) -> u32 {
+        self.difficulty_level
     }
 }
 

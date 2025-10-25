@@ -15,7 +15,7 @@ maze-defence-system-movement = { path = "../../systems/movement" }
 maze-defence-system-spawning = { path = "../../systems/spawning" }
 maze-defence-system-tower-combat = { path = "../../systems/tower_combat" }
 maze-defence-system-tower-targeting = { path = "../../systems/tower_targeting" }
-maze-defence-system-wave-generation = { path = "../../systems/wave_generation" }
+maze-defence-pressure-v2 = { path = "../../systems/pressure_v2" }
 maze-defence-world = { path = "../../world", features = ["tower_scaffolding"] }
 maze-defence-rendering = { path = "../rendering" }
 maze-defence-rendering-macroquad = { path = "../rendering_macroquad" }

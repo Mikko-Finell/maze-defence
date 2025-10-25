@@ -1,0 +1,7 @@
+[package]
+name = "maze-defence-pressure-v2"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+maze-defence-core = { path = "../../core" }

@@ -10,7 +10,9 @@ use macroquad::{
     ui::{hash, Ui},
 };
 use maze_defence_core::{PlayMode, WaveDifficulty};
-use maze_defence_rendering::{DifficultySelectionPresentation, GoldPresentation, TierPresentation};
+use maze_defence_rendering::{
+    DifficultyPresentation, DifficultySelectionPresentation, GoldPresentation,
+};
 
 /// Snapshot of the control panel's UI layout and data for the current frame.
 #[derive(Clone, Copy, Debug)]
@@ -26,8 +28,8 @@ pub(crate) struct ControlPanelUiContext {
     pub play_mode: PlayMode,
     /// Presentable gold amount exposed by the simulation.
     pub gold: Option<GoldPresentation>,
-    /// Presentable difficulty tier exposed by the simulation.
-    pub tier: Option<TierPresentation>,
+    /// Presentable difficulty level exposed by the simulation.
+    pub difficulty: Option<DifficultyPresentation>,
     /// Presentation data for the difficulty selection buttons.
     pub difficulty_selection: Option<DifficultySelectionPresentation>,
 }
@@ -97,11 +99,11 @@ pub(crate) fn draw_control_panel_ui(
 
     let mut result = ControlPanelUiResult::default();
     let _ = ui.window(hash!("control_panel"), context.origin, context.size, |ui| {
-        let tier_text = match context.tier {
-            Some(tier) => format!("Tier: {}", tier.tier()),
-            None => "Tier: –".to_string(),
+        let difficulty_text = match context.difficulty {
+            Some(level) => format!("Difficulty: {}", level.level()),
+            None => "Difficulty: –".to_string(),
         };
-        ui.label(None, tier_text.as_str());
+        ui.label(None, difficulty_text.as_str());
 
         let gold_text = match context.gold {
             Some(gold) => format!("Gold: {}", gold.amount().get()),
@@ -133,14 +135,14 @@ pub(crate) fn draw_control_panel_ui(
             }
 
             normal_preview = Some(format!(
-                "Normal rewards: x{} gold (Tier {})",
+                "Normal rewards: x{} gold (Difficulty {})",
                 normal.reward_multiplier(),
-                normal.effective_tier()
+                normal.effective_level()
             ));
             hard_preview = Some(format!(
-                "Hard rewards: x{} gold (Tier {})",
+                "Hard rewards: x{} gold (Difficulty {})",
                 hard.reward_multiplier(),
-                hard.effective_tier()
+                hard.effective_level()
             ));
         }
 
@@ -158,7 +160,7 @@ pub(crate) fn draw_control_panel_ui(
             label_wrapped(ui, text.as_str(), max_label_width);
             label_wrapped(
                 ui,
-                "Hard victory grants +1 permanent tier.",
+                "Hard victory grants +1 permanent difficulty.",
                 max_label_width,
             );
         }
