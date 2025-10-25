@@ -25,10 +25,11 @@ use clap::{Parser, ValueEnum};
 use glam::Vec2;
 use layout_transfer::{TowerLayoutSnapshot, TowerLayoutTower};
 use maze_defence_core::{
-    AttackBugDescriptor, AttackBurst, AttackPlan, BugColor, BugId, BugView, CellCoord,
-    CellPointHalf, CellRect, CellRectSize, Command, Event, Gold, Health, PendingWaveDifficulty,
-    PlacementError, PlayMode, ProjectileSnapshot, RemovalError, RoundOutcome, TileCoord,
-    TowerCooldownView, TowerId, TowerKind, TowerTarget, WaveDifficulty,
+    AttackPlan, BugColor, BugId, BugView, BurstPlan, CellCoord, CellPointHalf, CellRect,
+    CellRectSize, Command, Event, Gold, Health, PendingWaveDifficulty, PlacementError, PlayMode,
+    Pressure, ProjectileSnapshot, RemovalError, RoundOutcome, SpawnPatchId, SpeciesId,
+    SpeciesPrototype, SpeciesTableVersion, TileCoord, TowerCooldownView, TowerId, TowerKind,
+    TowerTarget, WaveDifficulty,
 };
 use maze_defence_rendering::{
     visuals, BugHealthPresentation, BugPresentation, BugVisual, Color, ControlPanelView,
@@ -62,7 +63,10 @@ const GROUND_TILE_MULTIPLIER: f32 = 4.0;
 const BASIC_WAVE_BUGS: u32 = 4;
 const BASIC_WAVE_CADENCE_MS: u32 = 600;
 const BASIC_WAVE_START_DELAY_MS: u32 = 0;
-const BASIC_WAVE_PRESSURE: u32 = BASIC_WAVE_BUGS;
+const BASIC_SPECIES_ID: SpeciesId = SpeciesId::new(0);
+const BASIC_PATCH_ID: SpawnPatchId = SpawnPatchId::new(0);
+const BASIC_SPECIES_TABLE_VERSION: SpeciesTableVersion = SpeciesTableVersion::new(1);
+const BASIC_WAVE_PRESSURE: Pressure = Pressure::new(BASIC_WAVE_BUGS);
 const BASIC_WAVE_COLOR: BugColor = BugColor::from_rgb(0x2f, 0x95, 0x32);
 const BASIC_WAVE_HEALTH: Health = Health::new(3);
 
@@ -422,6 +426,9 @@ struct Simulation {
     bug_motions: HashMap<BugId, BugMotion>,
     bug_headings: HashMap<BugId, f32>,
     cells_per_tile: u32,
+    species_table_version: SpeciesTableVersion,
+    species_prototypes: HashMap<SpeciesId, SpeciesPrototype>,
+    patch_origins: HashMap<SpawnPatchId, CellCoord>,
     visual_style: VisualStyle,
     last_advance_profile: AdvanceProfile,
     last_announced_play_mode: PlayMode,
@@ -543,12 +550,26 @@ impl BugMotion {
 struct ScheduledSpawn {
     at: Duration,
     spawner: CellCoord,
-    bug: AttackBugDescriptor,
+    color: BugColor,
+    health: Health,
+    step_ms: NonZeroU32,
 }
 
 impl ScheduledSpawn {
-    fn new(at: Duration, spawner: CellCoord, bug: AttackBugDescriptor) -> Self {
-        Self { at, spawner, bug }
+    fn new(
+        at: Duration,
+        spawner: CellCoord,
+        color: BugColor,
+        health: Health,
+        step_ms: NonZeroU32,
+    ) -> Self {
+        Self {
+            at,
+            spawner,
+            color,
+            health,
+            step_ms,
+        }
     }
 }
 
@@ -562,17 +583,30 @@ struct WaveState {
 }
 
 impl WaveState {
-    fn new(plan: AttackPlan) -> Self {
+    fn new(
+        plan: AttackPlan,
+        species: &HashMap<SpeciesId, SpeciesPrototype>,
+        patches: &HashMap<SpawnPatchId, CellCoord>,
+    ) -> Self {
         let mut scheduled = Vec::new();
         for burst in plan.bursts() {
+            let (Some(prototype), Some(spawner)) =
+                (species.get(&burst.species()), patches.get(&burst.patch()))
+            else {
+                debug_assert!(species.contains_key(&burst.species()));
+                debug_assert!(patches.contains_key(&burst.patch()));
+                continue;
+            };
             let start_ms = u64::from(burst.start_ms());
             let cadence_ms = u64::from(burst.cadence_ms().get());
             for index in 0..burst.count().get() {
                 let offset_ms = start_ms.saturating_add(cadence_ms.saturating_mul(index as u64));
                 scheduled.push(ScheduledSpawn::new(
                     Duration::from_millis(offset_ms),
-                    burst.spawner(),
-                    burst.bug(),
+                    *spawner,
+                    prototype.color(),
+                    prototype.health(),
+                    prototype.step_ms(),
                 ));
             }
         }
@@ -597,9 +631,9 @@ impl WaveState {
             }
             out.push(Command::SpawnBug {
                 spawner: spawn.spawner,
-                color: spawn.bug.color(),
-                health: spawn.bug.health(),
-                step_ms: spawn.bug.step_ms(),
+                color: spawn.color,
+                health: spawn.health,
+                step_ms: spawn.step_ms.get(),
             });
             self.next_spawn += 1;
         }
@@ -652,6 +686,14 @@ impl Simulation {
         let gold = query::gold(&world);
         let difficulty_tier = query::difficulty_tier(&world);
         let pending_wave_difficulty = query::pending_wave_difficulty(&world);
+        let step_ms_value = duration_to_u32_millis(bug_step).max(1);
+        let step_ms_nonzero =
+            NonZeroU32::new(step_ms_value).expect("bug step duration must be non-zero");
+        let mut species_prototypes = HashMap::new();
+        let _ = species_prototypes.insert(
+            BASIC_SPECIES_ID,
+            SpeciesPrototype::new(BASIC_WAVE_COLOR, BASIC_WAVE_HEALTH, step_ms_nonzero),
+        );
         let mut simulation = Self {
             world,
             builder: TowerBuilder::default(),
@@ -681,6 +723,9 @@ impl Simulation {
             bug_motions: HashMap::new(),
             bug_headings: HashMap::new(),
             cells_per_tile,
+            species_table_version: BASIC_SPECIES_TABLE_VERSION,
+            species_prototypes,
+            patch_origins: HashMap::new(),
             visual_style,
             last_advance_profile: AdvanceProfile::default(),
             last_announced_play_mode: initial_play_mode,
@@ -756,7 +801,11 @@ impl Simulation {
             });
         }
 
-        self.active_wave = Some(WaveState::new(plan));
+        self.active_wave = Some(WaveState::new(
+            plan,
+            &self.species_prototypes,
+            &self.patch_origins,
+        ));
         self.awaiting_round_resolution = true;
     }
 
@@ -777,7 +826,7 @@ impl Simulation {
         true
     }
 
-    fn basic_attack_plan(&self, spawner: CellCoord, difficulty: WaveDifficulty) -> AttackPlan {
+    fn basic_attack_plan(&mut self, spawner: CellCoord, difficulty: WaveDifficulty) -> AttackPlan {
         let tier_effective = match difficulty {
             WaveDifficulty::Normal => self.difficulty_tier,
             WaveDifficulty::Hard => self.difficulty_tier.saturating_add(1),
@@ -785,19 +834,21 @@ impl Simulation {
         let pressure_multiplier = tier_effective.saturating_add(1);
         let bug_count = BASIC_WAVE_BUGS.saturating_mul(pressure_multiplier);
         let Some(count) = NonZeroU32::new(bug_count) else {
-            return AttackPlan::new(0, Vec::new());
+            return AttackPlan::empty(self.species_table_version);
         };
         let Some(cadence) = NonZeroU32::new(BASIC_WAVE_CADENCE_MS) else {
-            return AttackPlan::new(0, Vec::new());
+            return AttackPlan::empty(self.species_table_version);
         };
-        let bug = AttackBugDescriptor::new(
-            BASIC_WAVE_COLOR,
-            BASIC_WAVE_HEALTH,
-            duration_to_u32_millis(self.bug_step_duration),
-        );
-        let burst = AttackBurst::new(spawner, bug, count, cadence, BASIC_WAVE_START_DELAY_MS);
+        let _ = self.patch_origins.insert(BASIC_PATCH_ID, spawner);
         let pressure = BASIC_WAVE_PRESSURE.saturating_mul(pressure_multiplier);
-        AttackPlan::new(pressure, vec![burst])
+        let burst = BurstPlan::new(
+            BASIC_SPECIES_ID,
+            BASIC_PATCH_ID,
+            count,
+            cadence,
+            BASIC_WAVE_START_DELAY_MS,
+        );
+        AttackPlan::new(pressure, self.species_table_version, vec![burst])
     }
 
     fn capture_layout_snapshot(&self) -> TowerLayoutSnapshot {
@@ -964,6 +1015,13 @@ impl Simulation {
                 self.bug_step_duration = step_duration;
                 self.bug_motions.clear();
                 self.spawning.set_step_duration(step_duration);
+                let step_ms_value = duration_to_u32_millis(step_duration).max(1);
+                let step_ms_nonzero =
+                    NonZeroU32::new(step_ms_value).expect("bug step duration must be non-zero");
+                let _ = self.species_prototypes.insert(
+                    BASIC_SPECIES_ID,
+                    SpeciesPrototype::new(BASIC_WAVE_COLOR, BASIC_WAVE_HEALTH, step_ms_nonzero),
+                );
                 world::apply(
                     &mut self.world,
                     Command::ConfigureBugStep { step_duration },
@@ -2422,8 +2480,12 @@ mod tests {
         assert_eq!(burst.count().get(), BASIC_WAVE_BUGS);
         assert_eq!(burst.cadence_ms().get(), BASIC_WAVE_CADENCE_MS);
         assert_eq!(burst.start_ms(), BASIC_WAVE_START_DELAY_MS);
-        assert_eq!(burst.bug().color(), BASIC_WAVE_COLOR);
-        assert_eq!(burst.bug().health(), BASIC_WAVE_HEALTH);
+        let prototype = simulation
+            .species_prototypes
+            .get(&burst.species())
+            .expect("expected species prototype");
+        assert_eq!(prototype.color(), BASIC_WAVE_COLOR);
+        assert_eq!(prototype.health(), BASIC_WAVE_HEALTH);
     }
 
     #[test]
@@ -2500,7 +2562,11 @@ mod tests {
             .next()
             .expect("expected at least one bug spawner");
         let plan = simulation.basic_attack_plan(spawner, WaveDifficulty::Normal);
-        simulation.active_wave = Some(WaveState::new(plan));
+        simulation.active_wave = Some(WaveState::new(
+            plan,
+            &simulation.species_prototypes,
+            &simulation.patch_origins,
+        ));
         assert!(simulation.active_wave.is_some(), "wave should be active");
 
         simulation

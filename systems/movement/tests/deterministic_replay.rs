@@ -22,22 +22,22 @@ fn deterministic_replay_produces_expected_snapshot() {
 
 #[test]
 fn dense_corridor_replay_is_stable() {
-    assert_stable_replay(dense_corridor_commands(), 0xb708_6dc3_a37d_3068);
+    assert_stable_replay(dense_corridor_commands(), 0x9c1b_665d_9beb_a17c);
 }
 
 #[test]
 fn side_hallway_diversion_replay_is_stable() {
-    assert_stable_replay(side_hallway_diversion_commands(), 0x0e7e_9c28_446e_a814);
+    assert_stable_replay(side_hallway_diversion_commands(), 0x638a_d258_8845_8734);
 }
 
 #[test]
 fn stall_regression_replay_is_stable() {
-    assert_stable_replay(stall_regression_commands(), 0x2670_e9e6_1ac7_e6c5);
+    assert_stable_replay(stall_regression_commands(), 0xb321_4304_bb00_dae1);
 }
 
 #[test]
 fn mixed_cadence_replay_is_stable() {
-    assert_stable_replay(mixed_cadence_commands(), 0x59ea_e98d_7707_62f6);
+    assert_stable_replay(mixed_cadence_commands(), 0xb5cc_35b3_ad40_e436);
 }
 
 fn assert_stable_replay(commands: Vec<Command>, expected: u64) {
@@ -523,6 +523,11 @@ enum EventRecord {
     PendingWaveDifficultyChanged {
         pending: PendingWaveDifficulty,
     },
+    AttackPlanReady {
+        wave: WaveId,
+        pressure: u32,
+        bursts: usize,
+    },
     WaveStarted {
         wave: WaveId,
         difficulty: WaveDifficulty,
@@ -573,6 +578,11 @@ impl From<&Event> for EventRecord {
             Event::PendingWaveDifficultyChanged { pending } => {
                 Self::PendingWaveDifficultyChanged { pending: *pending }
             }
+            Event::AttackPlanReady { wave, plan } => Self::AttackPlanReady {
+                wave: *wave,
+                pressure: plan.pressure().get(),
+                bursts: plan.bursts().len(),
+            },
             Event::WaveStarted {
                 wave,
                 difficulty,

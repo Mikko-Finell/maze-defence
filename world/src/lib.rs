@@ -724,6 +724,9 @@ pub fn apply(world: &mut World, command: Command, out_events: &mut Vec<Event>) {
             #[cfg(not(any(test, feature = "tower_scaffolding")))]
             let _ = tower;
         }
+        Command::GenerateAttackPlan { wave, difficulty } => {
+            let _ = (wave, difficulty);
+        }
         Command::StartWave { difficulty } => {
             world.launch_wave(difficulty, out_events);
         }
