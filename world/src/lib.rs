@@ -12,7 +12,7 @@
 mod navigation;
 
 use std::{
-    collections::{BTreeMap, BTreeSet, HashMap},
+    collections::{btree_map::Entry, BTreeMap, BTreeSet, HashMap},
     convert::TryFrom,
     time::Duration,
 };
@@ -27,13 +27,16 @@ mod towers;
 use towers::{footprint_for, TowerRegistry, TowerState};
 
 use maze_defence_core::{
-    BugColor, BugId, BurstGapRange, BurstSchedulingConfig, CadenceRange, CellCoord, CellPointHalf,
-    CellRect, CellRectSize, Command, Damage, Direction, DirichletWeight, Event, Gold, Health,
-    PendingWaveDifficulty, PlayMode, Pressure, PressureConfig, PressureCurve, PressureWeight,
-    ProjectileId, ReservationClaim, RoundOutcome, SpawnPatchDescriptor, SpawnPatchId,
-    SpeciesDefinition, SpeciesId, SpeciesPrototype, SpeciesTableVersion, Target, TargetCell,
-    TileCoord, TileGrid, WaveDifficulty, WaveId, WELCOME_BANNER,
+    AttackPlan, BugColor, BugId, BurstGapRange, BurstSchedulingConfig, CadenceRange, CellCoord,
+    CellPointHalf, CellRect, CellRectSize, Command, Damage, Direction, DirichletWeight, Event,
+    Gold, Health, PendingWaveDifficulty, PlayMode, Pressure, PressureConfig, PressureCurve,
+    PressureWeight, ProjectileId, ReservationClaim, RoundOutcome, SpawnPatchDescriptor,
+    SpawnPatchId, SpeciesDefinition, SpeciesId, SpeciesPrototype, SpeciesTableVersion, Target,
+    TargetCell, TileCoord, TileGrid, WaveDifficulty, WaveId, WELCOME_BANNER,
 };
+
+#[cfg(test)]
+use maze_defence_core::BurstPlan;
 
 #[cfg(any(test, feature = "tower_scaffolding"))]
 use maze_defence_core::ProjectileRejection;
@@ -94,6 +97,7 @@ pub struct World {
     spawn_patches: Vec<SpawnPatchDescriptor>,
     pressure_config: PressureConfig,
     wave_seed_global: u64,
+    attack_plans: BTreeMap<WaveId, StoredAttackPlan>,
     active_wave: Option<ActiveWaveContext>,
     next_wave_id: WaveId,
     #[cfg(any(test, feature = "tower_scaffolding"))]
@@ -118,6 +122,26 @@ struct ActiveWaveContext {
 impl ActiveWaveContext {
     fn reward_multiplier(&self) -> u32 {
         self.reward_multiplier
+    }
+}
+
+#[derive(Clone, Debug)]
+struct StoredAttackPlan {
+    difficulty: WaveDifficulty,
+    plan: AttackPlan,
+}
+
+impl StoredAttackPlan {
+    fn new(difficulty: WaveDifficulty, plan: AttackPlan) -> Self {
+        Self { difficulty, plan }
+    }
+
+    fn difficulty(&self) -> WaveDifficulty {
+        self.difficulty
+    }
+
+    fn plan(&self) -> &AttackPlan {
+        &self.plan
     }
 }
 
@@ -211,6 +235,7 @@ impl World {
             spawn_patches,
             pressure_config,
             wave_seed_global: DEFAULT_WAVE_GLOBAL_SEED,
+            attack_plans: BTreeMap::new(),
             active_wave: None,
             next_wave_id: WaveId::new(0),
             #[cfg(any(test, feature = "tower_scaffolding"))]
@@ -292,25 +317,65 @@ impl World {
         out_events.push(Event::PendingWaveDifficultyChanged { pending });
     }
 
-    fn launch_wave(&mut self, difficulty: WaveDifficulty, out_events: &mut Vec<Event>) {
+    fn cache_attack_plan(&mut self, wave: WaveId, difficulty: WaveDifficulty, plan: AttackPlan) {
+        match self.attack_plans.entry(wave) {
+            Entry::Occupied(entry) => {
+                let stored = entry.get();
+                debug_assert_eq!(stored.difficulty(), difficulty);
+                debug_assert_eq!(stored.plan(), &plan);
+            }
+            Entry::Vacant(entry) => {
+                let _ = entry.insert(StoredAttackPlan::new(difficulty, plan));
+            }
+        }
+    }
+
+    fn launch_wave(
+        &mut self,
+        wave: WaveId,
+        difficulty: WaveDifficulty,
+        out_events: &mut Vec<Event>,
+    ) {
         self.assign_pending_wave_difficulty(
             PendingWaveDifficulty::Selected(difficulty),
             out_events,
             false,
         );
-        let context = self.prepare_wave_context(difficulty);
+        let context = self.prepare_wave_context(wave, difficulty);
         self.active_wave = Some(context);
+        let plan_summary = self.attack_plans.get(&wave);
+        let (plan_pressure, plan_species_table_version, plan_burst_count) =
+            if let Some(stored) = plan_summary {
+                let plan = stored.plan();
+                let bursts = plan.bursts().len();
+                let burst_count = u32::try_from(bursts).unwrap_or(u32::MAX);
+                (plan.pressure(), plan.species_table_version(), burst_count)
+            } else {
+                (Pressure::new(0), self.species_table_version, 0)
+            };
         out_events.push(Event::WaveStarted {
             wave: context.id,
             difficulty: context.difficulty,
             tier_effective: context.tier_effective,
             reward_multiplier: context.reward_multiplier,
             pressure_scalar: context.pressure_scalar,
+            plan_pressure,
+            plan_species_table_version,
+            plan_burst_count,
         });
     }
 
-    fn prepare_wave_context(&mut self, difficulty: WaveDifficulty) -> ActiveWaveContext {
-        let wave = self.allocate_wave_identifier();
+    fn prepare_wave_context(
+        &mut self,
+        wave: WaveId,
+        difficulty: WaveDifficulty,
+    ) -> ActiveWaveContext {
+        let expected = self.next_wave_id;
+        debug_assert!(
+            wave.get() >= expected.get(),
+            "wave identifiers must be monotonic"
+        );
+        self.next_wave_id = WaveId::new(wave.get().saturating_add(1));
         let tier_effective = match difficulty {
             WaveDifficulty::Normal => self.difficulty_tier,
             WaveDifficulty::Hard => self.difficulty_tier.saturating_add(1),
@@ -324,13 +389,6 @@ impl World {
             reward_multiplier,
             pressure_scalar,
         }
-    }
-
-    fn allocate_wave_identifier(&mut self) -> WaveId {
-        let wave = self.next_wave_id;
-        let next = wave.get().saturating_add(1);
-        self.next_wave_id = WaveId::new(next);
-        wave
     }
 
     fn reward_multiplier(&self) -> u32 {
@@ -677,6 +735,7 @@ pub fn apply(world: &mut World, command: Command, out_events: &mut Vec<Event>) {
             world.spawn_patches = spawn_patches;
             world.pressure_config = pressure_config.clone();
             world.wave_seed_global = DEFAULT_WAVE_GLOBAL_SEED;
+            world.attack_plans.clear();
             world.mark_navigation_dirty();
             #[cfg(any(test, feature = "tower_scaffolding"))]
             {
@@ -807,8 +866,15 @@ pub fn apply(world: &mut World, command: Command, out_events: &mut Vec<Event>) {
         Command::GenerateAttackPlan { wave, difficulty } => {
             let _ = (wave, difficulty);
         }
-        Command::StartWave { difficulty } => {
-            world.launch_wave(difficulty, out_events);
+        Command::CacheAttackPlan {
+            wave,
+            difficulty,
+            plan,
+        } => {
+            world.cache_attack_plan(wave, difficulty, plan);
+        }
+        Command::StartWave { wave, difficulty } => {
+            world.launch_wave(wave, difficulty, out_events);
         }
         Command::ResolveRound { outcome } => {
             let active_wave = world.active_wave.take();
@@ -1321,9 +1387,10 @@ fn cell_rect_contains(region: CellRect, cell: CellCoord) -> bool {
 pub mod query {
     use super::{Bug, World};
     use maze_defence_core::{
-        BugSnapshot, BugView, CellCoord, Goal, Gold, NavigationFieldView, OccupancyView,
-        PendingWaveDifficulty, PlayMode, PressureConfig, ProjectileSnapshot, ReservationLedgerView,
-        SpawnPatchTableView, SpeciesTableView, Target, TileGrid, WaveSeedContext,
+        AttackPlan, BugSnapshot, BugView, CellCoord, Goal, Gold, NavigationFieldView,
+        OccupancyView, PendingWaveDifficulty, PlayMode, PressureConfig, ProjectileSnapshot,
+        ReservationLedgerView, SpawnPatchTableView, SpeciesTableView, Target, TileGrid, WaveId,
+        WaveSeedContext,
     };
 
     use maze_defence_core::structures::{Wall as CellWall, WallView as CellWallView};
@@ -1373,6 +1440,12 @@ pub mod query {
     #[must_use]
     pub fn pressure_config(world: &World) -> &PressureConfig {
         &world.pressure_config
+    }
+
+    /// Retrieves a cached attack plan for the provided wave identifier.
+    #[must_use]
+    pub fn attack_plan(world: &World, wave: WaveId) -> Option<&AttackPlan> {
+        world.attack_plans.get(&wave).map(|stored| stored.plan())
     }
 
     /// Captures the wave seed derivation context for the next generated wave.
@@ -2397,9 +2470,12 @@ mod tests {
         world.set_gold_for_tests(Gold::ZERO);
         world.difficulty_tier = 3;
 
+        let wave = query::wave_seed_context(&world).wave();
+
         apply(
             &mut world,
             Command::StartWave {
+                wave,
                 difficulty: WaveDifficulty::Hard,
             },
             &mut events,
@@ -2493,9 +2569,12 @@ mod tests {
 
         world.difficulty_tier = 2;
 
+        let wave = query::wave_seed_context(&world).wave();
+
         apply(
             &mut world,
             Command::StartWave {
+                wave,
                 difficulty: WaveDifficulty::Hard,
             },
             &mut events,
@@ -2545,9 +2624,12 @@ mod tests {
 
         world.difficulty_tier = u32::MAX;
 
+        let wave = query::wave_seed_context(&world).wave();
+
         apply(
             &mut world,
             Command::StartWave {
+                wave,
                 difficulty: WaveDifficulty::Hard,
             },
             &mut events,
@@ -2688,9 +2770,12 @@ mod tests {
         let mut world = World::new();
         let mut events = Vec::new();
 
+        let wave = query::wave_seed_context(&world).wave();
+
         apply(
             &mut world,
             Command::StartWave {
+                wave,
                 difficulty: WaveDifficulty::Hard,
             },
             &mut events,
@@ -2716,22 +2801,39 @@ mod tests {
                 tier_effective,
                 reward_multiplier,
                 pressure_scalar,
+                plan_pressure,
+                plan_species_table_version,
+                plan_burst_count,
             } => Some((
                 *wave,
                 *difficulty,
                 *tier_effective,
                 *reward_multiplier,
                 *pressure_scalar,
+                *plan_pressure,
+                *plan_species_table_version,
+                *plan_burst_count,
             )),
             _ => None,
         });
-        let (wave_id, difficulty, tier_effective, reward_multiplier, pressure_scalar) =
-            wave_started.expect("wave start event must be emitted");
+        let (
+            wave_id,
+            difficulty,
+            tier_effective,
+            reward_multiplier,
+            pressure_scalar,
+            plan_pressure,
+            plan_species_table_version,
+            plan_burst_count,
+        ) = wave_started.expect("wave start event must be emitted");
         assert_eq!(wave_id, WaveId::new(0));
         assert_eq!(difficulty, WaveDifficulty::Hard);
         assert_eq!(tier_effective, 1);
         assert_eq!(reward_multiplier, 2);
         assert_eq!(pressure_scalar, 2);
+        assert_eq!(plan_pressure, Pressure::new(0));
+        assert_eq!(plan_species_table_version, world.species_table_version);
+        assert_eq!(plan_burst_count, 0);
         let active_wave = world
             .active_wave
             .expect("launching a wave should record active context");
@@ -2741,13 +2843,98 @@ mod tests {
     }
 
     #[test]
-    fn configuring_tile_grid_resets_pending_wave_difficulty() {
+    fn cached_attack_plan_is_persisted_and_reflected_in_events() {
         let mut world = World::new();
         let mut events = Vec::new();
+
+        let wave = query::wave_seed_context(&world).wave();
+        let bursts = vec![BurstPlan::new(
+            SpeciesId::new(0),
+            SpawnPatchId::new(0),
+            NonZeroU32::new(3).expect("burst count"),
+            NonZeroU32::new(400).expect("cadence"),
+            250,
+        )];
+        let plan = AttackPlan::new(Pressure::new(1_500), world.species_table_version, bursts);
+
+        apply(
+            &mut world,
+            Command::CacheAttackPlan {
+                wave,
+                difficulty: WaveDifficulty::Normal,
+                plan: plan.clone(),
+            },
+            &mut events,
+        );
+
+        assert!(events.is_empty(), "caching a plan should not emit events");
+        let stored_plan = query::attack_plan(&world, wave).expect("plan should be cached");
+        assert_eq!(stored_plan, &plan);
 
         apply(
             &mut world,
             Command::StartWave {
+                wave,
+                difficulty: WaveDifficulty::Normal,
+            },
+            &mut events,
+        );
+
+        let wave_started = events.iter().find_map(|event| match event {
+            Event::WaveStarted {
+                wave,
+                difficulty,
+                tier_effective,
+                reward_multiplier,
+                pressure_scalar,
+                plan_pressure,
+                plan_species_table_version,
+                plan_burst_count,
+            } => Some((
+                *wave,
+                *difficulty,
+                *tier_effective,
+                *reward_multiplier,
+                *pressure_scalar,
+                *plan_pressure,
+                *plan_species_table_version,
+                *plan_burst_count,
+            )),
+            _ => None,
+        });
+
+        let (
+            wave_id,
+            difficulty,
+            tier_effective,
+            reward_multiplier,
+            pressure_scalar,
+            plan_pressure,
+            plan_species_table_version,
+            plan_burst_count,
+        ) = wave_started.expect("wave start event must be emitted");
+
+        assert_eq!(wave_id, wave);
+        assert_eq!(difficulty, WaveDifficulty::Normal);
+        assert_eq!(tier_effective, 0);
+        assert_eq!(reward_multiplier, 1);
+        assert_eq!(pressure_scalar, 1);
+        assert_eq!(plan_pressure, plan.pressure());
+        assert_eq!(plan_species_table_version, plan.species_table_version());
+        assert_eq!(plan_burst_count, 1);
+    }
+
+    #[test]
+    fn configuring_tile_grid_resets_pending_wave_difficulty() {
+        let mut world = World::new();
+        let mut events = Vec::new();
+
+        let wave = query::wave_seed_context(&world).wave();
+
+        apply(
+            &mut world,
+            Command::StartWave {
+                wave,
                 difficulty: WaveDifficulty::Normal,
             },
             &mut events,

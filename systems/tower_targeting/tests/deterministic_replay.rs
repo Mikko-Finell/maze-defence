@@ -306,6 +306,9 @@ enum EventRecord {
         tier_effective: u32,
         reward_multiplier: u32,
         pressure_scalar: u32,
+        plan_pressure: u32,
+        plan_species_table_version: u32,
+        plan_burst_count: u32,
     },
 }
 
@@ -349,12 +352,18 @@ impl From<Event> for EventRecord {
                 tier_effective,
                 reward_multiplier,
                 pressure_scalar,
+                plan_pressure,
+                plan_species_table_version,
+                plan_burst_count,
             } => Self::WaveStarted {
                 wave,
                 difficulty,
                 tier_effective,
                 reward_multiplier,
                 pressure_scalar,
+                plan_pressure: plan_pressure.get(),
+                plan_species_table_version: plan_species_table_version.get(),
+                plan_burst_count,
             },
             other => panic!("unexpected event during targeting replay: {other:?}"),
         }

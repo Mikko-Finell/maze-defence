@@ -884,7 +884,10 @@ impl Simulation {
         }
     }
 
-    fn record_attack_plan_events(&mut self, events: &[Event]) -> Vec<(WaveDifficulty, AttackPlan)> {
+    fn record_attack_plan_events(
+        &mut self,
+        events: &[Event],
+    ) -> Vec<(WaveId, WaveDifficulty, AttackPlan)> {
         let mut launches = Vec::new();
         for event in events {
             if let Event::AttackPlanReady { wave, plan } = event {
@@ -894,7 +897,7 @@ impl Simulation {
                     if let Some(pending) = self.pending_wave_launch {
                         if pending.wave == *wave && pending.difficulty == difficulty {
                             if let Some(plan_ready) = self.take_plan_preview(*wave, difficulty) {
-                                launches.push((difficulty, plan_ready));
+                                launches.push((*wave, difficulty, plan_ready));
                             }
                         }
                     }
@@ -904,10 +907,10 @@ impl Simulation {
         launches
     }
 
-    fn take_ready_wave_launch(&mut self) -> Option<(WaveDifficulty, AttackPlan)> {
+    fn take_ready_wave_launch(&mut self) -> Option<(WaveId, WaveDifficulty, AttackPlan)> {
         let pending = self.pending_wave_launch?;
         if let Some(plan) = self.take_plan_preview(pending.wave, pending.difficulty) {
-            Some((pending.difficulty, plan))
+            Some((pending.wave, pending.difficulty, plan))
         } else {
             None
         }
@@ -915,6 +918,7 @@ impl Simulation {
 
     fn activate_wave(
         &mut self,
+        wave: WaveId,
         difficulty: WaveDifficulty,
         plan: AttackPlan,
         emitted_events: &mut Vec<Event>,
@@ -931,6 +935,16 @@ impl Simulation {
             next_events.append(emitted_events);
         }
 
+        self.apply_command(
+            Command::CacheAttackPlan {
+                wave,
+                difficulty,
+                plan: plan.clone(),
+            },
+            emitted_events,
+        );
+        next_events.append(emitted_events);
+
         if plan.is_empty() {
             self.active_wave = None;
             self.awaiting_round_resolution = true;
@@ -943,7 +957,7 @@ impl Simulation {
             self.awaiting_round_resolution = true;
         }
 
-        self.apply_command(Command::StartWave { difficulty }, emitted_events);
+        self.apply_command(Command::StartWave { wave, difficulty }, emitted_events);
         next_events.append(emitted_events);
     }
 
@@ -1435,8 +1449,14 @@ impl Simulation {
             self.update_pending_wave_difficulty_from_events(&events);
             self.update_pressure_configuration_from_events(&events);
 
-            for (difficulty, plan) in launches {
-                self.activate_wave(difficulty, plan, &mut emitted_events, &mut next_events);
+            for (wave, difficulty, plan) in launches {
+                self.activate_wave(
+                    wave,
+                    difficulty,
+                    plan,
+                    &mut emitted_events,
+                    &mut next_events,
+                );
             }
 
             if events
