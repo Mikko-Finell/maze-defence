@@ -27,9 +27,12 @@ mod towers;
 use towers::{footprint_for, TowerRegistry, TowerState};
 
 use maze_defence_core::{
-    BugColor, BugId, CellCoord, CellPointHalf, Command, Damage, Direction, Event, Gold, Health,
-    PendingWaveDifficulty, PlayMode, ProjectileId, ReservationClaim, RoundOutcome, Target,
-    TargetCell, TileCoord, TileGrid, WaveDifficulty, WaveId, WELCOME_BANNER,
+    BugColor, BugId, BurstGapRange, BurstSchedulingConfig, CadenceRange, CellCoord, CellPointHalf,
+    CellRect, CellRectSize, Command, Damage, Direction, DirichletWeight, Event, Gold, Health,
+    PendingWaveDifficulty, PlayMode, Pressure, PressureConfig, PressureCurve, PressureWeight,
+    ProjectileId, ReservationClaim, RoundOutcome, SpawnPatchDescriptor, SpawnPatchId,
+    SpeciesDefinition, SpeciesId, SpeciesPrototype, SpeciesTableVersion, Target, TargetCell,
+    TileCoord, TileGrid, WaveDifficulty, WaveId, WELCOME_BANNER,
 };
 
 #[cfg(any(test, feature = "tower_scaffolding"))]
@@ -40,9 +43,11 @@ use maze_defence_core::structures::Wall as CellWall;
 use navigation::NavigationField;
 
 #[cfg(any(test, feature = "tower_scaffolding"))]
-use maze_defence_core::{CellRect, PlacementError, RemovalError, TowerKind};
+use maze_defence_core::{PlacementError, RemovalError, TowerKind};
 
 use maze_defence_core::TowerId;
+
+use std::num::NonZeroU32;
 
 const DEFAULT_GRID_COLUMNS: TileCoord = TileCoord::new(10);
 const DEFAULT_GRID_ROWS: TileCoord = TileCoord::new(10);
@@ -60,6 +65,7 @@ const HARD_WIN_TIER_PROMOTION: u32 = 1;
 const ROUND_LOSS_TIER_PENALTY: u32 = 1;
 #[cfg(any(test, feature = "tower_scaffolding"))]
 const ROUND_LOSS_TOWER_REMOVAL_PERCENT: u32 = 50;
+const DEFAULT_WAVE_GLOBAL_SEED: u64 = 0;
 
 /// Represents the authoritative Maze Defence world state.
 #[derive(Debug)]
@@ -83,6 +89,11 @@ pub struct World {
     gold: Gold,
     difficulty_tier: u32,
     pending_wave_difficulty: PendingWaveDifficulty,
+    species_table_version: SpeciesTableVersion,
+    species_definitions: Vec<SpeciesDefinition>,
+    spawn_patches: Vec<SpawnPatchDescriptor>,
+    pressure_config: PressureConfig,
+    wave_seed_global: u64,
     active_wave: Option<ActiveWaveContext>,
     next_wave_id: WaveId,
     #[cfg(any(test, feature = "tower_scaffolding"))]
@@ -110,6 +121,55 @@ impl ActiveWaveContext {
     }
 }
 
+fn default_species_table() -> (SpeciesTableVersion, Vec<SpeciesDefinition>) {
+    let version = SpeciesTableVersion::new(1);
+    let mut definitions = vec![SpeciesDefinition::new(
+        SpeciesId::new(0),
+        SpawnPatchId::new(0),
+        SpeciesPrototype::new(
+            BugColor::from_rgb(0x5a, 0xb4, 0xff),
+            Health::new(5),
+            NonZeroU32::new(400).expect("non-zero cadence"),
+        ),
+        PressureWeight::new(NonZeroU32::new(1_500).expect("non-zero weight")),
+        DirichletWeight::new(NonZeroU32::new(2).expect("non-zero concentration")),
+        0,
+        NonZeroU32::new(10_000).expect("non-zero population cap"),
+        CadenceRange::new(
+            NonZeroU32::new(300).expect("non-zero cadence min"),
+            NonZeroU32::new(600).expect("non-zero cadence max"),
+        ),
+        BurstGapRange::new(
+            NonZeroU32::new(2_000).expect("non-zero gap min"),
+            NonZeroU32::new(8_000).expect("non-zero gap max"),
+        ),
+    )];
+    definitions.sort_by_key(|definition| definition.id());
+    (version, definitions)
+}
+
+fn default_spawn_patches() -> Vec<SpawnPatchDescriptor> {
+    let mut patches = vec![SpawnPatchDescriptor::new(
+        SpawnPatchId::new(0),
+        CellCoord::new(0, 0),
+        CellRect::from_origin_and_size(CellCoord::new(0, 0), CellRectSize::new(1, 1)),
+    )];
+    patches.sort_by_key(|descriptor| descriptor.id());
+    patches
+}
+
+fn default_pressure_config() -> PressureConfig {
+    PressureConfig::new(
+        PressureCurve::new(Pressure::new(1_200), Pressure::new(250)),
+        DirichletWeight::new(NonZeroU32::new(2).expect("non-zero concentration")),
+        BurstSchedulingConfig::new(
+            NonZeroU32::new(20).expect("non-zero burst size"),
+            NonZeroU32::new(8).expect("non-zero burst limit"),
+        ),
+        NonZeroU32::new(2_000).expect("non-zero spawn cap"),
+    )
+}
+
 impl World {
     /// Creates a new Maze Defence world ready for simulation.
     #[must_use]
@@ -126,6 +186,9 @@ impl World {
             total_rows,
             build_cell_walls(tile_grid.columns(), tile_grid.rows(), cells_per_tile),
         );
+        let (species_table_version, species_definitions) = default_species_table();
+        let spawn_patches = default_spawn_patches();
+        let pressure_config = default_pressure_config();
         #[cfg(any(test, feature = "tower_scaffolding"))]
         let tower_occupancy = BitGrid::new(total_columns, total_rows);
         let mut world = Self {
@@ -143,6 +206,11 @@ impl World {
             gold: INITIAL_GOLD,
             difficulty_tier: 0,
             pending_wave_difficulty: PendingWaveDifficulty::Unset,
+            species_table_version,
+            species_definitions,
+            spawn_patches,
+            pressure_config,
+            wave_seed_global: DEFAULT_WAVE_GLOBAL_SEED,
             active_wave: None,
             next_wave_id: WaveId::new(0),
             #[cfg(any(test, feature = "tower_scaffolding"))]
@@ -601,6 +669,14 @@ pub fn apply(world: &mut World, command: Command, out_events: &mut Vec<Event>) {
                 total_rows,
                 build_cell_walls(columns, rows, normalized_cells),
             );
+            let (species_table_version, species_definitions) = default_species_table();
+            let spawn_patches = default_spawn_patches();
+            let pressure_config = default_pressure_config();
+            world.species_table_version = species_table_version;
+            world.species_definitions = species_definitions;
+            world.spawn_patches = spawn_patches;
+            world.pressure_config = pressure_config.clone();
+            world.wave_seed_global = DEFAULT_WAVE_GLOBAL_SEED;
             world.mark_navigation_dirty();
             #[cfg(any(test, feature = "tower_scaffolding"))]
             {
@@ -612,6 +688,10 @@ pub fn apply(world: &mut World, command: Command, out_events: &mut Vec<Event>) {
             world.rebuild_navigation_field_if_dirty();
             world.update_difficulty_tier(0, out_events);
             world.assign_pending_wave_difficulty(PendingWaveDifficulty::Unset, out_events, true);
+            out_events.push(Event::PressureConfigChanged {
+                species_table_version: world.species_table_version,
+                pressure: pressure_config,
+            });
         }
         Command::Tick { dt } => {
             if world.play_mode == PlayMode::Builder {
@@ -1242,8 +1322,8 @@ pub mod query {
     use super::{Bug, World};
     use maze_defence_core::{
         BugSnapshot, BugView, CellCoord, Goal, Gold, NavigationFieldView, OccupancyView,
-        PendingWaveDifficulty, PlayMode, ProjectileSnapshot, ReservationLedgerView, Target,
-        TileGrid,
+        PendingWaveDifficulty, PlayMode, PressureConfig, ProjectileSnapshot, ReservationLedgerView,
+        SpawnPatchTableView, SpeciesTableView, Target, TileGrid, WaveSeedContext,
     };
 
     use maze_defence_core::structures::{Wall as CellWall, WallView as CellWallView};
@@ -1275,6 +1355,34 @@ pub mod query {
     #[must_use]
     pub fn pending_wave_difficulty(world: &World) -> PendingWaveDifficulty {
         world.pending_wave_difficulty
+    }
+
+    /// Provides read-only access to the authoritative species table.
+    #[must_use]
+    pub fn species_table(world: &World) -> SpeciesTableView<'_> {
+        SpeciesTableView::new(world.species_table_version, &world.species_definitions)
+    }
+
+    /// Provides read-only access to the configured spawn patches.
+    #[must_use]
+    pub fn patch_table(world: &World) -> SpawnPatchTableView<'_> {
+        SpawnPatchTableView::new(&world.spawn_patches)
+    }
+
+    /// Returns the global pressure configuration stored by the world.
+    #[must_use]
+    pub fn pressure_config(world: &World) -> &PressureConfig {
+        &world.pressure_config
+    }
+
+    /// Captures the wave seed derivation context for the next generated wave.
+    #[must_use]
+    pub fn wave_seed_context(world: &World) -> WaveSeedContext {
+        WaveSeedContext::new(
+            world.wave_seed_global,
+            world.next_wave_id,
+            world.difficulty_tier,
+        )
     }
 
     /// Retrieves the welcome banner that adapters may display to players.
@@ -2026,8 +2134,8 @@ mod tests {
     use super::*;
     use maze_defence_core::{
         BugColor, BugId, BugSnapshot, Direction, Goal, Health, NavigationFieldView,
-        PendingWaveDifficulty, PlayMode, ProjectileId, ProjectileSnapshot, TowerCooldownSnapshot,
-        TowerId, TowerKind, WaveDifficulty, WaveId,
+        PendingWaveDifficulty, PlayMode, ProjectileId, ProjectileSnapshot, SpawnPatchId, SpeciesId,
+        SpeciesTableVersion, TowerCooldownSnapshot, TowerId, TowerKind, WaveDifficulty, WaveId,
     };
 
     use std::{
@@ -2099,11 +2207,61 @@ mod tests {
         events.clear();
     }
 
+    #[test]
+    fn species_table_query_reports_default_configuration() {
+        let world = World::new();
+        let table = query::species_table(&world);
+        let mut definitions: Vec<_> = table.iter().collect();
+
+        assert_eq!(table.version(), SpeciesTableVersion::new(1));
+        assert_eq!(definitions.len(), 1);
+        let definition = definitions.pop().expect("species definition");
+        assert_eq!(definition.id(), SpeciesId::new(0));
+        assert_eq!(definition.patch(), SpawnPatchId::new(0));
+    }
+
+    #[test]
+    fn patch_table_query_reports_default_patch() {
+        let world = World::new();
+        let table = query::patch_table(&world);
+        let descriptors: Vec<_> = table.iter().collect();
+
+        assert_eq!(descriptors.len(), 1);
+        assert_eq!(descriptors[0].id(), SpawnPatchId::new(0));
+    }
+
+    #[test]
+    fn pressure_config_query_exposes_defaults() {
+        let world = World::new();
+        let config = query::pressure_config(&world);
+        let curve = config.curve();
+        let burst = config.burst_scheduling();
+
+        assert_eq!(curve.mean().get(), 1_200);
+        assert_eq!(curve.deviation().get(), 250);
+        assert_eq!(config.dirichlet_beta().get().get(), 2);
+        assert_eq!(burst.nominal_burst_size().get(), 20);
+        assert_eq!(burst.burst_count_max().get(), 8);
+        assert_eq!(config.spawn_per_tick_max().get(), 2_000);
+    }
+
+    #[test]
+    fn wave_seed_context_query_exposes_seed_inputs() {
+        let world = World::new();
+        let context = query::wave_seed_context(&world);
+
+        assert_eq!(context.global_seed(), DEFAULT_WAVE_GLOBAL_SEED);
+        assert_eq!(context.wave(), WaveId::new(0));
+        assert_eq!(context.difficulty_tier(), 0);
+    }
+
     fn strip_pending_wave_events(events: &mut Vec<Event>) {
         events.retain(|event| {
             !matches!(
                 event,
-                Event::PendingWaveDifficultyChanged { .. } | Event::WaveStarted { .. }
+                Event::PendingWaveDifficultyChanged { .. }
+                    | Event::WaveStarted { .. }
+                    | Event::PressureConfigChanged { .. }
             )
         });
     }
@@ -5510,6 +5668,9 @@ mod tests {
         assert_eq!(tile_grid.columns(), expected_columns);
         assert_eq!(tile_grid.rows(), expected_rows);
         assert_eq!(tile_grid.tile_length(), expected_tile_length);
+        assert!(events
+            .iter()
+            .any(|event| matches!(event, Event::PressureConfigChanged { .. })),);
         strip_pending_wave_events(&mut events);
         assert!(events.is_empty());
     }
@@ -6496,7 +6657,12 @@ mod tests {
         for command in commands {
             let mut events = Vec::new();
             apply(&mut world, command, &mut events);
-            log.extend(events.into_iter().map(EventRecord::from));
+            log.extend(
+                events
+                    .into_iter()
+                    .filter(|event| !matches!(event, Event::PressureConfigChanged { .. }))
+                    .map(EventRecord::from),
+            );
         }
 
         let towers = query::towers(&world)
