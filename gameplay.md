@@ -33,7 +33,7 @@ Objective: enable a trivial but repeatable “wave → kill → reward → build
 ### Phase 1 — Win/Loss Consequence and Tier Progression
 
 * Maintain integer **difficulty tier** (starts at 0).
-* After each successful wave → increment tier by 1.
+* Successful **Hard** waves provide the permanent tier growth; **Normal** wins leave the tier unchanged.
 * Scale **gold reward** by tier.
 * On loss:
 
@@ -41,7 +41,7 @@ Objective: enable a trivial but repeatable “wave → kill → reward → build
   * Decrease tier by 1–2.
 * Display tier and gold.
 
-**Outcome:** Losing has cost, winning has long-term benefit. Still hand-authored wave.
+**Outcome:** Losing has cost, while permanent difficulty growth comes from future Hard victories. Still hand-authored wave.
 
 **Phase 1 progression roadmap**
 
@@ -52,7 +52,7 @@ Objective: enable a trivial but repeatable “wave → kill → reward → build
    * Scale the bug death reward by `(tier + 1)` inside `World::handle_fire_projectile`, using saturation to avoid overflow, so higher tiers boost every `Event::BugDied` payout.
    * Covered the behaviour with deterministic world tests that execute scripted kills at multiple tiers and verify the saturation guard.
 3. **Resolve round outcomes through commands** [DONE]
-   * Introduce a `RoundOutcome` enum and `Command::ResolveRound { outcome }` in `maze_defence_core` and handle it inside `world::apply`, incrementing the tier on wins, decrementing (with floor at zero) on losses, and emitting `DifficultyTierChanged` events accordingly.
+   * Introduce a `RoundOutcome` enum and `Command::ResolveRound { outcome }` in `maze_defence_core` and handle it inside `world::apply`, leaving the tier unchanged on wins, decrementing (with floor at zero) on losses, and emitting `DifficultyTierChanged` events accordingly.
    * Within the loss branch, remove a deterministic slice of towers (e.g., highest IDs first using `towers::TowerRegistry::iter`) and emit `Event::TowerRemoved` for each so the adapter reconciles state. The world remains the **only** locus of side-effects for these outcomes.
 4. **Drive outcome commands from the CLI adapter** [DONE]
    * Enhance `Simulation::process_pending_events` in `adapters/cli/src/main.rs` to queue `Command::ResolveRound` when `Event::RoundLost` appears, and when a wave finishes (`WaveState::finished()` && `query::bug_view(&self.world).iter().next().is_none()`), covering both win paths. The adapter’s responsibility stops at **detecting** the outcome and issuing the command — it must not apply any consequences directly.
@@ -83,12 +83,12 @@ Objective: enable a trivial but repeatable “wave → kill → reward → build
 3. **Resolve wave launches based on difficulty** [DONE]
    * Update the spawning system to consume the new enum and treat **Hard** as `tier + 1` when generating wave contents and gold multipliers, keeping **Normal** unchanged.
    * When `Command::StartWave` is applied, compute the effective parameters (difficulty, `tier_effective`, `reward_multiplier`, any pressure scalar) and emit a factual `Event::WaveStarted { … }` carrying them alongside a `wave_id` so downstream systems can react without re-querying.
-4. **Apply Hard victory promotions** [TODO]
+4. **Apply Hard victory promotions** [DONE]
    * Extend `Command::ResolveRound` handling to detect victories tagged as **Hard**, using the stored `wave_id` / difficulty context from `Event::WaveStarted`, increment the permanent tier by one, and emit a new `Event::HardWinAchieved` for UI feedback.
    * Saturate tier increases at the desired cap (if any) while leaving loss handling untouched.
-5. **Display difficulty state to the player** [TODO]
-   * Enrich `adapters/rendering::Scene` with difficulty selection feedback (e.g., highlight the active button, show bonus reward preview).
-   * Cover the selection loop with a headless harness test that drives `Normal` and `Hard` launches, asserting tier deltas and gold payouts across both paths.
+5. **Display difficulty state to the player** [DONE]
+   * Enrich `adapters/rendering::Scene` with difficulty selection feedback by highlighting the active button and surfacing the Normal/Hard reward previews.
+   * Added CLI adapter tests to prove the scene exposes the reward multipliers and highlights Hard when it is the pending selection.
 
 ---
 

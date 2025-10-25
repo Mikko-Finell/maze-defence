@@ -10,7 +10,7 @@ use macroquad::{
     ui::{hash, Ui},
 };
 use maze_defence_core::{PlayMode, WaveDifficulty};
-use maze_defence_rendering::{GoldPresentation, TierPresentation};
+use maze_defence_rendering::{DifficultySelectionPresentation, GoldPresentation, TierPresentation};
 
 /// Snapshot of the control panel's UI layout and data for the current frame.
 #[derive(Clone, Copy, Debug)]
@@ -28,6 +28,8 @@ pub(crate) struct ControlPanelUiContext {
     pub gold: Option<GoldPresentation>,
     /// Presentable difficulty tier exposed by the simulation.
     pub tier: Option<TierPresentation>,
+    /// Presentation data for the difficulty selection buttons.
+    pub difficulty_selection: Option<DifficultySelectionPresentation>,
 }
 
 /// Captures the UI interactions emitted while drawing the control panel.
@@ -89,6 +91,8 @@ pub(crate) fn draw_control_panel_ui(
 
     ui.push_skin(&skin);
 
+    let selection = context.difficulty_selection;
+
     let mut result = ControlPanelUiResult::default();
     let _ = ui.window(hash!("control_panel"), context.origin, context.size, |ui| {
         let tier_text = match context.tier {
@@ -110,12 +114,48 @@ pub(crate) fn draw_control_panel_ui(
         ui.label(None, mode_label);
         ui.label(None, "Select the next wave difficulty.");
 
-        if ui.button(None, "Normal") {
+        let mut normal_label = "Normal".to_string();
+        let mut hard_label = "Hard".to_string();
+        let mut normal_preview = None;
+        let mut hard_preview = None;
+
+        if let Some(selection) = selection {
+            let normal = selection.normal();
+            let hard = selection.hard();
+
+            if normal.selected() {
+                normal_label.push_str(" ★");
+            }
+            if hard.selected() {
+                hard_label.push_str(" ★");
+            }
+
+            normal_preview = Some(format!(
+                "Normal rewards: x{} gold (Tier {})",
+                normal.reward_multiplier(),
+                normal.effective_tier()
+            ));
+            hard_preview = Some(format!(
+                "Hard rewards: x{} gold (Tier {})",
+                hard.reward_multiplier(),
+                hard.effective_tier()
+            ));
+        }
+
+        if ui.button(None, normal_label.as_str()) {
             result.start_wave = Some(WaveDifficulty::Normal);
         }
         ui.same_line(12.0);
-        if ui.button(None, "Hard") {
+        if ui.button(None, hard_label.as_str()) {
             result.start_wave = Some(WaveDifficulty::Hard);
+        }
+
+        if let Some(text) = normal_preview {
+            ui.label(None, text.as_str());
+        }
+        if let Some(text) = hard_preview {
+            ui.label(None, text.as_str());
+            ui.label(None, "Hard victory grants +1 permanent tier.");
         }
 
         ui.label(None, "Use the button below to switch modes.");

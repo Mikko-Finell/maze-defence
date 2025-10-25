@@ -604,6 +604,7 @@ impl From<&Event> for EventRecord {
             | Event::ProjectileHit { .. }
             | Event::ProjectileExpired { .. }
             | Event::ProjectileRejected { .. }
+            | Event::HardWinAchieved { .. }
             | Event::DifficultyTierChanged { .. }
             | Event::BugDamaged { .. }
             | Event::BugDied { .. } => {

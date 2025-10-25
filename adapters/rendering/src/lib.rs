@@ -892,6 +892,87 @@ impl TierPresentation {
     }
 }
 
+/// Snapshot describing how a specific difficulty option should be presented to the player.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DifficultyButtonPresentation {
+    difficulty: WaveDifficulty,
+    selected: bool,
+    effective_tier: u32,
+    reward_multiplier: u32,
+}
+
+impl DifficultyButtonPresentation {
+    /// Creates a new descriptor for a difficulty button.
+    #[must_use]
+    pub const fn new(
+        difficulty: WaveDifficulty,
+        selected: bool,
+        effective_tier: u32,
+        reward_multiplier: u32,
+    ) -> Self {
+        Self {
+            difficulty,
+            selected,
+            effective_tier,
+            reward_multiplier,
+        }
+    }
+
+    /// Returns which difficulty this button represents.
+    #[must_use]
+    pub const fn difficulty(&self) -> WaveDifficulty {
+        self.difficulty
+    }
+
+    /// Returns whether the button should be highlighted as the active selection.
+    #[must_use]
+    pub const fn selected(&self) -> bool {
+        self.selected
+    }
+
+    /// Returns the effective tier that will be used when launching this difficulty.
+    #[must_use]
+    pub const fn effective_tier(&self) -> u32 {
+        self.effective_tier
+    }
+
+    /// Returns the gold reward multiplier preview for this difficulty.
+    #[must_use]
+    pub const fn reward_multiplier(&self) -> u32 {
+        self.reward_multiplier
+    }
+}
+
+/// Snapshot describing the full difficulty selection UI state for the control panel.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DifficultySelectionPresentation {
+    normal: DifficultyButtonPresentation,
+    hard: DifficultyButtonPresentation,
+}
+
+impl DifficultySelectionPresentation {
+    /// Creates a new difficulty selection descriptor.
+    #[must_use]
+    pub const fn new(
+        normal: DifficultyButtonPresentation,
+        hard: DifficultyButtonPresentation,
+    ) -> Self {
+        Self { normal, hard }
+    }
+
+    /// Returns the presentation descriptor for the Normal difficulty option.
+    #[must_use]
+    pub const fn normal(&self) -> DifficultyButtonPresentation {
+        self.normal
+    }
+
+    /// Returns the presentation descriptor for the Hard difficulty option.
+    #[must_use]
+    pub const fn hard(&self) -> DifficultyButtonPresentation {
+        self.hard
+    }
+}
+
 /// Scene description combining the tile grid, perimeter wall colour and inhabitants.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Scene {
@@ -927,6 +1008,8 @@ pub struct Scene {
     pub gold: Option<GoldPresentation>,
     /// Current difficulty tier presented to the player.
     pub tier: Option<TierPresentation>,
+    /// Presentation state for the Normal/Hard difficulty buttons.
+    pub difficulty_selection: Option<DifficultySelectionPresentation>,
 }
 
 impl Scene {
@@ -950,6 +1033,7 @@ impl Scene {
         control_panel: Option<ControlPanelView>,
         gold: Option<GoldPresentation>,
         tier: Option<TierPresentation>,
+        difficulty_selection: Option<DifficultySelectionPresentation>,
     ) -> Self {
         Self {
             tile_grid,
@@ -968,6 +1052,7 @@ impl Scene {
             control_panel,
             gold,
             tier,
+            difficulty_selection,
         }
     }
 
@@ -1432,6 +1517,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
 
         assert_eq!(scene.tile_grid, tile_grid);
@@ -1450,6 +1536,7 @@ mod tests {
         assert!(scene.control_panel.is_none());
         assert!(scene.gold.is_none());
         assert!(scene.tier.is_none());
+        assert!(scene.difficulty_selection.is_none());
     }
 
     #[test]
@@ -1506,6 +1593,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
 
         assert_eq!(scene.play_mode, PlayMode::Builder);
@@ -1530,6 +1618,7 @@ mod tests {
         assert!(scene.ground.is_none());
         assert!(scene.gold.is_none());
         assert!(scene.tier.is_none());
+        assert!(scene.difficulty_selection.is_none());
     }
 
     #[test]
@@ -1560,9 +1649,11 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
 
         assert_eq!(scene.total_height(), tile_grid.bordered_height());
+        assert!(scene.difficulty_selection.is_none());
     }
 
     #[test]

@@ -56,7 +56,7 @@ const TOP_BORDER_CELL_LAYERS: u32 = 1;
 const BOTTOM_BORDER_CELL_LAYERS: u32 = 1;
 const EXIT_CELL_LAYERS: u32 = 1;
 const INITIAL_GOLD: Gold = Gold::new(100);
-const ROUND_WIN_TIER_INCREMENT: u32 = 1;
+const HARD_WIN_TIER_PROMOTION: u32 = 1;
 const ROUND_LOSS_TIER_PENALTY: u32 = 1;
 #[cfg(any(test, feature = "tower_scaffolding"))]
 const ROUND_LOSS_TOWER_REMOVAL_PERCENT: u32 = 50;
@@ -272,14 +272,37 @@ impl World {
             .unwrap_or_else(|| self.difficulty_tier.saturating_add(1))
     }
 
-    fn resolve_round_win(&mut self, out_events: &mut Vec<Event>) {
-        let new_tier = self
-            .difficulty_tier
-            .saturating_add(ROUND_WIN_TIER_INCREMENT);
-        self.update_difficulty_tier(new_tier, out_events);
+    fn resolve_round_win(
+        &mut self,
+        active_wave: Option<ActiveWaveContext>,
+        out_events: &mut Vec<Event>,
+    ) {
+        let previous_tier = self.difficulty_tier;
+        let mut hard_wave = None;
+
+        if let Some(context) = active_wave {
+            if context.difficulty == WaveDifficulty::Hard {
+                let new_tier = previous_tier.saturating_add(HARD_WIN_TIER_PROMOTION);
+                self.update_difficulty_tier(new_tier, out_events);
+                hard_wave = Some(context);
+            }
+        }
+
+        if let Some(context) = hard_wave {
+            out_events.push(Event::HardWinAchieved {
+                wave: context.id,
+                previous_tier,
+                new_tier: self.difficulty_tier,
+            });
+        }
     }
 
-    fn resolve_round_loss(&mut self, out_events: &mut Vec<Event>) {
+    fn resolve_round_loss(
+        &mut self,
+        active_wave: Option<ActiveWaveContext>,
+        out_events: &mut Vec<Event>,
+    ) {
+        let _ = active_wave;
         let new_tier = self.difficulty_tier.saturating_sub(ROUND_LOSS_TIER_PENALTY);
         self.update_difficulty_tier(new_tier, out_events);
 
@@ -704,10 +727,13 @@ pub fn apply(world: &mut World, command: Command, out_events: &mut Vec<Event>) {
         Command::StartWave { difficulty } => {
             world.launch_wave(difficulty, out_events);
         }
-        Command::ResolveRound { outcome } => match outcome {
-            RoundOutcome::Win => world.resolve_round_win(out_events),
-            RoundOutcome::Loss => world.resolve_round_loss(out_events),
-        },
+        Command::ResolveRound { outcome } => {
+            let active_wave = world.active_wave.take();
+            match outcome {
+                RoundOutcome::Win => world.resolve_round_win(active_wave, out_events),
+                RoundOutcome::Loss => world.resolve_round_loss(active_wave, out_events),
+            }
+        }
     }
 }
 
@@ -2279,7 +2305,7 @@ mod tests {
     }
 
     #[test]
-    fn resolving_round_win_increments_tier() {
+    fn resolving_normal_round_win_keeps_tier() {
         let mut world = World::new();
         let mut events = Vec::new();
 
@@ -2293,13 +2319,108 @@ mod tests {
             &mut events,
         );
 
+        assert_eq!(query::difficulty_tier(&world), 2);
+        assert!(events
+            .iter()
+            .all(|event| !matches!(event, Event::DifficultyTierChanged { .. })));
+    }
+
+    #[test]
+    fn hard_wave_win_promotes_tier_and_emits_event() {
+        let mut world = World::new();
+        let mut events = Vec::new();
+
+        world.difficulty_tier = 2;
+
+        apply(
+            &mut world,
+            Command::StartWave {
+                difficulty: WaveDifficulty::Hard,
+            },
+            &mut events,
+        );
+
+        events.clear();
+
+        apply(
+            &mut world,
+            Command::ResolveRound {
+                outcome: RoundOutcome::Win,
+            },
+            &mut events,
+        );
+
         assert_eq!(query::difficulty_tier(&world), 3);
+        assert!(
+            world.active_wave.is_none(),
+            "hard win should clear active wave"
+        );
+
+        let hard_win = events.iter().find_map(|event| match event {
+            Event::HardWinAchieved {
+                wave,
+                previous_tier,
+                new_tier,
+            } => Some((*wave, *previous_tier, *new_tier)),
+            _ => None,
+        });
+        let (wave_id, previous_tier, new_tier) =
+            hard_win.expect("hard victory must emit HardWinAchieved event");
+        assert_eq!(wave_id, WaveId::new(0));
+        assert_eq!(previous_tier, 2);
+        assert_eq!(new_tier, 3);
         assert!(events.iter().any(|event| {
             matches!(
                 event,
                 Event::DifficultyTierChanged { tier } if *tier == 3
             )
         }));
+    }
+
+    #[test]
+    fn hard_wave_win_emits_event_even_when_tier_saturated() {
+        let mut world = World::new();
+        let mut events = Vec::new();
+
+        world.difficulty_tier = u32::MAX;
+
+        apply(
+            &mut world,
+            Command::StartWave {
+                difficulty: WaveDifficulty::Hard,
+            },
+            &mut events,
+        );
+
+        events.clear();
+
+        apply(
+            &mut world,
+            Command::ResolveRound {
+                outcome: RoundOutcome::Win,
+            },
+            &mut events,
+        );
+
+        assert_eq!(query::difficulty_tier(&world), u32::MAX);
+        assert!(world.active_wave.is_none());
+
+        let hard_win = events.iter().find_map(|event| match event {
+            Event::HardWinAchieved {
+                wave,
+                previous_tier,
+                new_tier,
+            } => Some((*wave, *previous_tier, *new_tier)),
+            _ => None,
+        });
+        let (wave_id, previous_tier, new_tier) =
+            hard_win.expect("hard victory must emit HardWinAchieved event");
+        assert_eq!(wave_id, WaveId::new(0));
+        assert_eq!(previous_tier, u32::MAX);
+        assert_eq!(new_tier, u32::MAX);
+        assert!(events
+            .iter()
+            .all(|event| !matches!(event, Event::DifficultyTierChanged { .. })));
     }
 
     #[test]
