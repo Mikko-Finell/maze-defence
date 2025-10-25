@@ -31,7 +31,7 @@ use maze_defence_core::{
     SpeciesTableVersion, TileCoord, TowerCooldownView, TowerId, TowerKind, TowerTarget,
     WaveDifficulty, WaveId,
 };
-use maze_defence_pressure_v2::PressureV2;
+use maze_defence_pressure_v2::{PressureTuning, PressureV2};
 use maze_defence_rendering::{
     visuals, BugHealthPresentation, BugPresentation, BugVisual, Color, ControlPanelView,
     DifficultyButtonPresentation, DifficultyPresentation, DifficultySelectionPresentation,
@@ -652,7 +652,8 @@ impl Simulation {
                 bug_step,
                 SPAWN_RNG_SEED,
             )),
-            pressure_v2: PressureV2::default(),
+            // PressureTuning is the sole supported knob surface for wave behaviour; adjust fields here.
+            pressure_v2: PressureV2::new(PressureTuning::default()),
             tower_targeting: TowerTargeting::new(),
             tower_combat: TowerCombat::new(),
             tower_cooldowns: TowerCooldownView::default(),
