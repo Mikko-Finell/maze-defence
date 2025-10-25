@@ -303,7 +303,7 @@ enum EventRecord {
     WaveStarted {
         wave: WaveId,
         difficulty: WaveDifficulty,
-        tier_effective: u32,
+        effective_difficulty: u32,
         reward_multiplier: u32,
         pressure_scalar: u32,
         plan_pressure: u32,
@@ -349,7 +349,7 @@ impl From<Event> for EventRecord {
             Event::WaveStarted {
                 wave,
                 difficulty,
-                tier_effective,
+                effective_difficulty,
                 reward_multiplier,
                 pressure_scalar,
                 plan_pressure,
@@ -358,7 +358,7 @@ impl From<Event> for EventRecord {
             } => Self::WaveStarted {
                 wave,
                 difficulty,
-                tier_effective,
+                effective_difficulty,
                 reward_multiplier,
                 pressure_scalar,
                 plan_pressure: plan_pressure.get(),

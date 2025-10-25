@@ -6,7 +6,7 @@ members = [
     "systems/bootstrap",
     "systems/movement",
     "systems/spawning",
-    "systems/wave_generation",
+    "systems/pressure_v2",
     "systems/tower_targeting",
     "systems/tower_combat",
     "adapters/rendering",
