@@ -356,6 +356,57 @@ impl BurstSchedulingConfig {
     }
 }
 
+/// Immutable configuration describing pressure sampling knobs shared across waves.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PressureConfig {
+    curve: PressureCurve,
+    dirichlet_beta: DirichletWeight,
+    burst_scheduling: BurstSchedulingConfig,
+    spawn_per_tick_max: NonZeroU32,
+}
+
+impl PressureConfig {
+    /// Creates a new pressure configuration using the provided sampling parameters.
+    #[must_use]
+    pub const fn new(
+        curve: PressureCurve,
+        dirichlet_beta: DirichletWeight,
+        burst_scheduling: BurstSchedulingConfig,
+        spawn_per_tick_max: NonZeroU32,
+    ) -> Self {
+        Self {
+            curve,
+            dirichlet_beta,
+            burst_scheduling,
+            spawn_per_tick_max,
+        }
+    }
+
+    /// Returns the configured pressure sampling curve (μ, σ).
+    #[must_use]
+    pub const fn curve(&self) -> PressureCurve {
+        self.curve
+    }
+
+    /// Returns the symmetric Dirichlet concentration weight β.
+    #[must_use]
+    pub const fn dirichlet_beta(&self) -> DirichletWeight {
+        self.dirichlet_beta
+    }
+
+    /// Returns the burst scheduling configuration applied to species budgets.
+    #[must_use]
+    pub const fn burst_scheduling(&self) -> BurstSchedulingConfig {
+        self.burst_scheduling
+    }
+
+    /// Returns the global spawn-per-tick safety limit.
+    #[must_use]
+    pub const fn spawn_per_tick_max(&self) -> NonZeroU32 {
+        self.spawn_per_tick_max
+    }
+}
+
 /// Gaussian pressure sampling parameters (μ, σ) expressed in integer pressure units.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PressureCurve {
@@ -536,6 +587,42 @@ impl SpeciesDefinition {
     }
 }
 
+/// Immutable view of the species table stored in the world.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SpeciesTableView<'a> {
+    version: SpeciesTableVersion,
+    definitions: &'a [SpeciesDefinition],
+}
+
+impl<'a> SpeciesTableView<'a> {
+    /// Captures a view over the species definitions using the provided version token.
+    #[must_use]
+    pub const fn new(version: SpeciesTableVersion, definitions: &'a [SpeciesDefinition]) -> Self {
+        Self {
+            version,
+            definitions,
+        }
+    }
+
+    /// Identifier describing the version of the captured species table.
+    #[must_use]
+    pub const fn version(&self) -> SpeciesTableVersion {
+        self.version
+    }
+
+    /// Iterator over the captured definitions in deterministic order.
+    #[must_use = "iterators are lazy and do nothing unless consumed"]
+    pub fn iter(&self) -> impl Iterator<Item = &SpeciesDefinition> {
+        self.definitions.iter()
+    }
+
+    /// Returns the captured species definitions as a slice.
+    #[must_use]
+    pub const fn definitions(&self) -> &'a [SpeciesDefinition] {
+        self.definitions
+    }
+}
+
 /// Description of a deterministic spawn patch outside the maze.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SpawnPatchDescriptor {
@@ -567,6 +654,32 @@ impl SpawnPatchDescriptor {
     #[must_use]
     pub const fn extent(&self) -> CellRect {
         self.extent
+    }
+}
+
+/// Immutable snapshot of spawn patches stored in the world.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SpawnPatchTableView<'a> {
+    descriptors: &'a [SpawnPatchDescriptor],
+}
+
+impl<'a> SpawnPatchTableView<'a> {
+    /// Captures a new view over the provided spawn patch descriptors.
+    #[must_use]
+    pub const fn new(descriptors: &'a [SpawnPatchDescriptor]) -> Self {
+        Self { descriptors }
+    }
+
+    /// Iterator exposing descriptors in deterministic order.
+    #[must_use = "iterators are lazy and do nothing unless consumed"]
+    pub fn iter(&self) -> impl Iterator<Item = &SpawnPatchDescriptor> {
+        self.descriptors.iter()
+    }
+
+    /// Returns the captured descriptors as a slice.
+    #[must_use]
+    pub const fn descriptors(&self) -> &'a [SpawnPatchDescriptor] {
+        self.descriptors
     }
 }
 
@@ -843,6 +956,13 @@ pub enum Event {
     PendingWaveDifficultyChanged {
         /// Wave difficulty awaiting launch after the adjustment.
         pending: PendingWaveDifficulty,
+    },
+    /// Reports that the pressure configuration stored by the world changed.
+    PressureConfigChanged {
+        /// Version token for the active species table after the change.
+        species_table_version: SpeciesTableVersion,
+        /// Canonical pressure sampling configuration now active.
+        pressure: PressureConfig,
     },
     /// Reports that a deterministic attack plan has been generated.
     AttackPlanReady {
@@ -1153,6 +1273,44 @@ impl WaveId {
     #[must_use]
     pub const fn get(&self) -> u32 {
         self.0
+    }
+}
+
+/// Deterministic seed derivation inputs associated with a wave.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct WaveSeedContext {
+    global_seed: u64,
+    wave: WaveId,
+    difficulty_tier: u32,
+}
+
+impl WaveSeedContext {
+    /// Creates a new seed context for the provided wave.
+    #[must_use]
+    pub const fn new(global_seed: u64, wave: WaveId, difficulty_tier: u32) -> Self {
+        Self {
+            global_seed,
+            wave,
+            difficulty_tier,
+        }
+    }
+
+    /// Returns the canonical global seed supplied by the world.
+    #[must_use]
+    pub const fn global_seed(&self) -> u64 {
+        self.global_seed
+    }
+
+    /// Returns the wave identifier captured in this context.
+    #[must_use]
+    pub const fn wave(&self) -> WaveId {
+        self.wave
+    }
+
+    /// Returns the difficulty tier active when the context was recorded.
+    #[must_use]
+    pub const fn difficulty_tier(&self) -> u32 {
+        self.difficulty_tier
     }
 }
 

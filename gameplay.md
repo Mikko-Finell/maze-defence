@@ -109,7 +109,7 @@ This phase migrates the wave pipeline to the normative rules in `pressure-spec.m
    * Introduce `AttackPlan`, `BurstPlan`, `SpeciesId`, `SpawnPatchId`, and fixed-point weight/config structs exactly mirroring the spec (pressure units in integers, milliseconds for timing, fixed-point scale S = 1000).
    * Extend `Command`/`Event` so the adapter can request plan generation (`Command::GenerateAttackPlan { wave_id, difficulty }`) and receive results (`Event::AttackPlanReady { wave_id, plan }`) without violating message discipline.
    * Document RNG stream labels and serialization invariants alongside the new types so downstream crates cannot deviate from the canonical ordering.
-2. **Persist registries and pressure knobs in the world** [TODO]
+2. **Persist registries and pressure knobs in the world** [DONE]
    * Store species definitions (health, speed, weights, caps, cadence ranges), patch descriptors, and pressure sampling parameters (`μ`, `σ`, Dirichlet β, burst caps, spawn-per-tick limit) on `maze_defence_world::World`.
    * Initialise these fields during configuration/reset commands, emit `Event::PressureConfigChanged` when they mutate, and provide read-only queries (`world::query::species_table`, `world::query::patch_table`, `world::query::pressure_config`) for systems/tests.
    * Record the per-wave seed derivation inputs (global seed, tier, wave index) so the generator system receives deterministic context without poking at world internals.
