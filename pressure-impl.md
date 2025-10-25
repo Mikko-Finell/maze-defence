@@ -33,12 +33,12 @@ configuration surface that every knob flows through.
 
 **Deliverables:**
 
-- [ ] Add a `PressureTuning` struct owned by the system that aggregates every adjustable
+- [x] Add a `PressureTuning` struct owned by the system that aggregates every adjustable
   knob (count curve params, HP/speed curves, component caps, cadence bounds). Expose a
   `pub fn tuning_mut(&mut self) -> &mut PressureTuning` so designers have one obvious
   surface. Document each field with comments explaining how it affects bug count,
   health, speed, species allocation, and cadence.
-- [ ] Replace any scattered config files with direct construction of `PressureTuning` in
+- [x] Replace any scattered config files with direct construction of `PressureTuning` in
   adapters. Document inline that the struct is the only supported entry point for
   tweaking wave behaviour.
 - [ ] Implement deterministic seeding per §1.3 (hash of `(game_seed, level_id, wave_index,
