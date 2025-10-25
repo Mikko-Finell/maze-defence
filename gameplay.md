@@ -94,30 +94,35 @@ Objective: enable a trivial but repeatable “wave → kill → reward → build
 
 ### Phase 3 — Deterministic Pressure-Based Wave Generation
 
-* Replace manual template with the deterministic **pressure spec** generator.
-* Tier now maps directly to **pressure scalar P**.
-* Integrate species registry and burst/pacing mechanics per spec.
-* Wave content now scales naturally with progression.
+This phase migrates the wave pipeline to the normative rules in `pressure-spec.md`. Every task below is derived from that specification; contributors **must read the spec in full before starting** so the implementation remains compliant.
+
+* Replace the bespoke template with the deterministic pressure generator defined in the spec.
+* Map tier to the pressure scalar **P**, drive Dirichlet partitioning, and respect all fixed-point weight rules.
+* Store species/patch registries and timing clamps authoritatively so all layers agree on configuration.
+* Ensure spawning consumes spec-authored bursts without re-sampling randomness.
 
 **Outcome:** Wave system becomes fully systemic and scalable.
 
 **Phase 3 progression roadmap**
 
-1. **Promote AttackPlan contracts to core** [TODO]
-   * Add `AttackPlan`, `BurstPlan`, and supporting enums (`SpeciesId`, `SpawnPatchId`) to `maze_defence_core`, plus serialisable config structs for species weights and timing clamps so all layers share the canonical data model.
-   * Extend `Event`/`Command` with message variants (`Command::GenerateAttackPlan`, `Event::AttackPlanReady`) to keep adapters and systems message-driven while preventing world-side bespoke calls.
-2. **Authoritative registries inside the world** [TODO]
-   * Persist the species table, patch definitions, and pressure tuning knobs (`pressure_mean`, `pressure_std_dev`, `dirichlet_beta`, burst sizing limits) on `maze_defence_world::World`, initialising them during configuration/reset commands.
-   * Expose read-only queries (`world::query::species_table`, `world::query::patch_table`, `world::query::pressure_config`) plus `Event::PressureConfigChanged` so UI/tests can inspect state and deterministic snapshots cover registry edits.
-3. **Pure wave generator system** [TODO]
-   * Create a dedicated `systems/wave_generation` crate that consumes `Command::GenerateAttackPlan`, the world queries from step 2, and the current tier/seed context to output a deterministic `AttackPlan` following `pressure-spec.md` (Dirichlet sampling, burst splitting, timing jitter, RNG stream derivation).
-   * Include exhaustive unit tests validating replay identity, budget closure, burst splitting, and safety clamps using scripted seeds; wire the crate into the workspace with feature flags matching existing systems conventions.
-4. **Integrate generator with spawning pipeline** [TODO]
-   * Update the adapter/CLI flow so the **Normal/Hard** button enqueues `Command::GenerateAttackPlan { difficulty }` before `Command::StartWave`, awaiting the resulting `Event::AttackPlanReady { wave_id, plan }` and storing the plan snapshot for presentation (previewing pressure, species mix).
-   * Modify `maze_defence_world::apply` to persist the latest plan per `wave_id` and emit deterministic `Event::WaveStarted` payloads referencing that plan so downstream systems never resample.
-5. **Deterministic burst execution** [TODO]
-   * Refactor `systems/spawning` to consume `AttackPlan` bursts instead of hard-coded templates: schedule `Command::SpawnBug` events respecting cadence, gap timing, and global spawn-per-tick caps while reporting completion via `Event::BurstDepleted`.
-   * Add headless integration tests (`tests/wave_generation_replay.rs`) that drive `GenerateAttackPlan → StartWave → Tick` loops for multiple seeds and assert identical event timelines, ensuring the new pipeline remains replay-safe.
+1. **Canonise pressure data contracts in `core`** [TODO]
+   * Introduce `AttackPlan`, `BurstPlan`, `SpeciesId`, `SpawnPatchId`, and fixed-point weight/config structs exactly mirroring the spec (pressure units in integers, milliseconds for timing, fixed-point scale S = 1000).
+   * Extend `Command`/`Event` so the adapter can request plan generation (`Command::GenerateAttackPlan { wave_id, difficulty }`) and receive results (`Event::AttackPlanReady { wave_id, plan }`) without violating message discipline.
+   * Document RNG stream labels and serialization invariants alongside the new types so downstream crates cannot deviate from the canonical ordering.
+2. **Persist registries and pressure knobs in the world** [TODO]
+   * Store species definitions (health, speed, weights, caps, cadence ranges), patch descriptors, and pressure sampling parameters (`μ`, `σ`, Dirichlet β, burst caps, spawn-per-tick limit) on `maze_defence_world::World`.
+   * Initialise these fields during configuration/reset commands, emit `Event::PressureConfigChanged` when they mutate, and provide read-only queries (`world::query::species_table`, `world::query::patch_table`, `world::query::pressure_config`) for systems/tests.
+   * Record the per-wave seed derivation inputs (global seed, tier, wave index) so the generator system receives deterministic context without poking at world internals.
+3. **Build the pure pressure generator system** [TODO]
+   * Add a `systems/wave_generation` crate that handles `Command::GenerateAttackPlan` by loading the world queries, deriving stream seeds via the documented hash labels, and executing the spec: pressure sampling, Dirichlet split, floor-only budget conversion, burst splitting, cadence/gap draws, and patch sampling order.
+   * Supply exhaustive unit tests that assert deterministic replay, budget closure, burst splitting, timing determinism, safety clamps, and RNG stream reproducibility using scripted seeds and config fixtures.
+4. **Adapter/world orchestration for generated plans** [TODO]
+   * Adjust the CLI adapter so difficulty buttons enqueue plan generation before launching a wave, holding `Event::AttackPlanReady` snapshots for UI previews (pressure totals, per-species counts, burst cadence windows).
+   * Update `world::apply` to persist the generated plan keyed by `wave_id`, include plan metadata in `Event::WaveStarted`, and guarantee replays never re-sample randomness when resuming or inspecting old waves.
+   * Provide harness tests that drive `GenerateAttackPlan → StartWave → ResolveRound` loops across Normal/Hard selections to prove message ordering stays deterministic.
+5. **Spawning consumption of AttackPlans** [TODO]
+   * Refactor `systems/spawning` so it iterates stored `AttackPlan` bursts, emitting `Command::SpawnBug` according to cadence/start times while enforcing the global `spawn_per_tick_max` cap and reporting `Event::BurstDepleted` when each burst finishes.
+   * Capture headless integration tests (`tests/wave_generation_replay.rs`) that simulate multi-wave sessions with varied seeds, asserting identical event timelines, spawn counts, and replay hashes across runs.
 
 ---
 
