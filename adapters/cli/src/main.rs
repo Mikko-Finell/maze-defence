@@ -26,9 +26,9 @@ use glam::Vec2;
 use layout_transfer::{TowerLayoutSnapshot, TowerLayoutTower};
 use maze_defence_core::{
     AttackBugDescriptor, AttackBurst, AttackPlan, BugColor, BugId, BugView, CellCoord,
-    CellPointHalf, CellRect, CellRectSize, Command, Event, Gold, Health, PlacementError, PlayMode,
-    ProjectileSnapshot, RemovalError, RoundOutcome, TileCoord, TowerCooldownView, TowerId,
-    TowerKind, TowerTarget,
+    CellPointHalf, CellRect, CellRectSize, Command, Event, Gold, Health, PendingWaveDifficulty,
+    PlacementError, PlayMode, ProjectileSnapshot, RemovalError, RoundOutcome, TileCoord,
+    TowerCooldownView, TowerId, TowerKind, TowerTarget, WaveDifficulty,
 };
 use maze_defence_rendering::{
     visuals, BugHealthPresentation, BugPresentation, BugVisual, Color, ControlPanelView,
@@ -413,6 +413,7 @@ struct Simulation {
     tower_feedback: Option<TowerInteractionFeedback>,
     gold: Gold,
     difficulty_tier: u32,
+    pending_wave_difficulty: PendingWaveDifficulty,
     last_placement_rejection: Option<PlacementRejection>,
     last_removal_rejection: Option<RemovalRejection>,
     bug_step_duration: Duration,
@@ -643,6 +644,7 @@ impl Simulation {
         });
         let gold = query::gold(&world);
         let difficulty_tier = query::difficulty_tier(&world);
+        let pending_wave_difficulty = query::pending_wave_difficulty(&world);
         let mut simulation = Self {
             world,
             builder: TowerBuilder::default(),
@@ -665,6 +667,7 @@ impl Simulation {
             tower_feedback: None,
             gold,
             difficulty_tier,
+            pending_wave_difficulty,
             last_placement_rejection: None,
             last_removal_rejection: None,
             bug_step_duration: bug_step,
@@ -707,18 +710,19 @@ impl Simulation {
                 .push(Command::SetPlayMode { mode: next_mode });
         }
 
-        if input.spawn_wave {
-            self.start_basic_wave();
+        if let Some(difficulty) = input.start_wave {
+            self.queued_commands.push(Command::StartWave { difficulty });
+            self.start_basic_wave(difficulty);
         }
 
         self.pending_input = FrameInput {
             mode_toggle: false,
-            spawn_wave: false,
+            start_wave: None,
             ..input
         };
     }
 
-    fn start_basic_wave(&mut self) {
+    fn start_basic_wave(&mut self, difficulty: WaveDifficulty) {
         if self.pending_outcome_command
             || self
                 .queued_commands
@@ -734,7 +738,7 @@ impl Simulation {
             return;
         };
 
-        let plan = self.basic_attack_plan(spawner);
+        let plan = self.basic_attack_plan(spawner, difficulty);
         if plan.is_empty() {
             return;
         }
@@ -766,8 +770,14 @@ impl Simulation {
         true
     }
 
-    fn basic_attack_plan(&self, spawner: CellCoord) -> AttackPlan {
-        let Some(count) = NonZeroU32::new(BASIC_WAVE_BUGS) else {
+    fn basic_attack_plan(&self, spawner: CellCoord, difficulty: WaveDifficulty) -> AttackPlan {
+        let tier_effective = match difficulty {
+            WaveDifficulty::Normal => self.difficulty_tier,
+            WaveDifficulty::Hard => self.difficulty_tier.saturating_add(1),
+        };
+        let pressure_multiplier = tier_effective.saturating_add(1);
+        let bug_count = BASIC_WAVE_BUGS.saturating_mul(pressure_multiplier);
+        let Some(count) = NonZeroU32::new(bug_count) else {
             return AttackPlan::new(0, Vec::new());
         };
         let Some(cadence) = NonZeroU32::new(BASIC_WAVE_CADENCE_MS) else {
@@ -779,7 +789,8 @@ impl Simulation {
             duration_to_u32_millis(self.bug_step_duration),
         );
         let burst = AttackBurst::new(spawner, bug, count, cadence, BASIC_WAVE_START_DELAY_MS);
-        AttackPlan::new(BASIC_WAVE_PRESSURE, vec![burst])
+        let pressure = BASIC_WAVE_PRESSURE.saturating_mul(pressure_multiplier);
+        AttackPlan::new(pressure, vec![burst])
     }
 
     fn capture_layout_snapshot(&self) -> TowerLayoutSnapshot {
@@ -1177,6 +1188,7 @@ impl Simulation {
             self.record_tower_feedback(&events);
             self.update_gold_from_events(&events);
             self.update_difficulty_tier_from_events(&events);
+            self.update_pending_wave_difficulty_from_events(&events);
 
             if events
                 .iter()
@@ -1420,6 +1432,14 @@ impl Simulation {
         for event in events {
             if let Event::DifficultyTierChanged { tier } = event {
                 self.difficulty_tier = *tier;
+            }
+        }
+    }
+
+    fn update_pending_wave_difficulty_from_events(&mut self, events: &[Event]) {
+        for event in events {
+            if let Event::PendingWaveDifficultyChanged { pending } = event {
+                self.pending_wave_difficulty = *pending;
             }
         }
     }
@@ -2300,13 +2320,19 @@ mod tests {
     }
 
     #[test]
-    fn spawn_wave_switches_to_attack_and_records_plan() {
+    fn start_wave_normal_switches_to_attack_and_records_plan() {
         let mut simulation = new_simulation();
 
         simulation.handle_input(FrameInput {
-            spawn_wave: true,
+            start_wave: Some(WaveDifficulty::Normal),
             ..FrameInput::default()
         });
+        assert!(simulation.queued_commands.iter().any(|command| matches!(
+            command,
+            Command::StartWave {
+                difficulty: WaveDifficulty::Normal
+            }
+        )));
         simulation.advance(Duration::ZERO);
 
         assert_eq!(query::play_mode(simulation.world()), PlayMode::Attack);
@@ -2323,11 +2349,40 @@ mod tests {
     }
 
     #[test]
-    fn spawn_wave_emits_basic_wave_over_time() {
+    fn start_wave_hard_scales_plan_by_effective_tier() {
+        let mut simulation = new_simulation();
+        simulation.difficulty_tier = 2;
+
+        simulation.handle_input(FrameInput {
+            start_wave: Some(WaveDifficulty::Hard),
+            ..FrameInput::default()
+        });
+        simulation.advance(Duration::ZERO);
+
+        let plan = simulation
+            .active_wave_plan()
+            .expect("wave plan should be recorded");
+        assert_eq!(plan.bursts().len(), 1);
+        let burst = &plan.bursts()[0];
+        let base_tier = simulation.difficulty_tier;
+        let tier_effective = base_tier.saturating_add(1);
+        let multiplier = tier_effective.saturating_add(1);
+        assert_eq!(
+            burst.count().get(),
+            BASIC_WAVE_BUGS.saturating_mul(multiplier)
+        );
+        assert_eq!(
+            plan.pressure(),
+            BASIC_WAVE_PRESSURE.saturating_mul(multiplier)
+        );
+    }
+
+    #[test]
+    fn start_wave_emits_basic_wave_over_time() {
         let mut simulation = new_simulation();
 
         simulation.handle_input(FrameInput {
-            spawn_wave: true,
+            start_wave: Some(WaveDifficulty::Normal),
             ..FrameInput::default()
         });
         simulation.advance(Duration::ZERO);
@@ -2353,7 +2408,8 @@ mod tests {
 
         assert!(spawned > 0, "wave should spawn at least one bug");
         assert!(
-            spawned as u32 <= BASIC_WAVE_BUGS,
+            spawned as u32
+                <= BASIC_WAVE_BUGS.saturating_mul(simulation.difficulty_tier.saturating_add(1)),
             "wave should not spawn more bugs than planned"
         );
     }
@@ -2365,7 +2421,7 @@ mod tests {
             .into_iter()
             .next()
             .expect("expected at least one bug spawner");
-        let plan = simulation.basic_attack_plan(spawner);
+        let plan = simulation.basic_attack_plan(spawner, WaveDifficulty::Normal);
         simulation.active_wave = Some(WaveState::new(plan));
         assert!(simulation.active_wave.is_some(), "wave should be active");
 
@@ -2410,7 +2466,7 @@ mod tests {
         );
 
         simulation.handle_input(FrameInput {
-            spawn_wave: true,
+            start_wave: Some(WaveDifficulty::Normal),
             ..FrameInput::default()
         });
         simulation.advance(Duration::ZERO);
@@ -2457,7 +2513,7 @@ mod tests {
         );
 
         simulation.handle_input(FrameInput {
-            spawn_wave: true,
+            start_wave: Some(WaveDifficulty::Normal),
             ..FrameInput::default()
         });
         assert!(
@@ -2507,7 +2563,7 @@ mod tests {
         );
 
         simulation.handle_input(FrameInput {
-            spawn_wave: true,
+            start_wave: Some(WaveDifficulty::Normal),
             ..FrameInput::default()
         });
         simulation.advance(Duration::ZERO);

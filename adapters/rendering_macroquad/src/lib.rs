@@ -23,7 +23,7 @@
 mod sprites;
 mod ui;
 
-use self::ui::{draw_control_panel_ui, ControlPanelUiContext};
+use self::ui::{draw_control_panel_ui, ControlPanelUiContext, ControlPanelUiResult};
 use anyhow::{Context, Result};
 use glam::Vec2;
 use macroquad::math::Vec2 as MacroquadVec2;
@@ -31,7 +31,7 @@ use macroquad::{
     color::BLACK,
     input::{is_key_pressed, is_mouse_button_pressed, mouse_position, KeyCode, MouseButton},
 };
-use maze_defence_core::{CellRect, PlayMode, TowerId, TowerKind};
+use maze_defence_core::{CellRect, PlayMode, TowerId, TowerKind, WaveDifficulty};
 use maze_defence_rendering::{
     visuals::heading_from_target_line, BugPresentation, BugVisual, Color, ControlPanelView,
     FrameInput, FrameSimulationBreakdown, Presentation, RenderingBackend, Scene, SceneProjectile,
@@ -52,6 +52,7 @@ use self::sprites::SpriteAtlas;
 #[derive(Clone, Copy, Debug, Default)]
 pub struct ControlPanelInputState {
     mode_toggle_latched: bool,
+    start_wave_latched: Option<WaveDifficulty>,
 }
 
 impl ControlPanelInputState {
@@ -67,6 +68,16 @@ impl ControlPanelInputState {
     pub fn register_mode_toggle(&mut self) {
         self.mode_toggle_latched = true;
     }
+
+    /// Returns the latched wave launch request, clearing it so the action fires once.
+    pub fn take_start_wave(&mut self) -> Option<WaveDifficulty> {
+        self.start_wave_latched.take()
+    }
+
+    /// Records that the control-panel button requested a wave launch this frame.
+    pub fn register_start_wave(&mut self, difficulty: WaveDifficulty) {
+        self.start_wave_latched = Some(difficulty);
+    }
 }
 
 /// Snapshot of edge-triggered keyboard shortcuts observed during a single frame.
@@ -78,7 +89,7 @@ struct KeyboardShortcuts {
     toggle_target_lines: bool,
     /// `H` toggles bug health-bar overlays.
     toggle_bug_health_bars: bool,
-    /// `Enter` launches an attack wave.
+    /// `Enter` launches an attack wave at normal difficulty.
     spawn_wave: bool,
     /// `Delete` removes the currently selected element.
     delete_pressed: bool,
@@ -391,8 +402,9 @@ impl RenderingBackend for MacroquadBackend {
                 let frame_dt = Duration::from_secs_f32(dt_seconds.max(0.0));
                 let metrics_before = SceneMetrics::from_scene(&scene, screen_width, screen_height);
                 let mode_toggle = control_panel_input.take_mode_toggle();
+                let start_wave = control_panel_input.take_start_wave();
                 let frame_input =
-                    gather_frame_input(&scene, &metrics_before, mode_toggle, keyboard);
+                    gather_frame_input(&scene, &metrics_before, mode_toggle, start_wave, keyboard);
 
                 let simulation_breakdown = update_scene(frame_dt, frame_input, &mut scene);
 
@@ -465,8 +477,15 @@ impl RenderingBackend for MacroquadBackend {
                 if let Some(panel_context) = draw_control_panel(&scene, screen_width, screen_height)
                 {
                     let mut control_panel_ui = macroquad::ui::root_ui();
-                    if draw_control_panel_ui(&mut control_panel_ui, panel_context) {
+                    let ControlPanelUiResult {
+                        mode_toggle,
+                        start_wave,
+                    } = draw_control_panel_ui(&mut control_panel_ui, panel_context);
+                    if mode_toggle {
                         control_panel_input.register_mode_toggle();
+                    }
+                    if let Some(difficulty) = start_wave {
+                        control_panel_input.register_start_wave(difficulty);
                     }
                 }
 
@@ -601,17 +620,25 @@ fn gather_frame_input(
     scene: &Scene,
     metrics: &SceneMetrics,
     mode_toggle: bool,
+    ui_start_wave: Option<WaveDifficulty>,
     keyboard: KeyboardShortcuts,
 ) -> FrameInput {
     let (cursor_x, cursor_y) = mouse_position();
     let confirm_click = is_mouse_button_pressed(MouseButton::Left);
     let remove_click = is_mouse_button_pressed(MouseButton::Right);
+    let start_wave = ui_start_wave.or_else(|| {
+        if keyboard.spawn_wave {
+            Some(WaveDifficulty::Normal)
+        } else {
+            None
+        }
+    });
     gather_frame_input_from_observations(
         scene,
         metrics,
         Vec2::new(cursor_x, cursor_y),
         mode_toggle,
-        keyboard.spawn_wave,
+        start_wave,
         confirm_click,
         remove_click,
         keyboard.delete_pressed,
@@ -623,14 +650,14 @@ fn gather_frame_input_from_observations(
     metrics: &SceneMetrics,
     cursor_position: Vec2,
     mode_toggle: bool,
-    spawn_wave: bool,
+    start_wave: Option<WaveDifficulty>,
     confirm_click: bool,
     remove_click: bool,
     delete_pressed: bool,
 ) -> FrameInput {
     let mut input = FrameInput {
         mode_toggle,
-        spawn_wave,
+        start_wave,
         ..FrameInput::default()
     };
 
@@ -1562,7 +1589,7 @@ mod tests {
             &metrics,
             inside_cursor,
             false,
-            false,
+            None,
             true,
             false,
             false,
@@ -1578,7 +1605,7 @@ mod tests {
             &metrics,
             outside_cursor,
             false,
-            false,
+            None,
             true,
             false,
             false,
@@ -1605,7 +1632,7 @@ mod tests {
             metrics.grid_offset_y + metrics.grid_height_scaled - 1.0,
         );
         let input = gather_frame_input_from_observations(
-            &scene, &metrics, cursor, false, false, false, false, false,
+            &scene, &metrics, cursor, false, None, false, false, false,
         );
 
         let tile = input

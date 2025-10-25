@@ -6,7 +6,7 @@ use std::{
 
 use maze_defence_core::{
     BugColor, BugId, BugSnapshot, CellCoord, Command, Event, Gold, Health, NavigationFieldView,
-    PlayMode, TileCoord, TowerKind,
+    PendingWaveDifficulty, PlayMode, TileCoord, TowerKind, WaveDifficulty, WaveId,
 };
 use maze_defence_system_movement::Movement;
 use maze_defence_world::{self as world, query, World};
@@ -17,27 +17,27 @@ const SLOW_STEP_MS: u32 = 450;
 
 #[test]
 fn deterministic_replay_produces_expected_snapshot() {
-    assert_stable_replay(baseline_commands(), 0x7068_db3a_b842_daee);
+    assert_stable_replay(baseline_commands(), 0x41a8_6316_80d8_7610);
 }
 
 #[test]
 fn dense_corridor_replay_is_stable() {
-    assert_stable_replay(dense_corridor_commands(), 0xad92_2374_c397_bf39);
+    assert_stable_replay(dense_corridor_commands(), 0xb708_6dc3_a37d_3068);
 }
 
 #[test]
 fn side_hallway_diversion_replay_is_stable() {
-    assert_stable_replay(side_hallway_diversion_commands(), 0xf6c4_6052_8b02_a0fd);
+    assert_stable_replay(side_hallway_diversion_commands(), 0x0e7e_9c28_446e_a814);
 }
 
 #[test]
 fn stall_regression_replay_is_stable() {
-    assert_stable_replay(stall_regression_commands(), 0x68ed_744e_b424_8e46);
+    assert_stable_replay(stall_regression_commands(), 0x2670_e9e6_1ac7_e6c5);
 }
 
 #[test]
 fn mixed_cadence_replay_is_stable() {
-    assert_stable_replay(mixed_cadence_commands(), 0xa242_aee5_76b8_4d4);
+    assert_stable_replay(mixed_cadence_commands(), 0x59ea_e98d_7707_62f6);
 }
 
 fn assert_stable_replay(commands: Vec<Command>, expected: u64) {
@@ -520,6 +520,16 @@ enum EventRecord {
         color: (u8, u8, u8),
         health: Health,
     },
+    PendingWaveDifficultyChanged {
+        pending: PendingWaveDifficulty,
+    },
+    WaveStarted {
+        wave: WaveId,
+        difficulty: WaveDifficulty,
+        tier_effective: u32,
+        reward_multiplier: u32,
+        pressure_scalar: u32,
+    },
     TowerPlaced {
         tower: maze_defence_core::TowerId,
         kind: TowerKind,
@@ -559,6 +569,22 @@ impl From<&Event> for EventRecord {
                 cell: *cell,
                 color: (color.red(), color.green(), color.blue()),
                 health: *health,
+            },
+            Event::PendingWaveDifficultyChanged { pending } => {
+                Self::PendingWaveDifficultyChanged { pending: *pending }
+            }
+            Event::WaveStarted {
+                wave,
+                difficulty,
+                tier_effective,
+                reward_multiplier,
+                pressure_scalar,
+            } => Self::WaveStarted {
+                wave: *wave,
+                difficulty: *difficulty,
+                tier_effective: *tier_effective,
+                reward_multiplier: *reward_multiplier,
+                pressure_scalar: *pressure_scalar,
             },
             Event::TowerPlaced {
                 tower,

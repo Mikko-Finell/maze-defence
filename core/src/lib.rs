@@ -149,6 +149,24 @@ pub enum PlayMode {
     Builder,
 }
 
+/// Difficulty selections available when launching a wave.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum WaveDifficulty {
+    /// Launch the wave at the current base tier with standard rewards.
+    Normal,
+    /// Launch the wave at `tier + 1` with increased rewards and higher risk.
+    Hard,
+}
+
+/// Describes the wave difficulty currently awaiting launch.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum PendingWaveDifficulty {
+    /// No difficulty has been selected for the next wave.
+    Unset,
+    /// A difficulty selection is pending execution.
+    Selected(WaveDifficulty),
+}
+
 /// Authoritative description of a single hand-authored enemy wave.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AttackPlan {
@@ -360,6 +378,11 @@ pub enum Command {
         /// Outcome that should be applied to the world state.
         outcome: RoundOutcome,
     },
+    /// Requests that the next wave launch at the provided difficulty.
+    StartWave {
+        /// Difficulty tier selection used for the wave launch.
+        difficulty: WaveDifficulty,
+    },
 }
 
 /// Events broadcast by the world after processing commands.
@@ -400,6 +423,24 @@ pub enum Event {
     GoldChanged {
         /// Total gold owned after the adjustment.
         amount: Gold,
+    },
+    /// Reports that the pending wave difficulty changed.
+    PendingWaveDifficultyChanged {
+        /// Wave difficulty awaiting launch after the adjustment.
+        pending: PendingWaveDifficulty,
+    },
+    /// Announces that a wave launched with resolved parameters.
+    WaveStarted {
+        /// Identifier assigned to the launched wave.
+        wave: WaveId,
+        /// Difficulty selection applied to the launch.
+        difficulty: WaveDifficulty,
+        /// Effective tier applied for this wave, including Hard escalations.
+        tier_effective: u32,
+        /// Multiplier applied to gold rewards while the wave is active.
+        reward_multiplier: u32,
+        /// Scalar applied to pressure calculations for the wave contents.
+        pressure_scalar: u32,
     },
     /// Reports that the experience's difficulty tier changed.
     DifficultyTierChanged {
@@ -660,6 +701,24 @@ impl ProjectileId {
     }
 
     /// Retrieves the numeric representation of the identifier.
+    #[must_use]
+    pub const fn get(&self) -> u32 {
+        self.0
+    }
+}
+
+/// Unique identifier assigned to a launched wave.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct WaveId(u32);
+
+impl WaveId {
+    /// Creates a new wave identifier with the provided numeric value.
+    #[must_use]
+    pub const fn new(value: u32) -> Self {
+        Self(value)
+    }
+
+    /// Retrieves the numeric representation of the wave identifier.
     #[must_use]
     pub const fn get(&self) -> u32 {
         self.0

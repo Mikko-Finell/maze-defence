@@ -28,8 +28,8 @@ use towers::{footprint_for, TowerRegistry, TowerState};
 
 use maze_defence_core::{
     BugColor, BugId, CellCoord, CellPointHalf, Command, Damage, Direction, Event, Gold, Health,
-    PlayMode, ProjectileId, ReservationClaim, RoundOutcome, Target, TargetCell, TileCoord,
-    TileGrid, WELCOME_BANNER,
+    PendingWaveDifficulty, PlayMode, ProjectileId, ReservationClaim, RoundOutcome, Target,
+    TargetCell, TileCoord, TileGrid, WaveDifficulty, WaveId, WELCOME_BANNER,
 };
 
 #[cfg(any(test, feature = "tower_scaffolding"))]
@@ -82,6 +82,9 @@ pub struct World {
     navigation_dirty: bool,
     gold: Gold,
     difficulty_tier: u32,
+    pending_wave_difficulty: PendingWaveDifficulty,
+    active_wave: Option<ActiveWaveContext>,
+    next_wave_id: WaveId,
     #[cfg(any(test, feature = "tower_scaffolding"))]
     towers: TowerRegistry,
     #[cfg(any(test, feature = "tower_scaffolding"))]
@@ -90,6 +93,21 @@ pub struct World {
     tick_index: u64,
     step_quantum: Duration,
     play_mode: PlayMode,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct ActiveWaveContext {
+    id: WaveId,
+    difficulty: WaveDifficulty,
+    tier_effective: u32,
+    reward_multiplier: u32,
+    pressure_scalar: u32,
+}
+
+impl ActiveWaveContext {
+    fn reward_multiplier(&self) -> u32 {
+        self.reward_multiplier
+    }
 }
 
 impl World {
@@ -124,6 +142,9 @@ impl World {
             navigation_dirty: true,
             gold: INITIAL_GOLD,
             difficulty_tier: 0,
+            pending_wave_difficulty: PendingWaveDifficulty::Unset,
+            active_wave: None,
+            next_wave_id: WaveId::new(0),
             #[cfg(any(test, feature = "tower_scaffolding"))]
             towers: TowerRegistry::new(),
             #[cfg(any(test, feature = "tower_scaffolding"))]
@@ -187,6 +208,68 @@ impl World {
 
         self.difficulty_tier = tier;
         out_events.push(Event::DifficultyTierChanged { tier });
+    }
+
+    fn assign_pending_wave_difficulty(
+        &mut self,
+        pending: PendingWaveDifficulty,
+        out_events: &mut Vec<Event>,
+        force_event: bool,
+    ) {
+        if !force_event && self.pending_wave_difficulty == pending {
+            return;
+        }
+
+        self.pending_wave_difficulty = pending;
+        out_events.push(Event::PendingWaveDifficultyChanged { pending });
+    }
+
+    fn launch_wave(&mut self, difficulty: WaveDifficulty, out_events: &mut Vec<Event>) {
+        self.assign_pending_wave_difficulty(
+            PendingWaveDifficulty::Selected(difficulty),
+            out_events,
+            false,
+        );
+        let context = self.prepare_wave_context(difficulty);
+        self.active_wave = Some(context);
+        out_events.push(Event::WaveStarted {
+            wave: context.id,
+            difficulty: context.difficulty,
+            tier_effective: context.tier_effective,
+            reward_multiplier: context.reward_multiplier,
+            pressure_scalar: context.pressure_scalar,
+        });
+    }
+
+    fn prepare_wave_context(&mut self, difficulty: WaveDifficulty) -> ActiveWaveContext {
+        let wave = self.allocate_wave_identifier();
+        let tier_effective = match difficulty {
+            WaveDifficulty::Normal => self.difficulty_tier,
+            WaveDifficulty::Hard => self.difficulty_tier.saturating_add(1),
+        };
+        let reward_multiplier = tier_effective.saturating_add(1);
+        let pressure_scalar = tier_effective.saturating_add(1);
+        ActiveWaveContext {
+            id: wave,
+            difficulty,
+            tier_effective,
+            reward_multiplier,
+            pressure_scalar,
+        }
+    }
+
+    fn allocate_wave_identifier(&mut self) -> WaveId {
+        let wave = self.next_wave_id;
+        let next = wave.get().saturating_add(1);
+        self.next_wave_id = WaveId::new(next);
+        wave
+    }
+
+    fn reward_multiplier(&self) -> u32 {
+        self.active_wave
+            .as_ref()
+            .map(ActiveWaveContext::reward_multiplier)
+            .unwrap_or_else(|| self.difficulty_tier.saturating_add(1))
     }
 
     fn resolve_round_win(&mut self, out_events: &mut Vec<Event>) {
@@ -505,6 +588,7 @@ pub fn apply(world: &mut World, command: Command, out_events: &mut Vec<Event>) {
             world.clear_bugs();
             world.rebuild_navigation_field_if_dirty();
             world.update_difficulty_tier(0, out_events);
+            world.assign_pending_wave_difficulty(PendingWaveDifficulty::Unset, out_events, true);
         }
         Command::Tick { dt } => {
             if world.play_mode == PlayMode::Builder {
@@ -616,6 +700,9 @@ pub fn apply(world: &mut World, command: Command, out_events: &mut Vec<Event>) {
 
             #[cfg(not(any(test, feature = "tower_scaffolding")))]
             let _ = tower;
+        }
+        Command::StartWave { difficulty } => {
+            world.launch_wave(difficulty, out_events);
         }
         Command::ResolveRound { outcome } => match outcome {
             RoundOutcome::Win => world.resolve_round_win(out_events),
@@ -771,7 +858,7 @@ impl World {
             self.occupancy.vacate(cell);
             self.remove_bug_at_index(index);
             let base_reward = Gold::new(1);
-            let multiplier = self.difficulty_tier.saturating_add(1);
+            let multiplier = self.reward_multiplier();
             let scaled_reward = Gold::new(base_reward.get().saturating_mul(multiplier));
             let updated = self.gold.saturating_add(scaled_reward);
             self.update_gold(updated, out_events);
@@ -1125,8 +1212,9 @@ fn cell_rect_contains(region: CellRect, cell: CellCoord) -> bool {
 pub mod query {
     use super::{Bug, World};
     use maze_defence_core::{
-        BugSnapshot, BugView, CellCoord, Goal, Gold, NavigationFieldView, OccupancyView, PlayMode,
-        ProjectileSnapshot, ReservationLedgerView, Target, TileGrid,
+        BugSnapshot, BugView, CellCoord, Goal, Gold, NavigationFieldView, OccupancyView,
+        PendingWaveDifficulty, PlayMode, ProjectileSnapshot, ReservationLedgerView, Target,
+        TileGrid,
     };
 
     use maze_defence_core::structures::{Wall as CellWall, WallView as CellWallView};
@@ -1152,6 +1240,12 @@ pub mod query {
     #[must_use]
     pub fn difficulty_tier(world: &World) -> u32 {
         world.difficulty_tier
+    }
+
+    /// Reports the pending wave difficulty stored inside the world.
+    #[must_use]
+    pub fn pending_wave_difficulty(world: &World) -> PendingWaveDifficulty {
+        world.pending_wave_difficulty
     }
 
     /// Retrieves the welcome banner that adapters may display to players.
@@ -1902,8 +1996,9 @@ fn advance_cell(
 mod tests {
     use super::*;
     use maze_defence_core::{
-        BugColor, BugId, BugSnapshot, Direction, Goal, Health, NavigationFieldView, PlayMode,
-        ProjectileId, ProjectileSnapshot, TowerCooldownSnapshot, TowerId, TowerKind,
+        BugColor, BugId, BugSnapshot, Direction, Goal, Health, NavigationFieldView,
+        PendingWaveDifficulty, PlayMode, ProjectileId, ProjectileSnapshot, TowerCooldownSnapshot,
+        TowerId, TowerKind, WaveDifficulty, WaveId,
     };
 
     use std::{
@@ -1973,6 +2068,15 @@ mod tests {
             events,
         );
         events.clear();
+    }
+
+    fn strip_pending_wave_events(events: &mut Vec<Event>) {
+        events.retain(|event| {
+            !matches!(
+                event,
+                Event::PendingWaveDifficultyChanged { .. } | Event::WaveStarted { .. }
+            )
+        });
     }
 
     fn gold_after_bug_death_at_tier(tier: u32) -> Gold {
@@ -2076,6 +2180,102 @@ mod tests {
     #[test]
     fn bug_kill_reward_saturates_at_multiplier_limit() {
         assert_eq!(gold_after_bug_death_at_tier(u32::MAX), Gold::new(u32::MAX));
+    }
+
+    #[test]
+    fn hard_wave_scales_bug_reward_using_effective_tier() {
+        let mut world = World::new();
+        let mut events = Vec::new();
+
+        apply(
+            &mut world,
+            Command::PlaceTower {
+                kind: TowerKind::Basic,
+                origin: CellCoord::new(2, 2),
+            },
+            &mut events,
+        );
+
+        let tower = events
+            .iter()
+            .find_map(|event| match event {
+                Event::TowerPlaced { tower, .. } => Some(*tower),
+                _ => None,
+            })
+            .expect("tower placement should emit placement event");
+        events.clear();
+
+        ensure_attack_mode(&mut world, &mut events);
+
+        world.set_gold_for_tests(Gold::ZERO);
+        world.difficulty_tier = 3;
+
+        apply(
+            &mut world,
+            Command::StartWave {
+                difficulty: WaveDifficulty::Hard,
+            },
+            &mut events,
+        );
+        strip_pending_wave_events(&mut events);
+
+        let spawner = query::bug_spawners(&world)
+            .into_iter()
+            .next()
+            .expect("expected bug spawner for combat");
+        let step_ms = world_step_ms(&world);
+        apply(
+            &mut world,
+            Command::SpawnBug {
+                spawner,
+                color: BugColor::from_rgb(0x33, 0x44, 0x55),
+                health: Health::new(1),
+                step_ms,
+            },
+            &mut events,
+        );
+
+        let bug_id = match events.as_slice() {
+            [Event::BugSpawned { bug_id, .. }] => *bug_id,
+            other => panic!("unexpected events when spawning bug: {other:?}"),
+        };
+        events.clear();
+
+        apply(
+            &mut world,
+            Command::FireProjectile {
+                tower,
+                target: bug_id,
+            },
+            &mut events,
+        );
+
+        let projectile = match events.as_slice() {
+            [Event::ProjectileFired { projectile, .. }] => *projectile,
+            other => panic!("unexpected events when firing projectile: {other:?}"),
+        };
+        events.clear();
+
+        let travel_time_ms = world
+            .projectiles
+            .get(&projectile)
+            .expect("projectile state must exist")
+            .travel_time_ms;
+        let travel_time = Duration::from_millis(
+            u64::try_from(travel_time_ms).expect("projectile travel time fits in u64"),
+        );
+
+        apply(&mut world, Command::Tick { dt: travel_time }, &mut events);
+
+        let amount = events
+            .iter()
+            .find_map(|event| match event {
+                Event::GoldChanged { amount } => Some(*amount),
+                _ => None,
+            })
+            .expect("bug death should update gold");
+
+        assert_eq!(amount, Gold::new(5));
     }
 
     #[test]
@@ -2199,6 +2399,102 @@ mod tests {
         assert!(events
             .iter()
             .all(|event| !matches!(event, Event::DifficultyTierChanged { .. })));
+    }
+
+    #[test]
+    fn start_wave_records_pending_difficulty_and_emits_event() {
+        let mut world = World::new();
+        let mut events = Vec::new();
+
+        apply(
+            &mut world,
+            Command::StartWave {
+                difficulty: WaveDifficulty::Hard,
+            },
+            &mut events,
+        );
+
+        assert_eq!(
+            query::pending_wave_difficulty(&world),
+            PendingWaveDifficulty::Selected(WaveDifficulty::Hard)
+        );
+        let pending = events.iter().any(|event| {
+            matches!(
+                event,
+                Event::PendingWaveDifficultyChanged {
+                    pending: PendingWaveDifficulty::Selected(WaveDifficulty::Hard)
+                }
+            )
+        });
+        assert!(pending, "expected pending difficulty event");
+        let wave_started = events.iter().find_map(|event| match event {
+            Event::WaveStarted {
+                wave,
+                difficulty,
+                tier_effective,
+                reward_multiplier,
+                pressure_scalar,
+            } => Some((
+                *wave,
+                *difficulty,
+                *tier_effective,
+                *reward_multiplier,
+                *pressure_scalar,
+            )),
+            _ => None,
+        });
+        let (wave_id, difficulty, tier_effective, reward_multiplier, pressure_scalar) =
+            wave_started.expect("wave start event must be emitted");
+        assert_eq!(wave_id, WaveId::new(0));
+        assert_eq!(difficulty, WaveDifficulty::Hard);
+        assert_eq!(tier_effective, 1);
+        assert_eq!(reward_multiplier, 2);
+        assert_eq!(pressure_scalar, 2);
+        let active_wave = world
+            .active_wave
+            .expect("launching a wave should record active context");
+        assert_eq!(active_wave.id, wave_id);
+        assert_eq!(active_wave.difficulty, WaveDifficulty::Hard);
+        assert_eq!(active_wave.reward_multiplier, reward_multiplier);
+    }
+
+    #[test]
+    fn configuring_tile_grid_resets_pending_wave_difficulty() {
+        let mut world = World::new();
+        let mut events = Vec::new();
+
+        apply(
+            &mut world,
+            Command::StartWave {
+                difficulty: WaveDifficulty::Normal,
+            },
+            &mut events,
+        );
+        events.clear();
+
+        apply(
+            &mut world,
+            Command::ConfigureTileGrid {
+                columns: TileCoord::new(10),
+                rows: TileCoord::new(10),
+                tile_length: 100.0,
+                cells_per_tile: 1,
+            },
+            &mut events,
+        );
+
+        assert_eq!(
+            query::pending_wave_difficulty(&world),
+            PendingWaveDifficulty::Unset
+        );
+        assert!(events.iter().any(|event| {
+            matches!(
+                event,
+                Event::PendingWaveDifficultyChanged {
+                    pending: PendingWaveDifficulty::Unset
+                }
+            )
+        }));
     }
 
     #[test]
@@ -2481,6 +2777,7 @@ mod tests {
             &mut events,
         );
 
+        strip_pending_wave_events(&mut events);
         assert!(events.is_empty());
 
         let expected_columns = total_cell_columns(TileCoord::new(3), 1);
@@ -2571,6 +2868,7 @@ mod tests {
             &mut events,
         );
 
+        strip_pending_wave_events(&mut events);
         assert!(events.is_empty());
 
         let expected_width = total_cell_columns(TileCoord::new(4), 2);
@@ -2624,6 +2922,7 @@ mod tests {
             &mut events,
         );
 
+        strip_pending_wave_events(&mut events);
         assert!(events.is_empty());
 
         let updated = query::navigation_field(&world);
@@ -4567,6 +4866,7 @@ mod tests {
             &mut events,
         );
 
+        strip_pending_wave_events(&mut events);
         assert!(events.is_empty());
         assert_eq!(query::play_mode(&world), PlayMode::Builder);
         assert!(query::bug_view(&world).into_vec().is_empty());
@@ -5086,6 +5386,7 @@ mod tests {
         assert_eq!(tile_grid.columns(), expected_columns);
         assert_eq!(tile_grid.rows(), expected_rows);
         assert_eq!(tile_grid.tile_length(), expected_tile_length);
+        strip_pending_wave_events(&mut events);
         assert!(events.is_empty());
     }
 
@@ -5120,6 +5421,7 @@ mod tests {
             assert!(bug.cell.row() >= interior_start_row);
             assert!(bug.cell.row() < interior_end_row);
         }
+        strip_pending_wave_events(&mut events);
         assert!(events.is_empty());
     }
 
@@ -5141,6 +5443,7 @@ mod tests {
 
         let bugs = query::bug_view(&world).into_vec();
         assert!(bugs.is_empty());
+        strip_pending_wave_events(&mut events);
         assert!(events.is_empty());
     }
 
@@ -5423,6 +5726,7 @@ mod tests {
         let actual_columns: Vec<u32> = target_cells.iter().map(|cell| cell.column()).collect();
         assert_eq!(actual_columns, expected_columns);
         assert!(target_cells.iter().all(|cell| cell.row() == expected_row));
+        strip_pending_wave_events(&mut events);
         assert!(events.is_empty());
     }
 
@@ -5458,6 +5762,7 @@ mod tests {
         let actual_columns: Vec<u32> = target_cells.iter().map(|cell| cell.column()).collect();
         assert_eq!(actual_columns, expected_columns);
         assert!(target_cells.iter().all(|cell| cell.row() == expected_row));
+        strip_pending_wave_events(&mut events);
         assert!(events.is_empty());
     }
 
@@ -5478,6 +5783,7 @@ mod tests {
         );
 
         assert!(query::target(&world).cells().is_empty());
+        strip_pending_wave_events(&mut events);
         assert!(events.is_empty());
     }
 
@@ -5497,6 +5803,7 @@ mod tests {
             &mut events,
         );
 
+        strip_pending_wave_events(&mut events);
         assert!(events.is_empty());
 
         let goal = query::goal_for(&world, CellCoord::new(0, 0));
@@ -6047,7 +6354,7 @@ mod tests {
         assert_eq!(first, second, "tower replay diverged between runs");
 
         let fingerprint = first.fingerprint();
-        let expected = 0x9ce8_45fc_6b4f_81d2;
+        let expected = 0x77da_db50_6ee7_9b88;
         assert_eq!(
             fingerprint, expected,
             "tower replay fingerprint mismatch: {fingerprint:#x}"
@@ -6208,6 +6515,9 @@ mod tests {
         RoundLost {
             bug: BugId,
         },
+        PendingWaveDifficultyChanged {
+            pending: PendingWaveDifficulty,
+        },
     }
 
     impl From<Event> for EventRecord {
@@ -6237,6 +6547,9 @@ mod tests {
                     Self::TowerRemovalRejected { tower, reason }
                 }
                 Event::RoundLost { bug } => Self::RoundLost { bug },
+                Event::PendingWaveDifficultyChanged { pending } => {
+                    Self::PendingWaveDifficultyChanged { pending }
+                }
                 other => panic!("unexpected event emitted during tower replay: {other:?}"),
             }
         }
