@@ -386,6 +386,7 @@ dependencies = [
  "maze-defence-system-spawning",
  "maze-defence-system-tower-combat",
  "maze-defence-system-tower-targeting",
+ "maze-defence-system-wave-generation",
  "maze-defence-world",
  "serde",
 ]
