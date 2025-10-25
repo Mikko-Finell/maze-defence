@@ -41,9 +41,9 @@ configuration surface that every knob flows through.
 - [x] Replace any scattered config files with direct construction of `PressureTuning` in
   adapters. Document inline that the struct is the only supported entry point for
   tweaking wave behaviour.
-- [ ] Implement deterministic seeding per §1.3 (hash of `(game_seed, level_id, wave_index,
+- [x] Implement deterministic seeding per §1.3 (hash of `(game_seed, level_id, wave_index,
   difficulty)`) and keep the RNG in the `PressureV2` struct.
-- [ ] Introduce telemetry record builders for the required streams (`difficulty_latents`,
+- [x] Introduce telemetry record builders for the required streams (`difficulty_latents`,
   `species_merge`, `eta_scaling`, `cadence_compression`) even if they currently emit
   placeholder values. Ensure the RNG consumption order is fixed and documented in
   comments next to each draw.
