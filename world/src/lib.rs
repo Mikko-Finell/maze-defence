@@ -184,7 +184,7 @@ fn default_spawn_patches() -> Vec<SpawnPatchDescriptor> {
 
 fn default_pressure_config() -> PressureConfig {
     PressureConfig::new(
-        PressureCurve::new(Pressure::new(1_200), Pressure::new(250)),
+        PressureCurve::new(Pressure::new(35), Pressure::new(5)),
         DirichletWeight::new(NonZeroU32::new(2).expect("non-zero concentration")),
         BurstSchedulingConfig::new(
             NonZeroU32::new(20).expect("non-zero burst size"),
@@ -2310,8 +2310,8 @@ mod tests {
         let curve = config.curve();
         let burst = config.burst_scheduling();
 
-        assert_eq!(curve.mean().get(), 1_200);
-        assert_eq!(curve.deviation().get(), 250);
+        assert_eq!(curve.mean().get(), 35);
+        assert_eq!(curve.deviation().get(), 5);
         assert_eq!(config.dirichlet_beta().get().get(), 2);
         assert_eq!(burst.nominal_burst_size().get(), 20);
         assert_eq!(burst.burst_count_max().get(), 8);

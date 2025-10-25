@@ -433,7 +433,7 @@ mod tests {
 
     fn default_pressure_config() -> PressureConfig {
         PressureConfig::new(
-            maze_defence_core::PressureCurve::new(Pressure::new(1_200), Pressure::new(250)),
+            maze_defence_core::PressureCurve::new(Pressure::new(35), Pressure::new(5)),
             DirichletWeight::new(NonZeroU32::new(2).expect("dirichlet")),
             maze_defence_core::BurstSchedulingConfig::new(
                 NonZeroU32::new(10).expect("burst size"),
@@ -464,6 +464,38 @@ mod tests {
             [Event::AttackPlanReady { plan, .. }] => plan.clone(),
             _ => panic!("expected AttackPlanReady event"),
         }
+    }
+
+    fn world_default_plan(difficulty_tier: u32) -> AttackPlan {
+        let species = vec![make_species(
+            0,
+            0,
+            1_500,
+            2,
+            10_000,
+            (300, 600),
+            (2_000, 8_000),
+        )];
+        let table = SpeciesTableView::new(SpeciesTableVersion::new(1), &species);
+        let patches = patch_descriptors();
+        let patch_view = SpawnPatchTableView::new(&patches);
+        let config = default_pressure_config();
+        let context = WaveSeedContext::new(0, WaveId::new(0), difficulty_tier);
+        let mut system = WaveGeneration::default();
+        let mut events = Vec::new();
+        let command = Command::GenerateAttackPlan {
+            wave: WaveId::new(0),
+            difficulty: WaveDifficulty::Normal,
+        };
+        system.handle(&[command], table, patch_view, &config, context, &mut events);
+        match events.as_slice() {
+            [Event::AttackPlanReady { plan, .. }] => plan.clone(),
+            _ => panic!("expected AttackPlanReady event"),
+        }
+    }
+
+    fn total_bugs(plan: &AttackPlan) -> u32 {
+        plan.bursts().iter().map(|burst| burst.count().get()).sum()
     }
 
     #[test]
@@ -512,6 +544,18 @@ mod tests {
         let normal = sample_plan(WaveDifficulty::Normal);
         let hard = sample_plan(WaveDifficulty::Hard);
         assert!(hard.pressure().get() >= normal.pressure().get());
+    }
+
+    #[test]
+    fn default_tier_zero_wave_spawns_expected_bug_volume() {
+        let plan = world_default_plan(0);
+        assert_eq!(total_bugs(&plan), 20);
+    }
+
+    #[test]
+    fn default_tier_one_wave_spawns_expected_bug_volume() {
+        let plan = world_default_plan(1);
+        assert_eq!(total_bugs(&plan), 54);
     }
 
     #[test]
