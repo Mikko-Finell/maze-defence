@@ -117,7 +117,7 @@ This phase migrates the wave pipeline to the normative rules in `pressure-spec.m
    * Add a `systems/wave_generation` crate that handles `Command::GenerateAttackPlan` by loading the world queries, deriving stream seeds via the documented hash labels, and executing the spec: pressure sampling, Dirichlet split, floor-only budget conversion, burst splitting, cadence/gap draws, and patch sampling order.
    * Supply exhaustive unit tests that assert deterministic replay, budget closure, burst splitting, timing determinism, safety clamps, and RNG stream reproducibility using scripted seeds and config fixtures.
 4. **Adapter/world orchestration for generated plans** (split into sub tasks)
-   * [TODO] Adjust the CLI adapter so difficulty buttons enqueue plan generation before launching a wave, holding `Event::AttackPlanReady` snapshots for UI previews (pressure totals, per-species counts, burst cadence windows).
+  * [DONE] Adjust the CLI adapter so difficulty buttons enqueue plan generation before launching a wave, holding `Event::AttackPlanReady` snapshots for UI previews (pressure totals, per-species counts, burst cadence windows).
    * [TODO] Update `world::apply` to persist the generated plan keyed by `wave_id`, include plan metadata in `Event::WaveStarted`, and guarantee replays never re-sample randomness when resuming or inspecting old waves.
    * [TODO] Provide harness tests that drive `GenerateAttackPlan → StartWave → ResolveRound` loops across Normal/Hard selections to prove message ordering stays deterministic.
 5. **Spawning consumption of AttackPlans** [TODO]
