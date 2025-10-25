@@ -74,13 +74,13 @@ Objective: enable a trivial but repeatable “wave → kill → reward → build
 
 **Phase 2 progression roadmap**
 
-1. **Expose difficulty buttons in the UI** [TODO]
+1. **Expose difficulty buttons in the UI** [DONE]
    * Extend the adapter panel layout so it renders side-by-side **Normal** and **Hard** buttons before the wave trigger controls.
    * Wire button presses to emit a new `Command::StartWave { difficulty }`, queuing it like existing manual actions so determinism is preserved.
-2. **Record pending difficulty inside the world** [TODO]
+2. **Record pending difficulty inside the world** [DONE]
    * Introduce a `PendingWaveDifficulty` enum stored on `maze_defence_world::World` and surface it through `world::query::pending_wave_difficulty` alongside an `Event::PendingWaveDifficultyChanged`.
    * Ensure configuration commands (`Command::ConfigureTileGrid`, resets) initialise the field and emit change events so adapters remain message-driven.
-3. **Resolve wave launches based on difficulty** [TODO]
+3. **Resolve wave launches based on difficulty** [DONE]
    * Update the spawning system to consume the new enum and treat **Hard** as `tier + 1` when generating wave contents and gold multipliers, keeping **Normal** unchanged.
    * When `Command::StartWave` is applied, compute the effective parameters (difficulty, `tier_effective`, `reward_multiplier`, any pressure scalar) and emit a factual `Event::WaveStarted { … }` carrying them alongside a `wave_id` so downstream systems can react without re-querying.
 4. **Apply Hard victory promotions** [TODO]

@@ -13,7 +13,7 @@ use anyhow::Result as AnyResult;
 use glam::Vec2;
 use maze_defence_core::{
     BugId, CellCoord, CellRect, Gold, PlacementError, PlayMode, ProjectileId, RemovalError,
-    TowerId, TowerKind,
+    TowerId, TowerKind, WaveDifficulty,
 };
 use std::{error::Error, fmt, time::Duration};
 
@@ -226,8 +226,8 @@ impl GroundSpriteTiles {
 pub struct FrameInput {
     /// Whether the adapter detected a toggle press on this frame.
     pub mode_toggle: bool,
-    /// Whether the adapter requested the next wave to start on this frame.
-    pub spawn_wave: bool,
+    /// Difficulty selection requested for the next wave launch, if any.
+    pub start_wave: Option<WaveDifficulty>,
     /// Cursor position expressed in world units, clamped to the playable grid bounds.
     pub cursor_world_space: Option<Vec2>,
     /// Cursor position snapped to tile coordinates with adapter-provided subdivision resolution.

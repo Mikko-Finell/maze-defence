@@ -9,7 +9,7 @@ use macroquad::{
     math::{RectOffset, Vec2},
     ui::{hash, Ui},
 };
-use maze_defence_core::PlayMode;
+use maze_defence_core::{PlayMode, WaveDifficulty};
 use maze_defence_rendering::{GoldPresentation, TierPresentation};
 
 /// Snapshot of the control panel's UI layout and data for the current frame.
@@ -30,12 +30,21 @@ pub(crate) struct ControlPanelUiContext {
     pub tier: Option<TierPresentation>,
 }
 
-/// Renders the control panel's interactive elements for the current frame.
-///
-/// Returns `true` when the toggle button was pressed this frame.
-/// The roadmap initially wires this hook without widgets; later stages populate
-/// it with buttons and labels while keeping UI concerns scoped to this module.
-pub(crate) fn draw_control_panel_ui(ui: &mut Ui, context: ControlPanelUiContext) -> bool {
+/// Captures the UI interactions emitted while drawing the control panel.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct ControlPanelUiResult {
+    /// Whether the play-mode toggle button was pressed this frame.
+    pub mode_toggle: bool,
+    /// Difficulty selected for the next wave launch, if any.
+    pub start_wave: Option<WaveDifficulty>,
+}
+
+/// Renders the control panel's interactive elements for the current frame and
+/// returns the resulting interactions.
+pub(crate) fn draw_control_panel_ui(
+    ui: &mut Ui,
+    context: ControlPanelUiContext,
+) -> ControlPanelUiResult {
     let mut skin = ui.default_skin();
     skin.margin = 0.0;
 
@@ -80,7 +89,7 @@ pub(crate) fn draw_control_panel_ui(ui: &mut Ui, context: ControlPanelUiContext)
 
     ui.push_skin(&skin);
 
-    let mut mode_toggle = false;
+    let mut result = ControlPanelUiResult::default();
     let _ = ui.window(hash!("control_panel"), context.origin, context.size, |ui| {
         let tier_text = match context.tier {
             Some(tier) => format!("Tier: {}", tier.tier()),
@@ -99,13 +108,23 @@ pub(crate) fn draw_control_panel_ui(ui: &mut Ui, context: ControlPanelUiContext)
             PlayMode::Builder => "Mode: Builder",
         };
         ui.label(None, mode_label);
+        ui.label(None, "Select the next wave difficulty.");
+
+        if ui.button(None, "Normal") {
+            result.start_wave = Some(WaveDifficulty::Normal);
+        }
+        ui.same_line(12.0);
+        if ui.button(None, "Hard") {
+            result.start_wave = Some(WaveDifficulty::Hard);
+        }
+
         ui.label(None, "Use the button below to switch modes.");
 
         if ui.button(None, "Toggle Mode") {
-            mode_toggle = true;
+            result.mode_toggle = true;
         }
     });
 
     ui.pop_skin();
-    mode_toggle
+    result
 }

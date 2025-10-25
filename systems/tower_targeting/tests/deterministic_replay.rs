@@ -5,7 +5,8 @@ use std::{
 
 use maze_defence_core::{
     BugColor, BugId, CellCoord, CellPoint, CellRect, Command, Event, Gold, Health,
-    NavigationFieldView, PlayMode, TileCoord, TowerId, TowerKind, TowerTarget,
+    NavigationFieldView, PendingWaveDifficulty, PlayMode, TileCoord, TowerId, TowerKind,
+    TowerTarget, WaveDifficulty, WaveId,
 };
 use maze_defence_system_tower_targeting::TowerTargeting;
 use maze_defence_world::{self as world, query, World};
@@ -21,7 +22,7 @@ fn deterministic_replay_handles_equidistant_bugs_and_builder_mode() {
     assert_eq!(first.assignments.len(), script_len);
 
     let fingerprint = first.fingerprint();
-    let expected = 0x8abd_8303_019d_0521;
+    let expected = 0x1eb2_ba0e_13a2_9bce;
     assert_eq!(
         fingerprint, expected,
         "fingerprint mismatch: {fingerprint:#x}"
@@ -293,6 +294,16 @@ enum EventRecord {
     GoldChanged {
         amount: Gold,
     },
+    PendingWaveDifficultyChanged {
+        pending: PendingWaveDifficulty,
+    },
+    WaveStarted {
+        wave: WaveId,
+        difficulty: WaveDifficulty,
+        tier_effective: u32,
+        reward_multiplier: u32,
+        pressure_scalar: u32,
+    },
 }
 
 impl From<Event> for EventRecord {
@@ -320,6 +331,22 @@ impl From<Event> for EventRecord {
                 health,
             },
             Event::GoldChanged { amount } => Self::GoldChanged { amount },
+            Event::PendingWaveDifficultyChanged { pending } => {
+                Self::PendingWaveDifficultyChanged { pending }
+            }
+            Event::WaveStarted {
+                wave,
+                difficulty,
+                tier_effective,
+                reward_multiplier,
+                pressure_scalar,
+            } => Self::WaveStarted {
+                wave,
+                difficulty,
+                tier_effective,
+                reward_multiplier,
+                pressure_scalar,
+            },
             other => panic!("unexpected event during targeting replay: {other:?}"),
         }
     }
