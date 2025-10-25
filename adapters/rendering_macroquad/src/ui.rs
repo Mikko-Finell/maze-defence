@@ -93,6 +93,8 @@ pub(crate) fn draw_control_panel_ui(
 
     let selection = context.difficulty_selection;
 
+    let max_label_width = (context.size.x - 32.0).max(0.0);
+
     let mut result = ControlPanelUiResult::default();
     let _ = ui.window(hash!("control_panel"), context.origin, context.size, |ui| {
         let tier_text = match context.tier {
@@ -112,7 +114,7 @@ pub(crate) fn draw_control_panel_ui(
             PlayMode::Builder => "Mode: Builder",
         };
         ui.label(None, mode_label);
-        ui.label(None, "Select the next wave difficulty.");
+        label_wrapped(ui, "Select the next wave difficulty.", max_label_width);
 
         let mut normal_label = "Normal".to_string();
         let mut hard_label = "Hard".to_string();
@@ -145,20 +147,23 @@ pub(crate) fn draw_control_panel_ui(
         if ui.button(None, normal_label.as_str()) {
             result.start_wave = Some(WaveDifficulty::Normal);
         }
-        ui.same_line(12.0);
         if ui.button(None, hard_label.as_str()) {
             result.start_wave = Some(WaveDifficulty::Hard);
         }
 
         if let Some(text) = normal_preview {
-            ui.label(None, text.as_str());
+            label_wrapped(ui, text.as_str(), max_label_width);
         }
         if let Some(text) = hard_preview {
-            ui.label(None, text.as_str());
-            ui.label(None, "Hard victory grants +1 permanent tier.");
+            label_wrapped(ui, text.as_str(), max_label_width);
+            label_wrapped(
+                ui,
+                "Hard victory grants +1 permanent tier.",
+                max_label_width,
+            );
         }
 
-        ui.label(None, "Use the button below to switch modes.");
+        label_wrapped(ui, "Use the button below to switch modes.", max_label_width);
 
         if ui.button(None, "Toggle Mode") {
             result.mode_toggle = true;
@@ -167,4 +172,46 @@ pub(crate) fn draw_control_panel_ui(
 
     ui.pop_skin();
     result
+}
+
+fn label_wrapped(ui: &mut Ui, text: &str, max_width: f32) {
+    for line in wrap_text(ui, text, max_width) {
+        ui.label(None, line.as_str());
+    }
+}
+
+fn wrap_text(ui: &mut Ui, text: &str, max_width: f32) -> Vec<String> {
+    let effective_width = max_width.max(0.0);
+    if effective_width <= f32::EPSILON {
+        return vec![text.to_string()];
+    }
+
+    let mut lines = Vec::new();
+    let mut current_line = String::new();
+
+    for word in text.split_whitespace() {
+        let candidate = if current_line.is_empty() {
+            word.to_string()
+        } else {
+            format!("{} {}", current_line, word)
+        };
+
+        let candidate_width = ui.calc_size(candidate.as_str()).x;
+        if candidate_width <= effective_width || current_line.is_empty() {
+            current_line = candidate;
+        } else {
+            lines.push(current_line);
+            current_line = word.to_string();
+        }
+    }
+
+    if !current_line.is_empty() {
+        lines.push(current_line);
+    }
+
+    if lines.is_empty() {
+        lines.push(String::new());
+    }
+
+    lines
 }
