@@ -906,8 +906,19 @@ pub enum Command {
         /// Difficulty selection used to resolve the plan parameters.
         difficulty: WaveDifficulty,
     },
+    /// Caches a generated attack plan inside the world for later reuse.
+    CacheAttackPlan {
+        /// Identifier of the wave associated with the cached plan.
+        wave: WaveId,
+        /// Difficulty that produced the cached plan.
+        difficulty: WaveDifficulty,
+        /// Canonical plan describing the wave contents.
+        plan: AttackPlan,
+    },
     /// Requests that the next wave launch at the provided difficulty.
     StartWave {
+        /// Identifier of the wave to launch.
+        wave: WaveId,
         /// Difficulty tier selection used for the wave launch.
         difficulty: WaveDifficulty,
     },
@@ -983,6 +994,12 @@ pub enum Event {
         reward_multiplier: u32,
         /// Scalar applied to pressure calculations for the wave contents.
         pressure_scalar: u32,
+        /// Total pressure budget contained within the cached attack plan.
+        plan_pressure: Pressure,
+        /// Version of the species table used when generating the cached plan.
+        plan_species_table_version: SpeciesTableVersion,
+        /// Total number of bursts scheduled by the cached plan.
+        plan_burst_count: u32,
     },
     /// Reports that a Hard wave victory granted a permanent tier promotion.
     HardWinAchieved {
