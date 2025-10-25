@@ -105,7 +105,7 @@ This phase migrates the wave pipeline to the normative rules in `pressure-spec.m
 
 **Phase 3 progression roadmap**
 
-1. **Canonise pressure data contracts in `core`** [TODO]
+1. **Canonise pressure data contracts in `core`** [DONE]
    * Introduce `AttackPlan`, `BurstPlan`, `SpeciesId`, `SpawnPatchId`, and fixed-point weight/config structs exactly mirroring the spec (pressure units in integers, milliseconds for timing, fixed-point scale S = 1000).
    * Extend `Command`/`Event` so the adapter can request plan generation (`Command::GenerateAttackPlan { wave_id, difficulty }`) and receive results (`Event::AttackPlanReady { wave_id, plan }`) without violating message discipline.
    * Document RNG stream labels and serialization invariants alongside the new types so downstream crates cannot deviate from the canonical ordering.

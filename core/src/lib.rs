@@ -167,29 +167,475 @@ pub enum PendingWaveDifficulty {
     Selected(WaveDifficulty),
 }
 
-/// Authoritative description of a single hand-authored enemy wave.
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// Fixed-point scaling factor S used by pressure weights (per the pressure spec).
+pub const PRESSURE_FIXED_POINT_SCALE: u32 = 1_000;
+
+/// Unique identifier assigned to a species entry in the wave generation tables.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct SpeciesId(u32);
+
+impl SpeciesId {
+    /// Creates a new species identifier from the provided numeric value.
+    #[must_use]
+    pub const fn new(value: u32) -> Self {
+        Self(value)
+    }
+
+    /// Returns the numeric representation of the species identifier.
+    #[must_use]
+    pub const fn get(&self) -> u32 {
+        self.0
+    }
+}
+
+/// Unique identifier assigned to a spawn patch descriptor.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct SpawnPatchId(u32);
+
+impl SpawnPatchId {
+    /// Creates a new patch identifier from the provided numeric value.
+    #[must_use]
+    pub const fn new(value: u32) -> Self {
+        Self(value)
+    }
+
+    /// Returns the numeric representation of the patch identifier.
+    #[must_use]
+    pub const fn get(&self) -> u32 {
+        self.0
+    }
+}
+
+/// Identifier describing the authoritative version of the species table.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct SpeciesTableVersion(u32);
+
+impl SpeciesTableVersion {
+    /// Creates a new species table version token.
+    #[must_use]
+    pub const fn new(value: u32) -> Self {
+        Self(value)
+    }
+
+    /// Returns the numeric representation of the version token.
+    #[must_use]
+    pub const fn get(&self) -> u32 {
+        self.0
+    }
+}
+
+/// Integer pressure value sampled for a wave.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct Pressure(u32);
+
+impl Pressure {
+    /// Creates a new pressure value expressed in integer pressure units.
+    #[must_use]
+    pub const fn new(value: u32) -> Self {
+        Self(value)
+    }
+
+    /// Returns the stored pressure value.
+    #[must_use]
+    pub const fn get(&self) -> u32 {
+        self.0
+    }
+
+    /// Returns `true` when the pressure is zero.
+    #[must_use]
+    pub const fn is_zero(&self) -> bool {
+        self.0 == 0
+    }
+
+    /// Multiplies the pressure by the provided factor using saturating arithmetic.
+    #[must_use]
+    pub const fn saturating_mul(self, factor: u32) -> Self {
+        Self(self.0.saturating_mul(factor))
+    }
+}
+
+/// Fixed-point weight representing the pressure cost of spawning a single unit.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct PressureWeight(NonZeroU32);
+
+impl PressureWeight {
+    /// Creates a new weight from a fixed-point integer scaled by [`PRESSURE_FIXED_POINT_SCALE`].
+    #[must_use]
+    pub const fn new(value: NonZeroU32) -> Self {
+        Self(value)
+    }
+
+    /// Returns the stored fixed-point weight.
+    #[must_use]
+    pub const fn get(&self) -> NonZeroU32 {
+        self.0
+    }
+}
+
+/// Inclusive cadence window (milliseconds between bug spawns) for a species.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CadenceRange {
+    min_ms: NonZeroU32,
+    max_ms: NonZeroU32,
+}
+
+impl CadenceRange {
+    /// Creates a cadence range expressed in integer milliseconds.
+    #[must_use]
+    pub const fn new(min_ms: NonZeroU32, max_ms: NonZeroU32) -> Self {
+        Self { min_ms, max_ms }
+    }
+
+    /// Lower bound of the cadence range in milliseconds.
+    #[must_use]
+    pub const fn min_ms(&self) -> NonZeroU32 {
+        self.min_ms
+    }
+
+    /// Upper bound of the cadence range in milliseconds.
+    #[must_use]
+    pub const fn max_ms(&self) -> NonZeroU32 {
+        self.max_ms
+    }
+}
+
+/// Inclusive gap window (milliseconds) separating bursts of a species.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BurstGapRange {
+    min_ms: NonZeroU32,
+    max_ms: NonZeroU32,
+}
+
+impl BurstGapRange {
+    /// Creates a burst gap range expressed in integer milliseconds.
+    #[must_use]
+    pub const fn new(min_ms: NonZeroU32, max_ms: NonZeroU32) -> Self {
+        Self { min_ms, max_ms }
+    }
+
+    /// Lower bound of the burst gap range in milliseconds.
+    #[must_use]
+    pub const fn min_ms(&self) -> NonZeroU32 {
+        self.min_ms
+    }
+
+    /// Upper bound of the burst gap range in milliseconds.
+    #[must_use]
+    pub const fn max_ms(&self) -> NonZeroU32 {
+        self.max_ms
+    }
+}
+
+/// Parameters governing how species bursts are split during plan generation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BurstSchedulingConfig {
+    nominal_burst_size: NonZeroU32,
+    burst_count_max: NonZeroU32,
+}
+
+impl BurstSchedulingConfig {
+    /// Creates a burst scheduling configuration.
+    #[must_use]
+    pub const fn new(nominal_burst_size: NonZeroU32, burst_count_max: NonZeroU32) -> Self {
+        Self {
+            nominal_burst_size,
+            burst_count_max,
+        }
+    }
+
+    /// Returns the nominal number of units targeted per burst.
+    #[must_use]
+    pub const fn nominal_burst_size(&self) -> NonZeroU32 {
+        self.nominal_burst_size
+    }
+
+    /// Returns the maximum number of bursts a species may emit.
+    #[must_use]
+    pub const fn burst_count_max(&self) -> NonZeroU32 {
+        self.burst_count_max
+    }
+}
+
+/// Gaussian pressure sampling parameters (μ, σ) expressed in integer pressure units.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PressureCurve {
+    mean: Pressure,
+    deviation: Pressure,
+}
+
+impl PressureCurve {
+    /// Creates a new pressure sampling curve.
+    #[must_use]
+    pub const fn new(mean: Pressure, deviation: Pressure) -> Self {
+        Self { mean, deviation }
+    }
+
+    /// Returns the configured mean pressure μ.
+    #[must_use]
+    pub const fn mean(&self) -> Pressure {
+        self.mean
+    }
+
+    /// Returns the configured pressure deviation σ.
+    #[must_use]
+    pub const fn deviation(&self) -> Pressure {
+        self.deviation
+    }
+}
+
+/// Prototype describing the presentation and cadence resolved for a species.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SpeciesPrototype {
+    color: BugColor,
+    health: Health,
+    step_ms: NonZeroU32,
+}
+
+impl SpeciesPrototype {
+    /// Creates a new species prototype using the provided colour, health, and cadence.
+    #[must_use]
+    pub const fn new(color: BugColor, health: Health, step_ms: NonZeroU32) -> Self {
+        Self {
+            color,
+            health,
+            step_ms,
+        }
+    }
+
+    /// Returns the colour assigned to spawned bugs of this species.
+    #[must_use]
+    pub const fn color(&self) -> BugColor {
+        self.color
+    }
+
+    /// Returns the health assigned to spawned bugs of this species.
+    #[must_use]
+    pub const fn health(&self) -> Health {
+        self.health
+    }
+
+    /// Returns the resolved cadence for spawned bugs in milliseconds.
+    #[must_use]
+    pub const fn step_ms(&self) -> NonZeroU32 {
+        self.step_ms
+    }
+}
+
+/// Dirichlet concentration weight applied to a species during pressure partitioning.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DirichletWeight(NonZeroU32);
+
+impl DirichletWeight {
+    /// Creates a new concentration weight.
+    #[must_use]
+    pub const fn new(weight: NonZeroU32) -> Self {
+        Self(weight)
+    }
+
+    /// Returns the stored concentration weight.
+    #[must_use]
+    pub const fn get(&self) -> NonZeroU32 {
+        self.0
+    }
+}
+
+/// Canonical description of a species used by the pressure-based wave generator.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SpeciesDefinition {
+    id: SpeciesId,
+    patch: SpawnPatchId,
+    prototype: SpeciesPrototype,
+    weight: PressureWeight,
+    dirichlet_weight: DirichletWeight,
+    min_burst_spawn: u32,
+    max_population: NonZeroU32,
+    cadence_range: CadenceRange,
+    gap_range: BurstGapRange,
+}
+
+impl SpeciesDefinition {
+    /// Creates a new species definition mirroring the pressure specification.
+    #[allow(clippy::too_many_arguments)]
+    #[must_use]
+    pub const fn new(
+        id: SpeciesId,
+        patch: SpawnPatchId,
+        prototype: SpeciesPrototype,
+        weight: PressureWeight,
+        dirichlet_weight: DirichletWeight,
+        min_burst_spawn: u32,
+        max_population: NonZeroU32,
+        cadence_range: CadenceRange,
+        gap_range: BurstGapRange,
+    ) -> Self {
+        Self {
+            id,
+            patch,
+            prototype,
+            weight,
+            dirichlet_weight,
+            min_burst_spawn,
+            max_population,
+            cadence_range,
+            gap_range,
+        }
+    }
+
+    /// Returns the identifier assigned to the species definition.
+    #[must_use]
+    pub const fn id(&self) -> SpeciesId {
+        self.id
+    }
+
+    /// Returns the spawn patch used by this species.
+    #[must_use]
+    pub const fn patch(&self) -> SpawnPatchId {
+        self.patch
+    }
+
+    /// Returns the prototype used when spawning bugs for this species.
+    #[must_use]
+    pub const fn prototype(&self) -> SpeciesPrototype {
+        self.prototype
+    }
+
+    /// Returns the pressure weight associated with spawning a unit of this species.
+    #[must_use]
+    pub const fn weight(&self) -> PressureWeight {
+        self.weight
+    }
+
+    /// Returns the Dirichlet concentration weight for this species.
+    #[must_use]
+    pub const fn dirichlet_weight(&self) -> DirichletWeight {
+        self.dirichlet_weight
+    }
+
+    /// Returns the configured minimum burst spawn count for this species.
+    #[must_use]
+    pub const fn min_burst_spawn(&self) -> u32 {
+        self.min_burst_spawn
+    }
+
+    /// Returns the maximum population cap for this species.
+    #[must_use]
+    pub const fn max_population(&self) -> NonZeroU32 {
+        self.max_population
+    }
+
+    /// Returns the cadence range applied when sampling per-burst spawn cadence.
+    #[must_use]
+    pub const fn cadence_range(&self) -> CadenceRange {
+        self.cadence_range
+    }
+
+    /// Returns the burst gap range applied between consecutive bursts.
+    #[must_use]
+    pub const fn gap_range(&self) -> BurstGapRange {
+        self.gap_range
+    }
+}
+
+/// Description of a deterministic spawn patch outside the maze.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SpawnPatchDescriptor {
+    id: SpawnPatchId,
+    origin: CellCoord,
+    extent: CellRect,
+}
+
+impl SpawnPatchDescriptor {
+    /// Creates a new spawn patch descriptor.
+    #[must_use]
+    pub const fn new(id: SpawnPatchId, origin: CellCoord, extent: CellRect) -> Self {
+        Self { id, origin, extent }
+    }
+
+    /// Identifier assigned to the patch.
+    #[must_use]
+    pub const fn id(&self) -> SpawnPatchId {
+        self.id
+    }
+
+    /// Returns the anchor cell associated with the patch.
+    #[must_use]
+    pub const fn origin(&self) -> CellCoord {
+        self.origin
+    }
+
+    /// Returns the rectangular extent of the patch for deterministic sampling.
+    #[must_use]
+    pub const fn extent(&self) -> CellRect {
+        self.extent
+    }
+}
+
+/// RNG stream label used when sampling the wave pressure.
+pub const RNG_STREAM_PRESSURE: &str = "pressure";
+
+/// RNG stream label used when sampling Dirichlet proportions.
+pub const RNG_STREAM_DIRICHLET: &str = "dirichlet";
+
+/// Prefix applied when deriving species-specific RNG streams.
+pub const RNG_STREAM_SPECIES_PREFIX: &str = "species";
+
+/// Prefix applied when deriving patch-specific RNG streams.
+pub const RNG_STREAM_PATCH_PREFIX: &str = "patch";
+
+/// Canonical attack plan generated from the pressure-based wave specification.
+///
+/// The plan is serialised in a stable order so deterministic replays can hash the
+/// resulting bytes. Bursts must be recorded in ascending [`SpeciesId`] order and
+/// retain their computed start times to preserve the canonical ordering described
+/// in `pressure-spec.md`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AttackPlan {
-    pressure: u32,
-    bursts: Vec<AttackBurst>,
+    pressure: Pressure,
+    species_table_version: SpeciesTableVersion,
+    bursts: Vec<BurstPlan>,
 }
 
 impl AttackPlan {
-    /// Creates a new attack plan populated with the provided bursts.
+    /// Creates a new attack plan populated with deterministic burst descriptors.
     #[must_use]
-    pub fn new(pressure: u32, bursts: Vec<AttackBurst>) -> Self {
-        Self { pressure, bursts }
+    pub fn new(
+        pressure: Pressure,
+        species_table_version: SpeciesTableVersion,
+        bursts: Vec<BurstPlan>,
+    ) -> Self {
+        Self {
+            pressure,
+            species_table_version,
+            bursts,
+        }
     }
 
-    /// Returns the pressure budget associated with this plan.
+    /// Creates an empty attack plan with zero pressure for compatibility with
+    /// waves that intentionally spawn nothing.
     #[must_use]
-    pub const fn pressure(&self) -> u32 {
+    pub fn empty(species_table_version: SpeciesTableVersion) -> Self {
+        Self {
+            pressure: Pressure::new(0),
+            species_table_version,
+            bursts: Vec::new(),
+        }
+    }
+
+    /// Returns the total pressure budget for this plan.
+    #[must_use]
+    pub const fn pressure(&self) -> Pressure {
         self.pressure
+    }
+
+    /// Returns the species table version used when the plan was generated.
+    #[must_use]
+    pub const fn species_table_version(&self) -> SpeciesTableVersion {
+        self.species_table_version
     }
 
     /// Provides immutable access to the burst descriptors in deterministic order.
     #[must_use]
-    pub fn bursts(&self) -> &[AttackBurst] {
+    pub fn bursts(&self) -> &[BurstPlan] {
         &self.bursts
     }
 
@@ -201,100 +647,62 @@ impl AttackPlan {
 }
 
 /// Homogeneous burst scheduled within an [`AttackPlan`].
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct AttackBurst {
-    spawner: CellCoord,
-    bug: AttackBugDescriptor,
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BurstPlan {
+    species: SpeciesId,
+    patch: SpawnPatchId,
     count: NonZeroU32,
     cadence_ms: NonZeroU32,
     start_ms: u32,
 }
 
-impl AttackBurst {
-    /// Creates a new burst descriptor spawning identical bugs from a single spawner.
+impl BurstPlan {
+    /// Creates a new burst plan containing deterministic scheduling metadata.
     #[must_use]
-    pub fn new(
-        spawner: CellCoord,
-        bug: AttackBugDescriptor,
+    pub const fn new(
+        species: SpeciesId,
+        patch: SpawnPatchId,
         count: NonZeroU32,
         cadence_ms: NonZeroU32,
         start_ms: u32,
     ) -> Self {
         Self {
-            spawner,
-            bug,
+            species,
+            patch,
             count,
             cadence_ms,
             start_ms,
         }
     }
 
-    /// Returns the cell coordinate of the spawner assigned to the burst.
+    /// Returns the identifier of the species spawned by this burst.
     #[must_use]
-    pub const fn spawner(&self) -> CellCoord {
-        self.spawner
+    pub const fn species(&self) -> SpeciesId {
+        self.species
     }
 
-    /// Returns the bug descriptor emitted by this burst.
+    /// Returns the identifier of the patch that emits this burst.
     #[must_use]
-    pub const fn bug(&self) -> AttackBugDescriptor {
-        self.bug
+    pub const fn patch(&self) -> SpawnPatchId {
+        self.patch
     }
 
-    /// Returns the number of bugs emitted by the burst.
+    /// Returns the number of units emitted by the burst.
     #[must_use]
     pub const fn count(&self) -> NonZeroU32 {
         self.count
     }
 
-    /// Returns the cadence in milliseconds between consecutive spawns.
+    /// Returns the cadence in milliseconds between successive spawns.
     #[must_use]
     pub const fn cadence_ms(&self) -> NonZeroU32 {
         self.cadence_ms
     }
 
-    /// Returns the start offset in milliseconds relative to the beginning of the wave.
+    /// Returns the start offset in milliseconds relative to the wave start.
     #[must_use]
     pub const fn start_ms(&self) -> u32 {
         self.start_ms
-    }
-}
-
-/// Describes the appearance and behaviour of bugs spawned by an [`AttackBurst`].
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct AttackBugDescriptor {
-    color: BugColor,
-    health: Health,
-    step_ms: u32,
-}
-
-impl AttackBugDescriptor {
-    /// Creates a new bug descriptor using the provided appearance and pacing.
-    #[must_use]
-    pub const fn new(color: BugColor, health: Health, step_ms: u32) -> Self {
-        Self {
-            color,
-            health,
-            step_ms,
-        }
-    }
-
-    /// Returns the colour assigned to spawned bugs.
-    #[must_use]
-    pub const fn color(&self) -> BugColor {
-        self.color
-    }
-
-    /// Returns the health applied to spawned bugs.
-    #[must_use]
-    pub const fn health(&self) -> Health {
-        self.health
-    }
-
-    /// Returns the bug step cadence expressed in milliseconds.
-    #[must_use]
-    pub const fn step_ms(&self) -> u32 {
-        self.step_ms
     }
 }
 
@@ -378,6 +786,13 @@ pub enum Command {
         /// Outcome that should be applied to the world state.
         outcome: RoundOutcome,
     },
+    /// Requests generation of a deterministic attack plan for the provided wave.
+    GenerateAttackPlan {
+        /// Identifier of the wave awaiting plan generation.
+        wave: WaveId,
+        /// Difficulty selection used to resolve the plan parameters.
+        difficulty: WaveDifficulty,
+    },
     /// Requests that the next wave launch at the provided difficulty.
     StartWave {
         /// Difficulty tier selection used for the wave launch.
@@ -428,6 +843,13 @@ pub enum Event {
     PendingWaveDifficultyChanged {
         /// Wave difficulty awaiting launch after the adjustment.
         pending: PendingWaveDifficulty,
+    },
+    /// Reports that a deterministic attack plan has been generated.
+    AttackPlanReady {
+        /// Identifier of the wave for which the plan was generated.
+        wave: WaveId,
+        /// Canonical plan describing the wave contents.
+        plan: AttackPlan,
     },
     /// Announces that a wave launched with resolved parameters.
     WaveStarted {
@@ -546,7 +968,7 @@ pub enum Event {
 }
 
 /// Visual appearance applied to a bug.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct BugColor {
     red: u8,
     green: u8,
