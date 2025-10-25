@@ -6,7 +6,8 @@ use std::{
 
 use maze_defence_core::{
     BugColor, BugId, BugSnapshot, CellCoord, Command, Event, Gold, Health, NavigationFieldView,
-    PendingWaveDifficulty, PlayMode, TileCoord, TowerKind, WaveDifficulty, WaveId,
+    PendingWaveDifficulty, PlayMode, SpeciesTableVersion, TileCoord, TowerKind, WaveDifficulty,
+    WaveId,
 };
 use maze_defence_system_movement::Movement;
 use maze_defence_world::{self as world, query, World};
@@ -17,27 +18,27 @@ const SLOW_STEP_MS: u32 = 450;
 
 #[test]
 fn deterministic_replay_produces_expected_snapshot() {
-    assert_stable_replay(baseline_commands(), 0x41a8_6316_80d8_7610);
+    assert_stable_replay(baseline_commands(), 0x4358_d43d_e556_cbf2);
 }
 
 #[test]
 fn dense_corridor_replay_is_stable() {
-    assert_stable_replay(dense_corridor_commands(), 0x9c1b_665d_9beb_a17c);
+    assert_stable_replay(dense_corridor_commands(), 0x6eff_f25b_28b5_2816);
 }
 
 #[test]
 fn side_hallway_diversion_replay_is_stable() {
-    assert_stable_replay(side_hallway_diversion_commands(), 0x638a_d258_8845_8734);
+    assert_stable_replay(side_hallway_diversion_commands(), 0xd5de_ab2f_0d36_c9f8);
 }
 
 #[test]
 fn stall_regression_replay_is_stable() {
-    assert_stable_replay(stall_regression_commands(), 0xb321_4304_bb00_dae1);
+    assert_stable_replay(stall_regression_commands(), 0x91a5_ddba_d487_5324);
 }
 
 #[test]
 fn mixed_cadence_replay_is_stable() {
-    assert_stable_replay(mixed_cadence_commands(), 0xb5cc_35b3_ad40_e436);
+    assert_stable_replay(mixed_cadence_commands(), 0x5bce_9e0b_7737_4231);
 }
 
 fn assert_stable_replay(commands: Vec<Command>, expected: u64) {
@@ -523,6 +524,9 @@ enum EventRecord {
     PendingWaveDifficultyChanged {
         pending: PendingWaveDifficulty,
     },
+    PressureConfigChanged {
+        species_table_version: SpeciesTableVersion,
+    },
     AttackPlanReady {
         wave: WaveId,
         pressure: u32,
@@ -578,6 +582,12 @@ impl From<&Event> for EventRecord {
             Event::PendingWaveDifficultyChanged { pending } => {
                 Self::PendingWaveDifficultyChanged { pending: *pending }
             }
+            Event::PressureConfigChanged {
+                species_table_version,
+                ..
+            } => Self::PressureConfigChanged {
+                species_table_version: *species_table_version,
+            },
             Event::AttackPlanReady { wave, plan } => Self::AttackPlanReady {
                 wave: *wave,
                 pressure: plan.pressure().get(),

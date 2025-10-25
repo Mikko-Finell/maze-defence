@@ -113,7 +113,7 @@ This phase migrates the wave pipeline to the normative rules in `pressure-spec.m
    * Store species definitions (health, speed, weights, caps, cadence ranges), patch descriptors, and pressure sampling parameters (`μ`, `σ`, Dirichlet β, burst caps, spawn-per-tick limit) on `maze_defence_world::World`.
    * Initialise these fields during configuration/reset commands, emit `Event::PressureConfigChanged` when they mutate, and provide read-only queries (`world::query::species_table`, `world::query::patch_table`, `world::query::pressure_config`) for systems/tests.
    * Record the per-wave seed derivation inputs (global seed, tier, wave index) so the generator system receives deterministic context without poking at world internals.
-3. **Build the pure pressure generator system** [TODO]
+3. **Build the pure pressure generator system** [DONE]
    * Add a `systems/wave_generation` crate that handles `Command::GenerateAttackPlan` by loading the world queries, deriving stream seeds via the documented hash labels, and executing the spec: pressure sampling, Dirichlet split, floor-only budget conversion, burst splitting, cadence/gap draws, and patch sampling order.
    * Supply exhaustive unit tests that assert deterministic replay, budget closure, burst splitting, timing determinism, safety clamps, and RNG stream reproducibility using scripted seeds and config fixtures.
 4. **Adapter/world orchestration for generated plans** [TODO]
