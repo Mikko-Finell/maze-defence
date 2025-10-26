@@ -26,7 +26,7 @@ surfaces that match the v2 data flow.
 **Exit checks:** No references to the legacy generator remain; all compile errors stem
 from intentionally unimplemented v2 stubs only.
 
-# 2) [TODO] Deterministic RNG + telemetry spine
+# 2) [DONE] Deterministic RNG + telemetry spine
 
 **Goal:** Establish the deterministic PRNG wiring, telemetry emission, and the single
 configuration surface that every knob flows through.
@@ -52,18 +52,18 @@ configuration surface that every knob flows through.
 comments, and telemetry structs exist with unit tests verifying seed hashing and RNG
 usage order.
 
-# 3) [TODO] Difficulty latents + pressure budget
+# 3) [DONE] Difficulty latents + pressure budget
 
 **Goal:** Implement §3 of the spec end-to-end using the new tuning surface.
 
 **Deliverables:**
 
-- [ ] Encode the logistic bug count curve, truncated normal sampling, and HP/speed latent
+- [x] Encode the logistic bug count curve, truncated normal sampling, and HP/speed latent
   draws using the deterministic RNG. Document which tuning fields control ceilings,
   slopes, and variance.
-- [ ] Compute `P_wave` exactly as defined, store it on the work buffer, and emit
+- [x] Compute `P_wave` exactly as defined, store it on the work buffer, and emit
   `difficulty_latents` telemetry with sampled values and tuning parameters.
-- [ ] Ensure all RNG draws are clamped to the documented bounds and record their order in
+- [x] Ensure all RNG draws are clamped to the documented bounds and record their order in
   comments.
 
 **Exit checks:** Unit tests cover low/high difficulty cases, confirming tuning knobs
