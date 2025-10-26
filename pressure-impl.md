@@ -76,7 +76,7 @@ assignment for each species.
 
 **Deliverables:**
 
-- [ ] Sample provisional species count `K`, per-species HP/speed centres, and Dirichlet
+- [x] Sample provisional species count `K`, per-species HP/speed centres, and Dirichlet
   proportions using the RNG spine. Allocate integer bug counts via Hamilton
   apportionment and store intermediate state in a work buffer.
 - [ ] Implement the “no tiny species” merge algorithm with deterministic nearest-neighbour
