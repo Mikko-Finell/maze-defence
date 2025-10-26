@@ -194,7 +194,12 @@ pub enum BugVisual {
         color: Color,
     },
     /// Draws a sprite instance centred on the bug position.
-    Sprite(SpriteInstance),
+    Sprite {
+        /// Sprite descriptor rendered for the bug body.
+        sprite: SpriteInstance,
+        /// Tint applied to the sprite when drawing.
+        tint: Color,
+    },
 }
 
 /// Categories of ground tiles rendered beneath the maze.
@@ -394,6 +399,25 @@ impl SceneWall {
     #[must_use]
     pub const fn new(column: u32, row: u32) -> Self {
         Self { column, row }
+    }
+}
+
+/// Describes a transient spawn effect tied to a specific cell.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SpawnEffect {
+    /// Zero-based column containing the effect.
+    pub column: u32,
+    /// Zero-based row containing the effect.
+    pub row: u32,
+    /// Tint used when drawing the effect.
+    pub color: Color,
+}
+
+impl SpawnEffect {
+    /// Creates a new spawn effect descriptor.
+    #[must_use]
+    pub const fn new(column: u32, row: u32, color: Color) -> Self {
+        Self { column, row, color }
     }
 }
 
@@ -705,9 +729,10 @@ impl BugPresentation {
         id: BugId,
         position: Vec2,
         sprite: SpriteInstance,
+        tint: Color,
         health: BugHealthPresentation,
     ) -> Self {
-        Self::from_parts(id, position, BugVisual::Sprite(sprite), health)
+        Self::from_parts(id, position, BugVisual::Sprite { sprite, tint }, health)
     }
 
     fn from_parts(
@@ -990,6 +1015,8 @@ pub struct Scene {
     pub towers: Vec<SceneTower>,
     /// Projectiles currently travelling across the maze.
     pub projectiles: Vec<SceneProjectile>,
+    /// Spawn effects highlighting active spawner cells.
+    pub spawn_effects: Vec<SpawnEffect>,
     /// Targeting beams emitted by towers while in attack mode.
     pub tower_targets: Vec<TowerTargetLine>,
     /// Tower currently hovered by the cursor, if any.
@@ -1024,6 +1051,7 @@ impl Scene {
         bugs: Vec<BugPresentation>,
         towers: Vec<SceneTower>,
         projectiles: Vec<SceneProjectile>,
+        spawn_effects: Vec<SpawnEffect>,
         tower_targets: Vec<TowerTargetLine>,
         hovered_tower: Option<TowerId>,
         play_mode: PlayMode,
@@ -1043,6 +1071,7 @@ impl Scene {
             bugs,
             towers,
             projectiles,
+            spawn_effects,
             tower_targets,
             hovered_tower,
             play_mode,
@@ -1130,7 +1159,7 @@ impl Error for RenderingError {}
 /// Helpers that construct sprite visuals in a deterministic manner.
 pub mod visuals {
     use super::{
-        BugVisual, CellRect, GroundKind, GroundSpriteTiles, SpriteInstance, SpriteKey,
+        BugVisual, CellRect, Color, GroundKind, GroundSpriteTiles, SpriteInstance, SpriteKey,
         TowerTargetLine, TowerVisual,
     };
     use glam::Vec2;
@@ -1168,11 +1197,12 @@ pub mod visuals {
         _column: u32,
         _row: u32,
         key: SpriteKey,
+        tint: Color,
         rotation_radians: f32,
     ) -> BugVisual {
         let sprite = SpriteInstance::square(key, Vec2::splat(1.0))
             .with_rotation(normalise_radians(rotation_radians));
-        BugVisual::Sprite(sprite)
+        BugVisual::Sprite { sprite, tint }
     }
 
     /// Builds ground sprite tiles that repeat across the maze interior.
@@ -1340,14 +1370,20 @@ mod tests {
     #[test]
     fn bug_sprite_visual_wraps_key() {
         let rotation = FRAC_PI_2 * 0.5;
-        let visual = visuals::bug_sprite_visual(5, 6, SpriteKey::BugBody, rotation);
-        let BugVisual::Sprite(instance) = visual else {
+        let tint = Color::from_rgb_u8(120, 80, 200);
+        let visual = visuals::bug_sprite_visual(5, 6, SpriteKey::BugBody, tint, rotation);
+        let BugVisual::Sprite {
+            sprite: instance,
+            tint: actual_tint,
+        } = visual
+        else {
             panic!("expected sprite bug visual");
         };
 
         assert_eq!(instance.sprite, SpriteKey::BugBody);
         assert_eq!(instance.size, Vec2::splat(1.0));
         assert!((instance.rotation_radians - rotation).abs() <= f32::EPSILON);
+        assert_eq!(actual_tint, tint);
     }
 
     #[test]
@@ -1509,6 +1545,7 @@ mod tests {
             Vec::new(),
             Vec::new(),
             Vec::new(),
+            Vec::new(),
             None,
             PlayMode::Attack,
             None,
@@ -1580,6 +1617,7 @@ mod tests {
                 preview_region,
             )],
             Vec::new(),
+            Vec::new(),
             vec![target_line],
             None,
             PlayMode::Builder,
@@ -1636,6 +1674,7 @@ mod tests {
             tile_grid,
             Color::from_rgb_u8(64, 64, 64),
             None,
+            Vec::new(),
             Vec::new(),
             Vec::new(),
             Vec::new(),
