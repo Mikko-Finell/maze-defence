@@ -99,7 +99,7 @@ no-merge cases.
 
 - [x] Implement the bisection scaling loop that enforces total pressure alignment, emitting
   `eta_scaling` telemetry with pre/post pressure values and clamp flags.
-- [ ] Sample per-species cadence and start offsets (document which tuning fields control
+- [x] Sample per-species cadence and start offsets (document which tuning fields control
   ranges), generate arithmetic progression spawn times, and store them in per-species
   buffers.
 - [ ] Enforce duration caps with global compression and `cad_min` logic, emitting

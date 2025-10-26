@@ -316,6 +316,7 @@ impl PressureV2 {
         self.compute_difficulty_latents(inputs);
         self.sample_provisional_species(inputs);
         self.align_pressure_with_eta();
+        self.sample_cadence_and_start_offsets(inputs);
         out.clear();
         todo!("pressure v2 generation not implemented");
     }
@@ -510,6 +511,53 @@ impl PressureV2 {
         telemetry.eta_clamped = eta_clamped;
         telemetry.pressure_target = target_pressure;
         telemetry.pressure_after_eta = realised_pressure;
+    }
+
+    fn sample_cadence_and_start_offsets(&mut self, inputs: &PressureWaveInputs) {
+        if self.work.provisional_species.is_empty() {
+            return;
+        }
+
+        let difficulty = inputs.difficulty().get() as f32;
+        let cadence_mean = self.cadence_mean_ms(difficulty);
+        let start_mean = self.start_offset_mean_ms(difficulty);
+        let tuning = &self.tuning.cadence;
+        let cadence_min = tuning.cadence_min_ms as f32;
+        let cadence_max = tuning.cadence_max_ms as f32;
+        let start_max = tuning.start_max_ms as f32;
+
+        for component in self.work.provisional_species.iter_mut() {
+            // RNG draw: per-species cadence sample; cadence_min_ms/cadence_max_ms bound the result per §6.1.
+            let cadence_sample = draw_truncated_normal(
+                &mut self.rng,
+                cadence_mean,
+                cadence_mean * tuning.cadence_deviation_ratio,
+                cadence_min,
+                cadence_max,
+            );
+            let cadence_ms = cadence_sample.round().clamp(cadence_min, cadence_max) as u32;
+            component.cadence_ms = cadence_ms.max(tuning.cadence_min_ms);
+
+            // RNG draw: per-species start offset sample bounded by start_max_ms and influenced by start_base_ms/start_slope_ms.
+            let start_sample = draw_truncated_normal(
+                &mut self.rng,
+                start_mean,
+                start_mean * tuning.start_deviation_ratio,
+                0.0,
+                start_max,
+            );
+            let start_offset = start_sample.round().clamp(0.0, start_max) as u32;
+            component.start_offset_ms = start_offset;
+
+            component.spawn_times.clear();
+            component.spawn_times.reserve(component.bug_count as usize);
+            let cadence = component.cadence_ms as u64;
+            let start = component.start_offset_ms as u64;
+            for index in 0..component.bug_count {
+                let time = start.saturating_add(cadence.saturating_mul(index as u64));
+                component.spawn_times.push(time.min(u32::MAX as u64) as u32);
+            }
+        }
     }
 
     fn total_pressure_for_eta(&self, eta: f32) -> f32 {
@@ -848,6 +896,18 @@ impl PressureV2 {
             .powf((difficulty - tuning.growth_pivot).max(0.0));
         (1.0 + soft_boost) * multiplicative
     }
+
+    fn cadence_mean_ms(&self, difficulty: f32) -> f32 {
+        let tuning = &self.tuning.cadence;
+        let raw = tuning.cadence_base_ms + tuning.cadence_slope_ms * (difficulty - 1.0);
+        raw.clamp(tuning.cadence_min_ms as f32, tuning.cadence_max_ms as f32)
+    }
+
+    fn start_offset_mean_ms(&self, difficulty: f32) -> f32 {
+        let tuning = &self.tuning.cadence;
+        let raw = tuning.start_base_ms + tuning.start_slope_ms * (difficulty - 1.0);
+        raw.clamp(0.0, tuning.start_max_ms as f32)
+    }
 }
 
 #[cfg(test)]
@@ -902,6 +962,22 @@ impl PressureV2 {
 
     fn assign_species_tints_for_test(&mut self) {
         self.assign_species_tints();
+    }
+
+    fn sample_cadence_for_test(&mut self, inputs: &PressureWaveInputs) {
+        self.sample_cadence_and_start_offsets(inputs);
+    }
+
+    fn component_cadence_ms(&self, index: usize) -> u32 {
+        self.work.provisional_species[index].cadence_ms
+    }
+
+    fn component_start_offset_ms(&self, index: usize) -> u32 {
+        self.work.provisional_species[index].start_offset_ms
+    }
+
+    fn component_spawn_times(&self, index: usize) -> &[u32] {
+        &self.work.provisional_species[index].spawn_times
     }
 }
 
@@ -1130,6 +1206,9 @@ struct ComponentWork {
     log_hp_multiplier: f32,
     log_speed_multiplier: f32,
     tint: MacroquadColor,
+    cadence_ms: u32,
+    start_offset_ms: u32,
+    spawn_times: Vec<u32>,
 }
 
 impl ComponentWork {
@@ -1153,6 +1232,9 @@ impl ComponentWork {
             log_hp_multiplier,
             log_speed_multiplier,
             tint: MacroquadColor::new(1.0, 1.0, 1.0, 1.0),
+            cadence_ms: 0,
+            start_offset_ms: 0,
+            spawn_times: Vec::new(),
         }
     }
 }
@@ -1353,6 +1435,9 @@ mod tests {
             log_hp_multiplier: hp_multiplier.ln(),
             log_speed_multiplier: speed_multiplier.ln(),
             tint: MacroquadColor::new(1.0, 1.0, 1.0, 1.0),
+            cadence_ms: 0,
+            start_offset_ms: 0,
+            spawn_times: Vec::new(),
         }
     }
 
@@ -1658,6 +1743,74 @@ mod tests {
             assert!((a.fractional_count - b.fractional_count).abs() < f32::EPSILON);
             assert!((a.log_hp_multiplier - b.log_hp_multiplier).abs() < f32::EPSILON);
             assert!((a.log_speed_multiplier - b.log_speed_multiplier).abs() < f32::EPSILON);
+        }
+    }
+
+    #[test]
+    fn cadence_sampling_populates_spawn_times_within_bounds() {
+        let mut generator = PressureV2::default();
+        let inputs =
+            PressureWaveInputs::new(37, LevelId::new(6), WaveId::new(5), DifficultyLevel::new(6));
+
+        generator.reseed_rng(&inputs);
+        generator.work.reset();
+        generator.compute_difficulty_latents(&inputs);
+        generator.sample_provisional_species(&inputs);
+        generator.align_pressure_with_eta();
+        generator.sample_cadence_for_test(&inputs);
+
+        let tuning = &generator.tuning().cadence;
+        for (index, component) in generator.provisional_components().iter().enumerate() {
+            let cadence = generator.component_cadence_ms(index);
+            let start = generator.component_start_offset_ms(index);
+            let times = generator.component_spawn_times(index);
+
+            assert!(cadence >= tuning.cadence_min_ms);
+            assert!(cadence <= tuning.cadence_max_ms);
+            assert!(start <= tuning.start_max_ms);
+            assert_eq!(times.len(), component.bug_count as usize);
+            if let Some((&first, rest)) = times.split_first() {
+                assert_eq!(first, start);
+                for (step, window) in rest.iter().enumerate() {
+                    let expected = start.saturating_add((step as u32 + 1).saturating_mul(cadence));
+                    assert_eq!(*window, expected);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn cadence_sampling_is_deterministic() {
+        let mut generator_a = PressureV2::default();
+        let mut generator_b = PressureV2::default();
+        let inputs =
+            PressureWaveInputs::new(41, LevelId::new(3), WaveId::new(2), DifficultyLevel::new(4));
+
+        for generator in [&mut generator_a, &mut generator_b] {
+            generator.reseed_rng(&inputs);
+            generator.work.reset();
+            generator.compute_difficulty_latents(&inputs);
+            generator.sample_provisional_species(&inputs);
+            generator.align_pressure_with_eta();
+            generator.sample_cadence_for_test(&inputs);
+        }
+
+        let comps_a = generator_a.provisional_components();
+        let comps_b = generator_b.provisional_components();
+        assert_eq!(comps_a.len(), comps_b.len());
+        for index in 0..comps_a.len() {
+            assert_eq!(
+                generator_a.component_cadence_ms(index),
+                generator_b.component_cadence_ms(index)
+            );
+            assert_eq!(
+                generator_a.component_start_offset_ms(index),
+                generator_b.component_start_offset_ms(index)
+            );
+            assert_eq!(
+                generator_a.component_spawn_times(index),
+                generator_b.component_spawn_times(index)
+            );
         }
     }
 
