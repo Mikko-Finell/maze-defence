@@ -79,7 +79,7 @@ assignment for each species.
 - [x] Sample provisional species count `K`, per-species HP/speed centres, and Dirichlet
   proportions using the RNG spine. Allocate integer bug counts via Hamilton
   apportionment and store intermediate state in a work buffer.
-- [ ] Implement the “no tiny species” merge algorithm with deterministic nearest-neighbour
+- [x] Implement the “no tiny species” merge algorithm with deterministic nearest-neighbour
   selection. Emit `species_merge` telemetry for every merge (or an explicit no-merge
   event) and update indices accordingly.
 - [ ] Generate a distinct `macroquad::Color` per final species by sampling hues/saturations

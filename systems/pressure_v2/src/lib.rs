@@ -436,6 +436,7 @@ impl PressureV2 {
 
         self.populate_component_centres(difficulty, final_count as usize);
         self.allocate_dirichlet_counts(bug_count);
+        self.enforce_minimum_share();
     }
 
     fn draw_raw_component_count(&mut self, difficulty: f32) -> u32 {
@@ -478,6 +479,9 @@ impl PressureV2 {
                 .exp()
                 .clamp(tuning.speed_multiplier_min, tuning.speed_multiplier_max);
 
+            let log_hp_clamped = hp_multiplier.ln();
+            let log_speed_clamped = speed_multiplier.ln();
+
             let hp_pre = BASE_HP * hp_multiplier;
             let speed_pre = speed_multiplier;
             let pressure_weight = self.tuning.pressure_weights.alpha * hp_pre
@@ -488,6 +492,8 @@ impl PressureV2 {
                 hp_pre,
                 speed_pre,
                 pressure_weight,
+                log_hp_clamped,
+                log_speed_clamped,
             ));
         }
     }
@@ -562,6 +568,132 @@ impl PressureV2 {
         }
     }
 
+    fn enforce_minimum_share(&mut self) {
+        let minimum_share = self.work.minimum_species_size;
+        let total_bugs = self.work.difficulty.bug_count;
+        let sigma_hp = self.tuning.components.log_hp_sigma.max(f32::EPSILON);
+        let sigma_speed = self.tuning.components.log_speed_sigma.max(f32::EPSILON);
+
+        let components = &mut self.work.provisional_species;
+        if components.is_empty() {
+            return;
+        }
+
+        self.telemetry.clear_species_merge();
+
+        let mut merge_count = 0u32;
+
+        loop {
+            if components.len() <= 1 {
+                break;
+            }
+
+            let mut candidate: Option<(usize, u32)> = None;
+            for (index, component) in components.iter().enumerate() {
+                if component.bug_count >= minimum_share {
+                    continue;
+                }
+
+                candidate = match candidate {
+                    Some((best_index, best_count)) => {
+                        if component.bug_count < best_count
+                            || (component.bug_count == best_count && index < best_index)
+                        {
+                            Some((index, component.bug_count))
+                        } else {
+                            Some((best_index, best_count))
+                        }
+                    }
+                    None => Some((index, component.bug_count)),
+                };
+            }
+
+            let (from_index, from_count) = match candidate {
+                Some(entry) => entry,
+                None => break,
+            };
+
+            let from_component = &components[from_index];
+            let mut nearest: Option<(usize, f32)> = None;
+
+            for (index, component) in components.iter().enumerate() {
+                if index == from_index {
+                    continue;
+                }
+
+                let delta_hp =
+                    (from_component.log_hp_multiplier - component.log_hp_multiplier) / sigma_hp;
+                let delta_speed = (from_component.log_speed_multiplier
+                    - component.log_speed_multiplier)
+                    / sigma_speed;
+                let mut distance_sq = delta_hp * delta_hp + delta_speed * delta_speed;
+                if !distance_sq.is_finite() {
+                    distance_sq = f32::INFINITY;
+                }
+
+                nearest = match nearest {
+                    Some((best_index, best_distance)) => {
+                        if distance_sq < best_distance
+                            || (distance_sq == best_distance && index < best_index)
+                        {
+                            Some((index, distance_sq))
+                        } else {
+                            Some((best_index, best_distance))
+                        }
+                    }
+                    None => Some((index, distance_sq)),
+                };
+            }
+
+            let (to_index, distance_sq) =
+                nearest.expect("at least one neighbour must be available for merging");
+            let distance = distance_sq.sqrt();
+
+            let to_count_before = components[to_index].bug_count;
+            let new_count = to_count_before.saturating_add(from_count);
+            components[to_index].bug_count = new_count;
+            if total_bugs > 0 {
+                let total = total_bugs as f32;
+                components[to_index].dirichlet_share = new_count as f32 / total;
+                components[to_index].fractional_count =
+                    components[to_index].dirichlet_share * total;
+            }
+
+            let record = self.telemetry.push_species_merge();
+            record.no_merge = false;
+            record.from_component = from_index as u32;
+            record.to_component = to_index as u32;
+            record.from_count = from_count;
+            record.to_count_before = to_count_before;
+            record.to_count_after = new_count;
+            record.log_distance = distance;
+
+            let _ = components.remove(from_index);
+            merge_count += 1;
+        }
+
+        self.work.provisional_species_count = components.len() as u32;
+        debug_assert_eq!(
+            components
+                .iter()
+                .map(|component| component.bug_count)
+                .sum::<u32>(),
+            total_bugs
+        );
+
+        if total_bugs > 0 {
+            let total = total_bugs as f32;
+            for component in components.iter_mut() {
+                component.dirichlet_share = component.bug_count as f32 / total;
+                component.fractional_count = component.dirichlet_share * total;
+            }
+        }
+
+        if merge_count == 0 {
+            self.telemetry.record_no_species_merge();
+        }
+    }
+
     fn count_mean(&self, difficulty: f32) -> f32 {
         let tuning = &self.tuning.count;
         let exponent = -tuning.slope * (difficulty - tuning.midpoint);
@@ -615,6 +747,10 @@ impl PressureV2 {
 
     fn minimum_species_size(&self) -> u32 {
         self.work.minimum_species_size
+    }
+
+    fn enforce_minimum_share_for_test(&mut self) {
+        self.enforce_minimum_share();
     }
 }
 
@@ -671,6 +807,11 @@ impl PressureTelemetry {
         self.cadence_compression = CadenceCompressionTelemetry::default();
     }
 
+    /// Drops any accumulated species merge telemetry.
+    pub fn clear_species_merge(&mut self) {
+        self.species_merge.clear();
+    }
+
     /// Ensures that every telemetry stream has at least a placeholder record available.
     pub fn ensure_placeholders(&mut self) {
         self.difficulty_latents.recorded = false;
@@ -694,6 +835,12 @@ impl PressureTelemetry {
         self.species_merge
             .last_mut()
             .expect("merge record should exist")
+    }
+
+    /// Records a no-merge outcome explicitly in the telemetry stream.
+    pub fn record_no_species_merge(&mut self) {
+        self.species_merge
+            .push(SpeciesMergeTelemetry::no_merge_record());
     }
 
     /// Accesses the currently accumulated species merge telemetry records.
@@ -763,10 +910,18 @@ struct ComponentWork {
     dirichlet_share: f32,
     fractional_count: f32,
     bug_count: u32,
+    log_hp_multiplier: f32,
+    log_speed_multiplier: f32,
 }
 
 impl ComponentWork {
-    fn new(hp_pre: f32, speed_pre: f32, pressure_weight_pre: f32) -> Self {
+    fn new(
+        hp_pre: f32,
+        speed_pre: f32,
+        pressure_weight_pre: f32,
+        log_hp_multiplier: f32,
+        log_speed_multiplier: f32,
+    ) -> Self {
         Self {
             hp_pre,
             speed_pre,
@@ -774,6 +929,8 @@ impl ComponentWork {
             dirichlet_share: 0.0,
             fractional_count: 0.0,
             bug_count: 0,
+            log_hp_multiplier,
+            log_speed_multiplier,
         }
     }
 }
@@ -839,6 +996,8 @@ impl DifficultyLatentsTelemetry {
 #[derive(Clone, Debug, Default)]
 pub struct SpeciesMergeTelemetry {
     recorded: bool,
+    /// Flag indicating that the record represents an explicit no-merge outcome.
+    no_merge: bool,
     /// Placeholder index of the component that was merged away.
     pub from_component: u32,
     /// Placeholder index of the component that absorbed the merge prior to the operation.
@@ -859,6 +1018,21 @@ impl SpeciesMergeTelemetry {
     fn merge_placeholder() -> Self {
         let mut record = Self::default();
         record.recorded = true;
+        record.no_merge = false;
+        record
+    }
+
+    /// Creates an explicit no-merge telemetry record.
+    #[must_use]
+    fn no_merge_record() -> Self {
+        let mut record = Self::merge_placeholder();
+        record.no_merge = true;
+        record.from_component = u32::MAX;
+        record.to_component = u32::MAX;
+        record.from_count = 0;
+        record.to_count_before = 0;
+        record.to_count_after = 0;
+        record.log_distance = f32::INFINITY;
         record
     }
 
@@ -866,6 +1040,12 @@ impl SpeciesMergeTelemetry {
     #[must_use]
     pub fn is_recorded(&self) -> bool {
         self.recorded
+    }
+
+    /// Indicates whether the record represents an explicit no-merge outcome.
+    #[must_use]
+    pub fn is_no_merge(&self) -> bool {
+        self.no_merge
     }
 }
 
@@ -919,6 +1099,34 @@ impl CadenceCompressionTelemetry {
 mod tests {
     use super::*;
     use rand::RngCore;
+
+    fn build_component(
+        weights: &PressureWeightTuning,
+        hp_multiplier: f32,
+        speed_multiplier: f32,
+        bug_count: u32,
+        total_bugs: u32,
+    ) -> ComponentWork {
+        let hp_pre = BASE_HP * hp_multiplier;
+        let speed_pre = speed_multiplier;
+        let pressure_weight = weights.alpha * hp_pre + weights.beta * speed_pre.powf(weights.gamma);
+        let share = if total_bugs > 0 {
+            bug_count as f32 / total_bugs as f32
+        } else {
+            0.0
+        };
+
+        ComponentWork {
+            hp_pre,
+            speed_pre,
+            pressure_weight_pre: pressure_weight,
+            dirichlet_share: share,
+            fractional_count: share * total_bugs as f32,
+            bug_count,
+            log_hp_multiplier: hp_multiplier.ln(),
+            log_speed_multiplier: speed_multiplier.ln(),
+        }
+    }
 
     #[test]
     fn wave_seed_hash_uses_all_inputs() {
@@ -1007,6 +1215,7 @@ mod tests {
 
         let merge = telemetry.push_species_merge();
         assert!(merge.is_recorded());
+        assert!(!merge.is_no_merge());
         assert_eq!(telemetry.species_merge().len(), 2);
     }
 
@@ -1153,6 +1362,12 @@ mod tests {
             assert!(component.speed_pre <= speed_max);
             assert!(component.dirichlet_share.is_finite());
             assert!(component.fractional_count.is_finite());
+            assert!(component.log_hp_multiplier.is_finite());
+            assert!(component.log_speed_multiplier.is_finite());
+            let hp_from_log = component.log_hp_multiplier.exp() * BASE_HP;
+            let speed_from_log = component.log_speed_multiplier.exp();
+            assert!((hp_from_log - component.hp_pre).abs() < 1e-3);
+            assert!((speed_from_log - component.speed_pre).abs() < 1e-3);
         }
     }
 
@@ -1213,6 +1428,88 @@ mod tests {
             assert_eq!(a.bug_count, b.bug_count);
             assert!((a.dirichlet_share - b.dirichlet_share).abs() < f32::EPSILON);
             assert!((a.fractional_count - b.fractional_count).abs() < f32::EPSILON);
+            assert!((a.log_hp_multiplier - b.log_hp_multiplier).abs() < f32::EPSILON);
+            assert!((a.log_speed_multiplier - b.log_speed_multiplier).abs() < f32::EPSILON);
         }
+    }
+
+    #[test]
+    fn enforce_minimum_share_merges_until_threshold() {
+        let mut generator = PressureV2::default();
+        generator.telemetry.reset();
+        generator.work.reset();
+
+        let total_bugs = 10;
+        generator.work.difficulty.bug_count = total_bugs;
+        generator.work.minimum_species_size = 4;
+
+        let weights = &generator.tuning().pressure_weights;
+        let components = vec![
+            build_component(weights, 1.0, 1.0, 2, total_bugs),
+            build_component(weights, 1.5, 0.8, 4, total_bugs),
+            build_component(weights, 0.8, 1.2, 4, total_bugs),
+        ];
+        generator.work.provisional_species = components;
+        generator.work.provisional_species_count = 3;
+
+        generator.enforce_minimum_share_for_test();
+
+        let merged = generator.provisional_components();
+        assert_eq!(merged.len(), 2);
+        assert_eq!(merged.iter().map(|c| c.bug_count).sum::<u32>(), total_bugs);
+        let minimum = generator.minimum_species_size();
+        assert!(
+            merged.len() == 1
+                || merged
+                    .iter()
+                    .all(|component| component.bug_count >= minimum)
+        );
+
+        let telemetry = generator.telemetry().species_merge();
+        assert_eq!(telemetry.len(), 1);
+        let record = &telemetry[0];
+        assert!(record.is_recorded());
+        assert!(!record.is_no_merge());
+        assert_eq!(record.from_count, 2);
+        assert_eq!(record.to_count_before, 4);
+        assert_eq!(record.to_count_after, 6);
+    }
+
+    #[test]
+    fn enforce_minimum_share_records_no_merge_event() {
+        let mut generator = PressureV2::default();
+        generator.telemetry.reset();
+        generator.work.reset();
+
+        let total_bugs = 12;
+        generator.work.difficulty.bug_count = total_bugs;
+        generator.work.minimum_species_size = 3;
+
+        let weights = &generator.tuning().pressure_weights;
+        let components = vec![
+            build_component(weights, 1.0, 1.0, 4, total_bugs),
+            build_component(weights, 1.3, 0.9, 4, total_bugs),
+            build_component(weights, 0.9, 1.1, 4, total_bugs),
+        ];
+        generator.work.provisional_species = components;
+        generator.work.provisional_species_count = 3;
+
+        generator.enforce_minimum_share_for_test();
+
+        let merged = generator.provisional_components();
+        assert_eq!(merged.len(), 3);
+        assert!(merged
+            .iter()
+            .all(|component| component.bug_count >= generator.minimum_species_size()));
+
+        let telemetry = generator.telemetry().species_merge();
+        assert_eq!(telemetry.len(), 1);
+        let record = &telemetry[0];
+        assert!(record.is_recorded());
+        assert!(record.is_no_merge());
+        assert_eq!(record.from_component, u32::MAX);
+        assert_eq!(record.to_component, u32::MAX);
+        assert_eq!(record.from_count, 0);
+        assert_eq!(record.to_count_after, 0);
     }
 }
