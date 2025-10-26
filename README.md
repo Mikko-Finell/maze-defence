@@ -32,6 +32,7 @@ The CLI exposes the following arguments:
 | `--cells-per-tile COUNT` | Chooses how many sub-cells are rendered inside each tile edge. Must be at least `1`. | `4` |
 | `--bug-step-ms MILLISECONDS` | Sets how long each bug waits before taking another step. Accepts values from `1` to `60_000`. | `250` |
 | `--bug-spawn-interval-ms MILLISECONDS` | Controls the interval between automatic spawns while in attack mode. Accepts values from `1` to `60_000`. | `1_000` |
+| `--difficulty-level LEVEL` | Starts the simulation at the specified base difficulty level so you can skip earlier promotions. | `0` |
 | `--vsync on\|off` | Requests enabling (`on`) or disabling (`off`) vertical sync. | Platform default |
 | `--layout LAYOUT` | Restores a serialized tower layout before launching the renderer. | None |
 | `--show-fps on\|off` | Prints per-second frame timing metrics to stdout when set to `on`. | `off` |
@@ -86,6 +87,16 @@ cargo run --bin maze-defence -- --bug-spawn-interval-ms 2000
 ```
 
 The accepted range matches `--bug-step-ms` — anything between 1 and 60,000 milliseconds is valid.
+
+## Jumping to a difficulty level
+
+Use `--difficulty-level` to skip straight to a higher base difficulty without grinding through earlier rounds:
+
+```bash
+cargo run --bin maze-defence -- --difficulty-level 12
+```
+
+The flag accepts any non-negative integer. Hard victories still promote the level further if you keep clearing rounds on the tougher setting.
 
 ## Toggling vertical sync
 

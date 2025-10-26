@@ -902,6 +902,11 @@ pub enum Command {
         /// Mode the world should activate.
         mode: PlayMode,
     },
+    /// Sets the base difficulty level tracked by the world.
+    SetDifficultyLevel {
+        /// Difficulty level that should become active immediately.
+        level: DifficultyLevel,
+    },
     /// Requests that a bug spawner emit a new bug into the maze.
     SpawnBug {
         /// Location of the spawner responsible for creating the bug.

@@ -851,6 +851,9 @@ pub fn apply(world: &mut World, command: Command, out_events: &mut Vec<Event>) {
         Command::SetPlayMode { mode } => {
             let _ = world.transition_to_play_mode(mode, out_events);
         }
+        Command::SetDifficultyLevel { level } => {
+            world.update_difficulty_level(level.get(), out_events);
+        }
         Command::SpawnBug {
             spawner,
             color,
