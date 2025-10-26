@@ -117,19 +117,32 @@ legacy pieces.
 
 **Deliverables:**
 
-- [x] Update world/apply code to request waves from `PressureV2`, replace `tier` naming with
-  `difficulty` everywhere, and persist per-bug spawn records using the new types.
-- [x] Spawn bugs from multiple map locations by assigning each species a band of 5–10
-  consecutive spawner cells sampled (deterministically) around the map instead of the
-  fixed top-left cell. Ensure spawn centres fire at the maximum allowed cadence (each
-  tick once the previous bug vacates) by respecting the generated cadence and per-cell
-  queueing.
-- [x] Extend adapters/renderers to use the species tint when drawing bugs and to place spawn
-  effects at the assigned spawner cells.
+- [ ] Finalise the world wiring: `World::launch_wave` must translate a
+  `PressureWavePlan` into the authoritative attack state instead of panicking.
+  Allocate an `ActiveWaveContext`, persist the generated spawn list, and hydrate the
+  existing `Spawning` queues with cadence-aware jobs that honour the millisecond offsets
+  provided by the plan. The implementation must continue to source bugs from the
+  deterministic band of spawner cells introduced in §5 so replay hashing and the
+  multi-spawn visuals stay stable.
+- [ ] Replace every `panic!("pressure v2 not implemented")` in the CLI simulation with the
+  new control flow. `Simulation::initiate_wave_launch` should build
+  `PressureWaveInputs::new` using the world seed, level id, next wave id, and the
+  requested difficulty, enqueue `Command::GeneratePressureWave`, and remember the
+  pending `(WaveId, WaveDifficulty)` pair. `Simulation::apply_command` must forward the
+  command to `world::apply` (so the world caches the plan) and stash a local copy in a
+  ready queue when it receives `Event::PressureWaveReady` through
+  `record_attack_plan_events`. `take_ready_wave_launch` then returns the oldest cached
+  plan so that `activate_wave` can construct a `WaveState`, seed it with the plan's
+  spawn descriptors, assign the species tint + patch band, and push the necessary
+  `Command::StartWave` / spawn commands into the main loop.
+- [ ] Update the rendering adapters so that the Macroquad front-end consumes the species
+  tint included in each `SpeciesPrototype` and shows spawn effects at the selected
+  spawner cells. This removes the placeholder panic in `populate_spawn_effects` and
+  ensures the pressure preview matches the generator output.
 
 **Exit checks:** Integration tests confirm bugs spawn from multiple cells with matching
-colours, replay harness stays deterministic, and no references to the removed legacy
-system remain.
+colours, replay harness stays deterministic, the CLI wave pipeline no longer panics, and
+no references to the removed legacy system remain.
 
 # 7) [TODO] Documentation + harness coverage
 
