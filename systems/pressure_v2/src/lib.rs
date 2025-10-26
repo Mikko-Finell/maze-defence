@@ -317,8 +317,8 @@ impl PressureV2 {
         self.sample_provisional_species(inputs);
         self.align_pressure_with_eta();
         self.sample_cadence_and_start_offsets(inputs);
-        out.clear();
-        todo!("pressure v2 generation not implemented");
+        self.enforce_duration_caps(inputs);
+        self.write_final_spawn_records(out);
     }
 
     fn reseed_rng(&mut self, inputs: &PressureWaveInputs) {
@@ -557,6 +557,104 @@ impl PressureV2 {
                 let time = start.saturating_add(cadence.saturating_mul(index as u64));
                 component.spawn_times.push(time.min(u32::MAX as u64) as u32);
             }
+        }
+    }
+
+    fn enforce_duration_caps(&mut self, inputs: &PressureWaveInputs) {
+        let difficulty = inputs.difficulty().get() as f32;
+        let target_duration = self.duration_target_ms(difficulty);
+
+        let mut t_end_before = 0u32;
+        for component in &self.work.provisional_species {
+            if let Some(&time) = component.spawn_times.last() {
+                t_end_before = t_end_before.max(time);
+            }
+        }
+
+        let mut compression_factor = 1.0f32;
+        let mut t_end_after = t_end_before;
+
+        if !self.work.provisional_species.is_empty() && t_end_before > target_duration {
+            let factor = f64::from(t_end_before) / f64::from(target_duration);
+            compression_factor = factor as f32;
+            t_end_after = 0;
+            let cadence_min = self.tuning.cadence.cadence_min_ms;
+            for component in self.work.provisional_species.iter_mut() {
+                let divided = (f64::from(component.cadence_ms) / factor).floor();
+                let mut cadence = if divided.is_finite() {
+                    divided.max(1.0).min(f64::from(u32::MAX)) as u32
+                } else {
+                    component.cadence_ms
+                };
+                if cadence < cadence_min {
+                    cadence = cadence_min;
+                }
+                component.cadence_ms = cadence;
+                component.spawn_times.clear();
+                component.spawn_times.reserve(component.bug_count as usize);
+                let cadence_u64 = cadence as u64;
+                let start_u64 = component.start_offset_ms as u64;
+                for index in 0..component.bug_count {
+                    let time = start_u64.saturating_add(cadence_u64.saturating_mul(index as u64));
+                    component.spawn_times.push(time.min(u32::MAX as u64) as u32);
+                }
+                if let Some(&last) = component.spawn_times.last() {
+                    t_end_after = t_end_after.max(last);
+                }
+            }
+        }
+
+        let cadence_min = self.tuning.cadence.cadence_min_ms;
+        let hit_cadence_min = self
+            .work
+            .provisional_species
+            .iter()
+            .any(|component| component.cadence_ms == cadence_min);
+
+        let telemetry = self.telemetry.cadence_compression_mut();
+        telemetry.t_end_before = t_end_before;
+        telemetry.t_target = target_duration;
+        telemetry.compression_factor = compression_factor;
+        telemetry.hit_cadence_min = hit_cadence_min;
+        telemetry.t_end_after = t_end_after;
+    }
+
+    fn write_final_spawn_records(&self, out: &mut Vec<PressureSpawnRecord>) {
+        out.clear();
+        let total_spawns: usize = self
+            .work
+            .provisional_species
+            .iter()
+            .map(|component| component.spawn_times.len())
+            .sum();
+
+        if total_spawns == 0 {
+            return;
+        }
+
+        let mut scratch: Vec<(u32, u32, u32, f32, f32)> = Vec::with_capacity(total_spawns);
+        for (species_id, component) in self.work.provisional_species.iter().enumerate() {
+            for (index, &time) in component.spawn_times.iter().enumerate() {
+                scratch.push((
+                    time,
+                    species_id as u32,
+                    index as u32,
+                    component.hp_post,
+                    component.speed_post,
+                ));
+            }
+        }
+
+        scratch.sort_by(|a, b| {
+            a.0.cmp(&b.0)
+                .then_with(|| a.1.cmp(&b.1))
+                .then_with(|| a.2.cmp(&b.2))
+        });
+
+        out.reserve(scratch.len());
+        for (time, species_id, _, hp, speed) in scratch {
+            let hp_value = hp.round().clamp(1.0, u32::MAX as f32) as u32;
+            out.push(PressureSpawnRecord::new(time, hp_value, speed, species_id));
         }
     }
 
@@ -908,6 +1006,12 @@ impl PressureV2 {
         let raw = tuning.start_base_ms + tuning.start_slope_ms * (difficulty - 1.0);
         raw.clamp(0.0, tuning.start_max_ms as f32)
     }
+
+    fn duration_target_ms(&self, difficulty: f32) -> u32 {
+        let tuning = &self.tuning.cadence;
+        let raw = tuning.duration_base_ms + tuning.duration_slope_ms * (difficulty - 1.0);
+        raw.max(1.0).round() as u32
+    }
 }
 
 #[cfg(test)]
@@ -966,6 +1070,14 @@ impl PressureV2 {
 
     fn sample_cadence_for_test(&mut self, inputs: &PressureWaveInputs) {
         self.sample_cadence_and_start_offsets(inputs);
+    }
+
+    fn enforce_duration_caps_for_test(&mut self, inputs: &PressureWaveInputs) {
+        self.enforce_duration_caps(inputs);
+    }
+
+    fn write_spawn_records_for_test(&self, out: &mut Vec<PressureSpawnRecord>) {
+        self.write_final_spawn_records(out);
     }
 
     fn component_cadence_ms(&self, index: usize) -> u32 {
@@ -1379,15 +1491,15 @@ impl EtaScalingTelemetry {
 #[derive(Clone, Debug, Default)]
 pub struct CadenceCompressionTelemetry {
     recorded: bool,
-    /// Placeholder maximum spawn time before compression.
+    /// Maximum spawn time encountered prior to enforcing the duration cap.
     pub t_end_before: u32,
-    /// Placeholder target deploy duration `T_target(D)`.
+    /// Target deploy duration `T_target(D)` for the current difficulty.
     pub t_target: u32,
-    /// Placeholder compression factor applied to cadences.
+    /// Compression factor applied to cadences when the deploy duration exceeds the target.
     pub compression_factor: f32,
-    /// Placeholder indicator describing whether any cadence hit the `cad_min` floor.
+    /// Indicates whether any cadence was clamped to the `cad_min` floor during compression.
     pub hit_cadence_min: bool,
-    /// Placeholder maximum spawn time after compression.
+    /// Maximum spawn time after compression (or the original times when no compression occurs).
     pub t_end_after: u32,
 }
 
@@ -2070,5 +2182,177 @@ mod tests {
         assert!(telemetry.is_recorded());
         assert!(telemetry.eta_clamped);
         assert!((telemetry.eta_final - ETA_MIN).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn duration_caps_skip_compression_when_wave_within_target() {
+        let mut generator = PressureV2::default();
+        generator.telemetry.reset();
+        generator.work.reset();
+
+        let weights = generator.tuning().pressure_weights.clone();
+        let total_bugs = 4;
+        let mut component = build_component(&weights, 1.0, 1.0, total_bugs, total_bugs);
+        component.cadence_ms = 500;
+        component.start_offset_ms = 100;
+        component.spawn_times = (0..component.bug_count)
+            .map(|idx| {
+                component
+                    .start_offset_ms
+                    .saturating_add(component.cadence_ms.saturating_mul(idx))
+            })
+            .collect();
+
+        generator.work.provisional_species = vec![component];
+        generator.work.provisional_species_count = 1;
+        generator.work.difficulty.bug_count = total_bugs;
+
+        let inputs =
+            PressureWaveInputs::new(11, LevelId::new(1), WaveId::new(1), DifficultyLevel::new(1));
+        generator.enforce_duration_caps_for_test(&inputs);
+
+        let component = &generator.work.provisional_species[0];
+        let expected_times = vec![100, 600, 1_100, 1_600];
+        assert_eq!(component.spawn_times, expected_times);
+        assert_eq!(component.cadence_ms, 500);
+
+        let telemetry = generator.telemetry().cadence_compression();
+        assert!(telemetry.is_recorded());
+        assert_eq!(telemetry.t_end_before, 1_600);
+        assert_eq!(telemetry.t_end_after, 1_600);
+        assert_eq!(telemetry.t_target, 60_000);
+        assert!((telemetry.compression_factor - 1.0).abs() < f32::EPSILON);
+        assert!(!telemetry.hit_cadence_min);
+    }
+
+    #[test]
+    fn duration_caps_compresses_cadence_when_over_target() {
+        let mut generator = PressureV2::default();
+        {
+            let tuning = generator.tuning_mut();
+            tuning.cadence.duration_base_ms = 1_000.0;
+            tuning.cadence.duration_slope_ms = 0.0;
+        }
+        generator.telemetry.reset();
+        generator.work.reset();
+
+        let weights = generator.tuning().pressure_weights.clone();
+        let total_bugs = 5;
+        let mut component = build_component(&weights, 1.0, 1.0, total_bugs, total_bugs);
+        component.cadence_ms = 300;
+        component.start_offset_ms = 0;
+        component.spawn_times = (0..component.bug_count)
+            .map(|idx| component.cadence_ms.saturating_mul(idx))
+            .collect();
+
+        generator.work.provisional_species = vec![component];
+        generator.work.provisional_species_count = 1;
+        generator.work.difficulty.bug_count = total_bugs;
+
+        let inputs =
+            PressureWaveInputs::new(7, LevelId::new(2), WaveId::new(3), DifficultyLevel::new(1));
+        generator.enforce_duration_caps_for_test(&inputs);
+
+        let component = &generator.work.provisional_species[0];
+        let expected_times = vec![0, 250, 500, 750, 1_000];
+        assert_eq!(component.spawn_times, expected_times);
+        assert_eq!(component.cadence_ms, 250);
+
+        let telemetry = generator.telemetry().cadence_compression();
+        assert!(telemetry.is_recorded());
+        assert_eq!(telemetry.t_end_before, 1_200);
+        assert_eq!(telemetry.t_end_after, 1_000);
+        assert_eq!(telemetry.t_target, 1_000);
+        assert!((telemetry.compression_factor - 1.2).abs() < 1e-3);
+        assert!(!telemetry.hit_cadence_min);
+    }
+
+    #[test]
+    fn duration_caps_hits_cadence_min_when_target_too_low() {
+        let mut generator = PressureV2::default();
+        {
+            let tuning = generator.tuning_mut();
+            tuning.cadence.duration_base_ms = 100.0;
+            tuning.cadence.duration_slope_ms = 0.0;
+        }
+        generator.telemetry.reset();
+        generator.work.reset();
+
+        let weights = generator.tuning().pressure_weights.clone();
+        let total_bugs = 3;
+        let mut component = build_component(&weights, 1.0, 1.0, total_bugs, total_bugs);
+        component.cadence_ms = 150;
+        component.start_offset_ms = 0;
+        component.spawn_times = (0..component.bug_count)
+            .map(|idx| component.cadence_ms.saturating_mul(idx))
+            .collect();
+
+        generator.work.provisional_species = vec![component];
+        generator.work.provisional_species_count = 1;
+        generator.work.difficulty.bug_count = total_bugs;
+
+        let inputs =
+            PressureWaveInputs::new(9, LevelId::new(5), WaveId::new(1), DifficultyLevel::new(1));
+        generator.enforce_duration_caps_for_test(&inputs);
+
+        let component = &generator.work.provisional_species[0];
+        let expected_times = vec![0, 120, 240];
+        assert_eq!(component.spawn_times, expected_times);
+        assert_eq!(
+            component.cadence_ms,
+            generator.tuning().cadence.cadence_min_ms
+        );
+
+        let telemetry = generator.telemetry().cadence_compression();
+        assert!(telemetry.is_recorded());
+        assert_eq!(telemetry.t_end_before, 300);
+        assert_eq!(telemetry.t_target, 100);
+        assert_eq!(telemetry.t_end_after, 240);
+        assert!((telemetry.compression_factor - 3.0).abs() < 1e-3);
+        assert!(telemetry.hit_cadence_min);
+        assert!(telemetry.t_end_after > telemetry.t_target);
+    }
+
+    #[test]
+    fn spawn_records_are_sorted_and_hp_rounded() {
+        let mut generator = PressureV2::default();
+        generator.telemetry.reset();
+        generator.work.reset();
+
+        let weights = generator.tuning().pressure_weights.clone();
+        let mut component_a = build_component(&weights, 1.0, 1.0, 2, 4);
+        component_a.hp_post = 17.6;
+        component_a.speed_post = 1.25;
+        component_a.spawn_times = vec![400, 800];
+        component_a.cadence_ms = 400;
+        component_a.start_offset_ms = 0;
+
+        let mut component_b = build_component(&weights, 1.0, 1.0, 2, 4);
+        component_b.hp_post = 19.2;
+        component_b.speed_post = 0.9;
+        component_b.spawn_times = vec![400, 600];
+        component_b.cadence_ms = 200;
+        component_b.start_offset_ms = 0;
+
+        generator.work.provisional_species = vec![component_a, component_b];
+        generator.work.provisional_species_count = 2;
+
+        let mut spawns = Vec::new();
+        generator.write_spawn_records_for_test(&mut spawns);
+
+        let times: Vec<u32> = spawns.iter().map(|spawn| spawn.time_ms()).collect();
+        assert_eq!(times, vec![400, 400, 600, 800]);
+
+        let species: Vec<u32> = spawns.iter().map(|spawn| spawn.species_id()).collect();
+        assert_eq!(species, vec![0, 1, 1, 0]);
+
+        let hp: Vec<u32> = spawns.iter().map(|spawn| spawn.hp()).collect();
+        assert_eq!(hp, vec![18, 19, 19, 18]);
+
+        let speeds: Vec<f32> = spawns.iter().map(|spawn| spawn.speed_mult()).collect();
+        assert!((speeds[0] - 1.25).abs() < f32::EPSILON);
+        assert!((speeds[1] - 0.9).abs() < f32::EPSILON);
+        assert!((speeds[2] - 0.9).abs() < f32::EPSILON);
+        assert!((speeds[3] - 1.25).abs() < f32::EPSILON);
     }
 }

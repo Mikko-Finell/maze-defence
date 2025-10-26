@@ -90,7 +90,7 @@ assignment for each species.
 colour uniqueness for up to the configured species cap. Telemetry tests cover merge and
 no-merge cases.
 
-# 5) [TODO] Global scaling + cadence realisation
+# 5) [DONE] Global scaling + cadence realisation
 
 **Goal:** Apply the global `η` scaling, cadence sampling, and duration compression from
 §5–§6 while keeping RNG usage deterministic.
@@ -102,9 +102,9 @@ no-merge cases.
 - [x] Sample per-species cadence and start offsets (document which tuning fields control
   ranges), generate arithmetic progression spawn times, and store them in per-species
   buffers.
-- [ ] Enforce duration caps with global compression and `cad_min` logic, emitting
+- [x] Enforce duration caps with global compression and `cad_min` logic, emitting
   `cadence_compression` telemetry even when no compression occurs.
-- [ ] Produce the final sorted spawn list and write it into the caller-provided buffer with
+- [x] Produce the final sorted spawn list and write it into the caller-provided buffer with
   stable ordering.
 
 **Exit checks:** Determinism tests confirm identical output across seeds; compression
