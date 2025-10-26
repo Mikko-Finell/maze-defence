@@ -12,7 +12,7 @@
 mod layout_transfer;
 
 use std::{
-    collections::{BTreeSet, HashMap},
+    collections::{BTreeMap, BTreeSet, HashMap},
     f32::consts::{FRAC_PI_2, PI},
     fmt,
     num::NonZeroU32,
@@ -36,8 +36,8 @@ use maze_defence_rendering::{
     visuals, BugHealthPresentation, BugPresentation, BugVisual, Color, ControlPanelView,
     DifficultyButtonPresentation, DifficultyPresentation, DifficultySelectionPresentation,
     FrameInput, FrameSimulationBreakdown, GoldPresentation, GroundKind, GroundSpriteTiles,
-    Presentation, RenderingBackend, Scene, SceneProjectile, SceneTower, SceneWall, SpriteKey,
-    TileGridPresentation, TileSpacePosition, TowerInteractionFeedback, TowerPreview,
+    Presentation, RenderingBackend, Scene, SceneProjectile, SceneTower, SceneWall, SpawnEffect,
+    SpriteKey, TileGridPresentation, TileSpacePosition, TowerInteractionFeedback, TowerPreview,
     TowerTargetLine,
 };
 use maze_defence_rendering_macroquad::MacroquadBackend;
@@ -341,6 +341,7 @@ fn main() -> Result<()> {
         grid_scene,
         wall_color,
         None,
+        Vec::new(),
         Vec::new(),
         Vec::new(),
         Vec::new(),
@@ -748,6 +749,15 @@ impl WaveState {
             });
             self.next_spawn += 1;
         }
+    }
+
+    fn pending_spawn_effects(&self) -> Vec<(CellCoord, BugColor)> {
+        let mut effects = BTreeMap::new();
+        for spawn in self.scheduled.iter().skip(self.next_spawn) {
+            let key = (spawn.spawner.row(), spawn.spawner.column());
+            let _ = effects.entry(key).or_insert((spawn.spawner, spawn.color));
+        }
+        effects.into_values().collect()
     }
 
     fn finished(&self) -> bool {
@@ -1340,10 +1350,11 @@ impl Simulation {
         scene.bugs.clear();
         let mut bug_positions = HashMap::new();
         for bug in bug_view.iter() {
-            let color = bug.color;
+            let bug_color = bug.color;
             let position = self.interpolated_bug_position_with_cell(bug.id, Some(bug.cell));
             let _ = bug_positions.insert(bug.id, position);
             let health = BugHealthPresentation::new(bug.health.get(), bug.max_health.get());
+            let tint = Color::from_rgb_u8(bug_color.red(), bug_color.green(), bug_color.blue());
 
             let presentation = if use_sprite_visuals {
                 let stored_heading = self.bug_headings.get(&bug.id).copied();
@@ -1359,19 +1370,15 @@ impl Simulation {
                     bug.cell.column(),
                     bug.cell.row(),
                     SpriteKey::BugBody,
+                    tint,
                     heading,
                 );
-                let BugVisual::Sprite(sprite) = sprite_visual else {
+                let BugVisual::Sprite { sprite, tint } = sprite_visual else {
                     unreachable!("bug sprite helper should return sprite visuals");
                 };
-                BugPresentation::new_sprite(bug.id, position, sprite, health)
+                BugPresentation::new_sprite(bug.id, position, sprite, tint, health)
             } else {
-                BugPresentation::new_circle(
-                    bug.id,
-                    position,
-                    Color::from_rgb_u8(color.red(), color.green(), color.blue()),
-                    health,
-                )
+                BugPresentation::new_circle(bug.id, position, tint, health)
             };
 
             scene.bugs.push(presentation);
@@ -1393,6 +1400,9 @@ impl Simulation {
         push_projectiles(scene, &self.projectiles, |bug, fallback| {
             bug_positions.get(&bug).copied().unwrap_or(fallback)
         });
+
+        scene.spawn_effects.clear();
+        scene.spawn_effects.extend(self.spawn_effects());
 
         scene.play_mode = query::play_mode(&self.world);
         scene.tower_preview = if scene.play_mode == PlayMode::Builder {
@@ -1430,6 +1440,23 @@ impl Simulation {
         scene.gold = Some(GoldPresentation::new(self.gold));
         scene.difficulty = Some(DifficultyPresentation::new(self.difficulty_level));
         scene.difficulty_selection = Some(self.difficulty_selection_presentation());
+    }
+
+    fn spawn_effects(&self) -> Vec<SpawnEffect> {
+        let Some(wave) = &self.active_wave else {
+            return Vec::new();
+        };
+
+        wave.pending_spawn_effects()
+            .into_iter()
+            .map(|(cell, color)| {
+                SpawnEffect::new(
+                    cell.column(),
+                    cell.row(),
+                    Color::from_rgb_u8(color.red(), color.green(), color.blue()),
+                )
+            })
+            .collect()
     }
 
     fn difficulty_selection_presentation(&self) -> DifficultySelectionPresentation {

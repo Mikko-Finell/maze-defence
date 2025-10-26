@@ -124,7 +124,7 @@ legacy pieces.
   fixed top-left cell. Ensure spawn centres fire at the maximum allowed cadence (each
   tick once the previous bug vacates) by respecting the generated cadence and per-cell
   queueing.
-- [ ] Extend adapters/renderers to use the species tint when drawing bugs and to place spawn
+- [x] Extend adapters/renderers to use the species tint when drawing bugs and to place spawn
   effects at the assigned spawner cells.
 
 **Exit checks:** Integration tests confirm bugs spawn from multiple cells with matching

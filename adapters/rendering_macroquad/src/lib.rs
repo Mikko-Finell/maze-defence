@@ -35,8 +35,8 @@ use maze_defence_core::{CellRect, PlayMode, TowerId, TowerKind, WaveDifficulty};
 use maze_defence_rendering::{
     visuals::heading_from_target_line, BugPresentation, BugVisual, Color, ControlPanelView,
     FrameInput, FrameSimulationBreakdown, Presentation, RenderingBackend, Scene, SceneProjectile,
-    SceneTower, SceneWall, SpriteInstance, SpriteKey, TileGridPresentation, TowerPreview,
-    TowerTargetLine, TowerVisual,
+    SceneTower, SceneWall, SpawnEffect, SpriteInstance, SpriteKey, TileGridPresentation,
+    TowerPreview, TowerTargetLine, TowerVisual,
 };
 use std::{
     collections::{HashMap, VecDeque},
@@ -181,7 +181,7 @@ fn scene_requests_sprites(scene: &Scene) -> bool {
         || scene
             .bugs
             .iter()
-            .any(|bug| matches!(bug.style, BugVisual::Sprite(_)))
+            .any(|bug| matches!(bug.style, BugVisual::Sprite { .. }))
 }
 
 /// Tracks the average frames-per-second produced by the render loop.
@@ -428,6 +428,7 @@ impl RenderingBackend for MacroquadBackend {
                     draw_tile_grid(&metrics, &tile_grid, grid_color);
                 }
                 draw_cell_walls(&scene, &metrics);
+                draw_spawn_effects(&scene.spawn_effects, &metrics);
 
                 let builder_preview = active_builder_preview(&scene);
                 if let Some(preview) = builder_preview {
@@ -795,7 +796,7 @@ fn draw_ground(scene: &Scene, metrics: &SceneMetrics, sprite_atlas: Option<&Spri
         for column in 0..horizontal_tiles {
             let column_base = base_column + step_x * column as f32;
             let base_position = Vec2::new(column_base, row_base);
-            draw_sprite_instance(atlas, sprite, base_position, metrics, None);
+            draw_sprite_instance(atlas, sprite, base_position, metrics, None, None);
         }
     }
 }
@@ -884,6 +885,36 @@ fn draw_cell_walls(scene: &Scene, metrics: &SceneMetrics) {
     }
 }
 
+fn draw_spawn_effects(effects: &[SpawnEffect], metrics: &SceneMetrics) {
+    if effects.is_empty() || metrics.cell_step <= f32::EPSILON {
+        return;
+    }
+
+    let radius = (metrics.cell_step * 0.35).max(1.0);
+    let outline_thickness = (metrics.cell_step * 0.08).max(1.0);
+
+    for effect in effects {
+        let center_x = metrics.offset_x + (effect.column as f32 + 0.5) * metrics.cell_step;
+        let center_y = metrics.offset_y + (effect.row as f32 + 0.5) * metrics.cell_step;
+        let fill = Color::new(
+            effect.color.red,
+            effect.color.green,
+            effect.color.blue,
+            0.55,
+        );
+        let outline = effect.color.lighten(0.3);
+
+        macroquad::shapes::draw_circle(center_x, center_y, radius, to_macroquad_color(fill));
+        macroquad::shapes::draw_circle_lines(
+            center_x,
+            center_y,
+            radius,
+            outline_thickness,
+            to_macroquad_color(outline),
+        );
+    }
+}
+
 fn draw_tower_targets(tower_targets: &[TowerTargetLine], metrics: &SceneMetrics) {
     let line_color = to_macroquad_color(Color::new(0.85, 0.9, 1.0, 0.5));
     let thickness = 0.5;
@@ -949,10 +980,10 @@ fn draw_bugs(bugs: &[BugPresentation], metrics: &SceneMetrics, sprite_atlas: Opt
                     BLACK,
                 );
             }
-            BugVisual::Sprite(ref sprite) => match sprite_atlas {
+            BugVisual::Sprite { ref sprite, tint } => match sprite_atlas {
                 Some(atlas) => {
                     let base_position = bug.position();
-                    draw_sprite_instance(atlas, sprite, base_position, metrics, None);
+                    draw_sprite_instance(atlas, sprite, base_position, metrics, None, Some(tint));
                 }
                 None => {
                     debug_assert!(false, "sprite bug visual requested without sprite atlas",);
@@ -1123,7 +1154,7 @@ fn draw_sprite_tower(
     let base_position = Vec2::new(origin.column() as f32, origin.row() as f32);
     match stage {
         TowerDrawStage::Base => {
-            draw_sprite_instance(atlas, base, base_position, metrics, None);
+            draw_sprite_instance(atlas, base, base_position, metrics, None, None);
         }
         TowerDrawStage::Turret => {
             let Some(center_cells) = tower_region_center(region) else {
@@ -1138,7 +1169,7 @@ fn draw_sprite_tower(
                 bugs,
                 turret_headings,
             );
-            draw_sprite_instance(atlas, turret, base_position, metrics, Some(heading));
+            draw_sprite_instance(atlas, turret, base_position, metrics, Some(heading), None);
         }
     }
 }
@@ -1245,6 +1276,7 @@ fn draw_sprite_instance(
     base_position: Vec2,
     metrics: &SceneMetrics,
     rotation_override: Option<f32>,
+    tint: Option<Color>,
 ) {
     let texture_size = atlas.dimensions(instance.sprite);
     let Some((position, scale, pivot, rotation)) = sprite_draw_parameters(
@@ -1257,10 +1289,13 @@ fn draw_sprite_instance(
         return;
     };
 
-    let params = sprites::DrawParams::new(position)
+    let mut params = sprites::DrawParams::new(position)
         .with_scale(scale)
         .with_rotation(rotation)
         .with_pivot(pivot);
+    if let Some(tint) = tint {
+        params = params.with_tint(to_macroquad_color(tint));
+    }
     atlas.draw(instance.sprite, params);
 }
 
@@ -1549,6 +1584,7 @@ mod tests {
             Vec::new(),
             Vec::new(),
             Vec::new(),
+            Vec::new(),
             None,
             play_mode,
             placement_preview,
@@ -1674,6 +1710,7 @@ mod tests {
                 tile_grid,
                 wall_color,
                 None,
+                Vec::new(),
                 Vec::new(),
                 Vec::new(),
                 Vec::new(),
