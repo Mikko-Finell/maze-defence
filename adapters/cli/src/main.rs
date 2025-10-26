@@ -187,6 +187,9 @@ struct CliArgs {
         value_parser = clap::value_parser!(u64).range(1..=60_000)
     )]
     bug_spawn_interval_ms: u64,
+    /// Sets the base difficulty level active when the simulation launches.
+    #[arg(long = "difficulty-level", value_name = "LEVEL", value_parser = clap::value_parser!(u32))]
+    difficulty_level: Option<u32>,
     /// Requests that the renderer either synchronise presentation with the display refresh rate or run uncapped.
     #[arg(long, value_enum, value_name = "on|off")]
     vsync: Option<VsyncMode>,
@@ -308,6 +311,7 @@ fn main() -> Result<()> {
 
     let bug_step_duration = Duration::from_millis(args.bug_step_ms);
     let bug_spawn_interval = Duration::from_millis(args.bug_spawn_interval_ms);
+    let initial_difficulty = args.difficulty_level.map(DifficultyLevel::new);
     let mut simulation = Simulation::new(
         columns,
         rows,
@@ -316,6 +320,7 @@ fn main() -> Result<()> {
         bug_step_duration,
         bug_spawn_interval,
         args.visual_style,
+        initial_difficulty,
     );
     if let Some(snapshot) = layout_snapshot.as_ref() {
         simulation
@@ -963,6 +968,7 @@ mod tests {
             Duration::from_millis(400),
             Duration::from_millis(1_000),
             VisualStyle::Primitives,
+            None,
         );
         simulation.ready_wave_launches.clear();
         simulation.active_wave = None;
@@ -1013,6 +1019,7 @@ mod tests {
             Duration::from_millis(DEFAULT_BUG_STEP_MS),
             Duration::from_millis(DEFAULT_BUG_SPAWN_INTERVAL_MS),
             VisualStyle::Primitives,
+            None,
         );
 
         let initial_gold = query::gold(simulation.world());
@@ -1031,6 +1038,27 @@ mod tests {
         assert_eq!(restored.iter().count(), snapshot.towers.len());
         assert_eq!(query::gold(simulation.world()), initial_gold);
     }
+
+    #[test]
+    fn initial_difficulty_level_applies_immediately() {
+        let simulation = Simulation::new(
+            4,
+            4,
+            48.0,
+            1,
+            Duration::from_millis(400),
+            Duration::from_millis(1_000),
+            VisualStyle::Primitives,
+            Some(DifficultyLevel::new(7)),
+        );
+
+        assert_eq!(simulation.difficulty_level, 7);
+        let emitted = simulation
+            .last_frame_events
+            .iter()
+            .any(|event| matches!(event, Event::DifficultyLevelChanged { level } if *level == 7));
+        assert!(emitted, "difficulty change should emit an event");
+    }
 }
 
 #[cfg_attr(test, allow(dead_code))]
@@ -1043,6 +1071,7 @@ impl Simulation {
         bug_step: Duration,
         bug_spawn_interval: Duration,
         visual_style: VisualStyle,
+        initial_difficulty: Option<DifficultyLevel>,
     ) -> Self {
         let mut world = World::new();
         let mut pending_events = Vec::new();
@@ -1063,6 +1092,14 @@ impl Simulation {
             },
             &mut pending_events,
         );
+
+        if let Some(level) = initial_difficulty {
+            world::apply(
+                &mut world,
+                Command::SetDifficultyLevel { level },
+                &mut pending_events,
+            );
+        }
 
         let initial_play_mode = query::play_mode(&world);
         pending_events.push(Event::PlayModeChanged {
