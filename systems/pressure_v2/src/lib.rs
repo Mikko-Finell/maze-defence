@@ -22,6 +22,9 @@ use rand_distr::{Distribution, Gamma, Poisson, StandardNormal};
 const DEFAULT_RNG_SEED: u64 = 0x8955_06d3_3f6b_11d7;
 const FNV_OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
 const FNV_PRIME: u64 = 0x0000_0001_0000_01b3;
+const ETA_MIN: f32 = 0.75;
+const ETA_MAX: f32 = 1.5;
+const ETA_BISECTION_STEPS: u32 = 24;
 
 /// Aggregated tuning knobs controlling every adjustable aspect of the pressure generator.
 #[derive(Clone, Debug)]
@@ -312,6 +315,7 @@ impl PressureV2 {
         self.work.reset();
         self.compute_difficulty_latents(inputs);
         self.sample_provisional_species(inputs);
+        self.align_pressure_with_eta();
         out.clear();
         todo!("pressure v2 generation not implemented");
     }
@@ -438,6 +442,86 @@ impl PressureV2 {
         self.populate_component_centres(difficulty, final_count as usize);
         self.allocate_dirichlet_counts(bug_count);
         self.enforce_minimum_share();
+    }
+
+    fn align_pressure_with_eta(&mut self) {
+        if self.work.provisional_species.is_empty() {
+            self.work.eta = 1.0;
+            self.work.eta_clamped = false;
+            self.work.pressure_after_eta = 0.0;
+            let telemetry = self.telemetry.eta_scaling_mut();
+            telemetry.eta_final = 1.0;
+            telemetry.eta_clamped = false;
+            telemetry.pressure_target = self.work.pressure_target as f32;
+            telemetry.pressure_after_eta = 0.0;
+            return;
+        }
+
+        let target_pressure = self.work.pressure_target as f32;
+        let pressure_at_min = self.total_pressure_for_eta(ETA_MIN);
+        let pressure_at_max = self.total_pressure_for_eta(ETA_MAX);
+
+        let mut lower = ETA_MIN;
+        let mut upper = ETA_MAX;
+        for _ in 0..ETA_BISECTION_STEPS {
+            let midpoint = 0.5 * (lower + upper);
+            let pressure = self.total_pressure_for_eta(midpoint);
+            if pressure > target_pressure {
+                upper = midpoint;
+            } else {
+                lower = midpoint;
+            }
+        }
+
+        let mut eta = 0.5 * (lower + upper);
+        let eta_clamped = if target_pressure <= pressure_at_min {
+            eta = ETA_MIN;
+            true
+        } else if target_pressure >= pressure_at_max {
+            eta = ETA_MAX;
+            true
+        } else {
+            let clamped = eta.clamp(ETA_MIN, ETA_MAX);
+            let was_clamped = clamped != eta;
+            eta = clamped;
+            was_clamped
+        };
+
+        let weights = &self.tuning.pressure_weights;
+        let mut realised_pressure = 0.0;
+        for component in self.work.provisional_species.iter_mut() {
+            let hp_post = eta * component.hp_pre;
+            let speed_post = eta * component.speed_pre;
+            let pressure_weight_post =
+                weights.alpha * hp_post + weights.beta * speed_post.powf(weights.gamma);
+            component.hp_post = hp_post;
+            component.speed_post = speed_post;
+            component.pressure_weight_post = pressure_weight_post;
+            realised_pressure += component.bug_count as f32 * pressure_weight_post;
+        }
+
+        self.work.eta = eta;
+        self.work.eta_clamped = eta_clamped;
+        self.work.pressure_after_eta = realised_pressure;
+
+        let telemetry = self.telemetry.eta_scaling_mut();
+        telemetry.eta_final = eta;
+        telemetry.eta_clamped = eta_clamped;
+        telemetry.pressure_target = target_pressure;
+        telemetry.pressure_after_eta = realised_pressure;
+    }
+
+    fn total_pressure_for_eta(&self, eta: f32) -> f32 {
+        let weights = &self.tuning.pressure_weights;
+        self.work
+            .provisional_species
+            .iter()
+            .fold(0.0, |acc, component| {
+                let hp = eta * component.hp_pre;
+                let speed = eta * component.speed_pre;
+                let per_bug = weights.alpha * hp + weights.beta * speed.powf(weights.gamma);
+                acc + component.bug_count as f32 * per_bug
+            })
     }
 
     fn draw_raw_component_count(&mut self, difficulty: f32) -> u32 {
@@ -791,6 +875,26 @@ impl PressureV2 {
         self.work.minimum_species_size
     }
 
+    fn align_pressure_for_test(&mut self) {
+        self.align_pressure_with_eta();
+    }
+
+    fn wave_eta(&self) -> f32 {
+        self.work.eta
+    }
+
+    fn eta_was_clamped(&self) -> bool {
+        self.work.eta_clamped
+    }
+
+    fn pressure_after_eta(&self) -> f32 {
+        self.work.pressure_after_eta
+    }
+
+    fn pressure_for_eta(&self, eta: f32) -> f32 {
+        self.total_pressure_for_eta(eta)
+    }
+
     fn enforce_minimum_share_for_test(&mut self) {
         self.enforce_minimum_share();
     }
@@ -989,6 +1093,9 @@ struct WaveWork {
     provisional_species: Vec<ComponentWork>,
     provisional_species_count: u32,
     minimum_species_size: u32,
+    eta: f32,
+    eta_clamped: bool,
+    pressure_after_eta: f32,
 }
 
 impl WaveWork {
@@ -1001,6 +1108,9 @@ impl WaveWork {
         self.provisional_species.clear();
         self.provisional_species_count = 0;
         self.minimum_species_size = 0;
+        self.eta = 1.0;
+        self.eta_clamped = false;
+        self.pressure_after_eta = 0.0;
     }
 }
 
@@ -1010,6 +1120,9 @@ struct ComponentWork {
     hp_pre: f32,
     speed_pre: f32,
     pressure_weight_pre: f32,
+    hp_post: f32,
+    speed_post: f32,
+    pressure_weight_post: f32,
     dirichlet_share: f32,
     fractional_count: f32,
     bug_count: u32,
@@ -1030,6 +1143,9 @@ impl ComponentWork {
             hp_pre,
             speed_pre,
             pressure_weight_pre,
+            hp_post: hp_pre,
+            speed_post: speed_pre,
+            pressure_weight_post: pressure_weight_pre,
             dirichlet_share: 0.0,
             fractional_count: 0.0,
             bug_count: 0,
@@ -1227,6 +1343,9 @@ mod tests {
             hp_pre,
             speed_pre,
             pressure_weight_pre: pressure_weight,
+            hp_post: hp_pre,
+            speed_post: speed_pre,
+            pressure_weight_post: pressure_weight,
             dirichlet_share: share,
             fractional_count: share * total_bugs as f32,
             bug_count,
@@ -1693,5 +1812,109 @@ mod tests {
             .collect();
 
         assert_eq!(tints_a, tints_b);
+    }
+
+    #[test]
+    fn eta_scaling_aligns_pressure_when_target_inside_bounds() {
+        let mut generator = PressureV2::default();
+        generator.telemetry.reset();
+        generator.work.reset();
+
+        let total_bugs = 30;
+        generator.work.difficulty.bug_count = total_bugs;
+        let weights = generator.tuning().pressure_weights.clone();
+        let components = vec![
+            build_component(&weights, 1.0, 1.0, 10, total_bugs),
+            build_component(&weights, 1.2, 0.9, 8, total_bugs),
+            build_component(&weights, 0.9, 1.4, 12, total_bugs),
+        ];
+        let mut pressure_sum = 0.0;
+        for component in &components {
+            let per_bug = weights.alpha * component.hp_pre
+                + weights.beta * component.speed_pre.powf(weights.gamma);
+            pressure_sum += component.bug_count as f32 * per_bug;
+        }
+        generator.work.pressure_target = pressure_sum.round() as u32;
+        generator.work.provisional_species = components;
+        generator.work.provisional_species_count = 3;
+
+        generator.align_pressure_for_test();
+
+        let eta = generator.wave_eta();
+        assert!(eta > ETA_MIN);
+        assert!(eta < ETA_MAX);
+        let realised = generator.pressure_after_eta();
+        let target = generator.work_state().pressure_target as f32;
+        assert!((realised - target).abs() <= 1.0);
+
+        let telemetry = generator.telemetry().eta_scaling();
+        assert!(telemetry.is_recorded());
+        assert!(!telemetry.eta_clamped);
+        assert!((telemetry.eta_final - eta).abs() < f32::EPSILON);
+        assert!((telemetry.pressure_after_eta - realised).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn eta_scaling_clamps_and_records_when_target_too_high() {
+        let mut generator = PressureV2::default();
+        generator.telemetry.reset();
+        generator.work.reset();
+
+        let total_bugs = 18;
+        generator.work.difficulty.bug_count = total_bugs;
+        let weights = generator.tuning().pressure_weights.clone();
+        let components = vec![
+            build_component(&weights, 1.0, 1.0, 9, total_bugs),
+            build_component(&weights, 1.1, 1.1, 9, total_bugs),
+        ];
+        generator.work.provisional_species = components;
+        generator.work.provisional_species_count = 2;
+        let max_pressure = generator.pressure_for_eta(ETA_MAX);
+        generator.work.pressure_target = (max_pressure * 2.0).round() as u32;
+
+        generator.align_pressure_for_test();
+
+        assert!(generator.eta_was_clamped());
+        assert!((generator.wave_eta() - ETA_MAX).abs() < f32::EPSILON);
+        assert!(
+            generator.pressure_after_eta() <= generator.work_state().pressure_target as f32 + 1.0
+        );
+
+        let telemetry = generator.telemetry().eta_scaling();
+        assert!(telemetry.is_recorded());
+        assert!(telemetry.eta_clamped);
+        assert!((telemetry.eta_final - ETA_MAX).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn eta_scaling_clamps_and_records_when_target_too_low() {
+        let mut generator = PressureV2::default();
+        generator.telemetry.reset();
+        generator.work.reset();
+
+        let total_bugs = 20;
+        generator.work.difficulty.bug_count = total_bugs;
+        let weights = generator.tuning().pressure_weights.clone();
+        let components = vec![
+            build_component(&weights, 1.3, 1.0, 10, total_bugs),
+            build_component(&weights, 1.1, 0.9, 10, total_bugs),
+        ];
+        generator.work.provisional_species = components;
+        generator.work.provisional_species_count = 2;
+        let min_pressure = generator.pressure_for_eta(ETA_MIN);
+        generator.work.pressure_target = (min_pressure * 0.25).round() as u32;
+
+        generator.align_pressure_for_test();
+
+        assert!(generator.eta_was_clamped());
+        assert!((generator.wave_eta() - ETA_MIN).abs() < f32::EPSILON);
+        assert!(
+            generator.pressure_after_eta() >= generator.work_state().pressure_target as f32 - 1.0
+        );
+
+        let telemetry = generator.telemetry().eta_scaling();
+        assert!(telemetry.is_recorded());
+        assert!(telemetry.eta_clamped);
+        assert!((telemetry.eta_final - ETA_MIN).abs() < f32::EPSILON);
     }
 }
