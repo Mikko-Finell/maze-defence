@@ -1,6 +1,6 @@
 # Wave Generation — Final Authoritative Specification
 
-This document is deprecated superseded by `pressure-spec-v2.md`.
+This document is deprecated and retained only as historical reference. The live specification is `pressure-spec-v2.md`, implemented exclusively by the `systems/pressure_v2` crate under the roadmap in `pressure-impl.md`. Integrations configure waves through `PressureTuning`; no legacy generator remains.
 
 This document defines a deterministic, data-driven mechanism to generate an AttackPlan (one attack/wave) composed of multiple overlapping bursts of homogeneous enemy species spawned from patches outside the maze. The generator is a pure, seedable procedure: given the same inputs (global seed, difficulty state, species table, patch table and parameters) it SHALL produce bit-identical AttackPlans. This spec focuses strictly on wave generation mechanics; reward and loss systems are out of scope except for brief, non-normative asides.
 

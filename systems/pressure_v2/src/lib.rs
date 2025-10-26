@@ -306,10 +306,28 @@ impl PressureV2 {
     /// Generates v2 pressure spawns according to the provided inputs.
     pub fn generate(&mut self, inputs: &PressureWaveInputs, out: &mut Vec<PressureSpawnRecord>) {
         self.reseed_rng(inputs);
-        // RNG draw order (documented here for determinism auditing):
-        // 1) Difficulty latent draws (§3) consume the first sequence elements.
-        // 2) Species sampling (§4) consumes the subsequent draws in the order they appear in the spec.
-        // 3) Cadence sampling (§6) consumes the remaining draws before compression.
+        // RNG draw order (documented for determinism auditing):
+        //   1: `draw_bug_count` pulls a truncated normal using
+        //      `PressureTuning::count.{deviation_ratio,floor,cap}`.
+        //   2: `draw_hp_multiplier` pulls a truncated normal using
+        //      `PressureTuning::hp.{deviation,min_multiplier,max_multiplier}`.
+        //   3: `draw_speed_multiplier` pulls a truncated normal using
+        //      `PressureTuning::speed.{deviation,min_multiplier,max_multiplier}`.
+        //   4: `draw_raw_component_count` samples the Poisson proposal with
+        //      `PressureTuning::components.{poisson_intercept,poisson_slope}`.
+        //   5-6 per provisional component: `populate_component_centres` consumes
+        //      two `StandardNormal` draws to build log-space HP/speed using the
+        //      `components.log_*` sigmas, correlation, and multiplier clamps.
+        //   7+ per provisional component: `allocate_dirichlet_counts` draws
+        //      Gammas parameterised by `components.dirichlet_concentration`.
+        //   Cadence realisation: for each surviving component,
+        //      `sample_cadence_and_start_offsets` pulls a cadence draw bounded
+        //      by `cadence_min_ms`/`cadence_max_ms` and a start-offset draw
+        //      capped by `start_max_ms` with deviations derived from
+        //      `cadence_deviation_ratio`/`start_deviation_ratio`.
+        //   Tint assignment: `draw_unique_tint` consumes hue, saturation, then
+        //      value for each component before falling back to deterministic
+        //      hues when the random attempts collide.
         self.telemetry.reset();
         self.telemetry.ensure_placeholders();
         self.work.reset();
@@ -377,7 +395,8 @@ impl PressureV2 {
         let logistic = self.count_mean(difficulty);
         let deviation = logistic * self.tuning.count.deviation_ratio;
         let floor = self.tuning.count.floor as f32;
-        // RNG draw #1: bug count latent truncated normal sample (σ = count.deviation_ratio).
+        // RNG draw #1: bug count latent truncated normal sample using
+        // `count.deviation_ratio` for spread and clamped to `count.floor`/`count.cap`.
         let sample = draw_truncated_normal(
             &mut self.rng,
             logistic,
@@ -395,7 +414,8 @@ impl PressureV2 {
 
     fn draw_hp_multiplier(&mut self, difficulty: f32) -> HpLatent {
         let mean_multiplier = self.hp_mean_multiplier(difficulty);
-        // RNG draw #2: HP multiplier truncated normal sample.
+        // RNG draw #2: HP multiplier truncated normal sample controlled by
+        // `hp.deviation` and clamped to `hp.min_multiplier`/`hp.max_multiplier`.
         let sampled_multiplier = draw_truncated_normal(
             &mut self.rng,
             mean_multiplier,
@@ -412,7 +432,8 @@ impl PressureV2 {
 
     fn draw_speed_multiplier(&mut self, difficulty: f32) -> SpeedLatent {
         let mean_multiplier = self.speed_mean_multiplier(difficulty);
-        // RNG draw #3: speed multiplier truncated normal sample.
+        // RNG draw #3: speed multiplier truncated normal sample controlled by
+        // `speed.deviation` and clamped to `speed.min_multiplier`/`speed.max_multiplier`.
         let sampled_multiplier = draw_truncated_normal(
             &mut self.rng,
             mean_multiplier,
@@ -527,7 +548,9 @@ impl PressureV2 {
         let start_max = tuning.start_max_ms as f32;
 
         for component in self.work.provisional_species.iter_mut() {
-            // RNG draw: per-species cadence sample; cadence_min_ms/cadence_max_ms bound the result per §6.1.
+            // RNG draw: per-species cadence sample; `cadence_base_ms` +
+            // `cadence_slope_ms` set the mean while `cadence_deviation_ratio`
+            // expands/shrinks the spread before the min/max clamps.
             let cadence_sample = draw_truncated_normal(
                 &mut self.rng,
                 cadence_mean,
@@ -538,7 +561,9 @@ impl PressureV2 {
             let cadence_ms = cadence_sample.round().clamp(cadence_min, cadence_max) as u32;
             component.cadence_ms = cadence_ms.max(tuning.cadence_min_ms);
 
-            // RNG draw: per-species start offset sample bounded by start_max_ms and influenced by start_base_ms/start_slope_ms.
+            // RNG draw: per-species start offset sample centred on
+            // `start_base_ms` + `start_slope_ms` * (D-1) with spread controlled
+            // by `start_deviation_ratio` and clamped to `start_max_ms`.
             let start_sample = draw_truncated_normal(
                 &mut self.rng,
                 start_mean,
@@ -673,7 +698,8 @@ impl PressureV2 {
 
     fn draw_raw_component_count(&mut self, difficulty: f32) -> u32 {
         let mean = self.component_poisson_mean(difficulty);
-        // RNG draw #4: provisional component Poisson proposal.
+        // RNG draw #4: provisional component Poisson proposal using the
+        // `components.poisson_intercept` + `poisson_slope` growth curve.
         let distribution = Poisson::new(f64::from(mean)).expect("positive Poisson mean");
         distribution.sample(&mut self.rng) as u32
     }
@@ -696,7 +722,9 @@ impl PressureV2 {
         let orthogonal_scale = (1.0 - rho * rho).max(0.0).sqrt();
 
         for _ in 0..count {
-            // RNG draws #5-6: bivariate log-space component centre.
+            // RNG draws #5-6: bivariate log-space component centre using
+            // `components.log_hp_sigma`, `log_speed_sigma`, and `log_correlation`
+            // before clamping to the multiplier bounds.
             let z_hp: f32 = self.rng.sample(StandardNormal);
             let z_speed: f32 = self.rng.sample(StandardNormal);
 
@@ -739,7 +767,8 @@ impl PressureV2 {
             Gamma::new(f64::from(alpha), 1.0).expect("positive Dirichlet concentration");
         let mut draws = Vec::with_capacity(component_count);
         for _ in 0..component_count {
-            // RNG draw #7+: Dirichlet gamma sample per component.
+            // RNG draw #7+: Dirichlet gamma sample per component governed by
+            // `components.dirichlet_concentration`.
             draws.push(dirichlet.sample(&mut self.rng) as f32);
         }
 
@@ -943,7 +972,9 @@ impl PressureV2 {
     fn draw_unique_tint(&mut self, used: &mut Vec<(u8, u8, u8)>) -> MacroquadColor {
         const MAX_ATTEMPTS: usize = 24;
         for _ in 0..MAX_ATTEMPTS {
-            // RNG draws: species tint hue, saturation, and value in that order.
+            // RNG draws: species tint hue, saturation, and value in that order;
+            // saturation/value ranges ensure readable contrast without ever
+            // dipping below 0.55/0.85.
             let hue: f32 = self.rng.gen();
             let saturation: f32 = self.rng.gen_range(0.55..0.85);
             let value: f32 = self.rng.gen_range(0.85..0.98);
@@ -976,6 +1007,9 @@ impl PressureV2 {
     fn hp_mean_multiplier(&self, difficulty: f32) -> f32 {
         let tuning = &self.tuning.hp;
         let delta = (difficulty - 1.0).max(0.0);
+        // `soft_boost_fraction`/`soft_boost_rate` deliver the early additive
+        // HP padding, while `post_pivot_growth` + `growth_pivot` set the
+        // multiplicative ramp beyond the pivot.
         let soft_boost =
             tuning.soft_boost_fraction * (1.0 - (-tuning.soft_boost_rate * delta).exp());
         let multiplicative = tuning
@@ -987,6 +1021,9 @@ impl PressureV2 {
     fn speed_mean_multiplier(&self, difficulty: f32) -> f32 {
         let tuning = &self.tuning.speed;
         let delta = (difficulty - 1.0).max(0.0);
+        // Mirrors the HP knobs: `soft_boost_fraction`/`soft_boost_rate` govern
+        // the additive low-D bump while `post_pivot_growth` + `growth_pivot`
+        // dictate the late-game exponential acceleration.
         let soft_boost =
             tuning.soft_boost_fraction * (1.0 - (-tuning.soft_boost_rate * delta).exp());
         let multiplicative = tuning
@@ -997,18 +1034,24 @@ impl PressureV2 {
 
     fn cadence_mean_ms(&self, difficulty: f32) -> f32 {
         let tuning = &self.tuning.cadence;
+        // `cadence_base_ms` establishes the D=1 cadence and `cadence_slope_ms`
+        // shifts it per difficulty before the min/max clamps apply.
         let raw = tuning.cadence_base_ms + tuning.cadence_slope_ms * (difficulty - 1.0);
         raw.clamp(tuning.cadence_min_ms as f32, tuning.cadence_max_ms as f32)
     }
 
     fn start_offset_mean_ms(&self, difficulty: f32) -> f32 {
         let tuning = &self.tuning.cadence;
+        // `start_base_ms` + `start_slope_ms` set the linear offset trend and
+        // `start_max_ms` enforces the hard cap.
         let raw = tuning.start_base_ms + tuning.start_slope_ms * (difficulty - 1.0);
         raw.clamp(0.0, tuning.start_max_ms as f32)
     }
 
     fn duration_target_ms(&self, difficulty: f32) -> u32 {
         let tuning = &self.tuning.cadence;
+        // Compression triggers when the realised end time exceeds this linear
+        // target derived from `duration_base_ms` + `duration_slope_ms` * (D-1).
         let raw = tuning.duration_base_ms + tuning.duration_slope_ms * (difficulty - 1.0);
         raw.max(1.0).round() as u32
     }

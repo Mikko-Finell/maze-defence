@@ -13,7 +13,7 @@ The workspace follows a strict four-layer architecture, enforced both socially a
 | Pure systems | `systems/*` | Each sub-crate consumes events and immutable snapshots to emit new commands. Systems never mutate the world directly and never depend on one another. They are responsible for higher-level behaviour such as pathfinding, tower targeting, and spawning. |
 | Adapters | `adapters/*` | Integrations with IO surfaces (CLI, renderer, Macroquad backend). Adapters orchestrate systems, forward user input, and render world snapshots. They are the only crates allowed to call into both systems and the world. |
 
-Additional top-level documentation (`*.md` files) captures subsystem specifications and design notes, while the `assets` directory stores sprite data referenced by the rendering adapter.
+Additional top-level documentation (`*.md` files) captures subsystem specifications and design notes, while the `assets` directory stores sprite data referenced by the rendering adapter. Consult `pressure-impl.md` for the active wave-generation roadmap and handoff instructions; it supersedes the legacy documents and keeps the `PressureV2` implementation aligned with `pressure-spec-v2.md`.
 
 ## Message-driven communication
 
@@ -63,6 +63,7 @@ Each system crate focuses on a single responsibility:
 * **`systems/bootstrap`** exposes lightweight helper methods (such as `Bootstrap::welcome_banner` and `Bootstrap::tile_grid`) that adapters use during start-up to populate UI state.
 * **`systems/builder`** translates builder-mode inputs into placement and removal commands. It listens for `Event::PlayModeChanged` to determine when to accept input and relies on closures that mirror `world::query::tower_at` to identify hovered towers.
 * **`systems/movement`** consumes `Event::TimeAdvanced` and navigation snapshots to emit `Command::StepBug`. Its internal `CrowdPlanner` tracks congestion, detour queues, and per-bug reservations so that simultaneous moves remain deterministic.
+* **`systems/pressure_v2`** owns wave construction. The `PressureV2` struct exposes `tuning_mut()` so adapters can adjust the single `PressureTuning` entry point before the world requests a new wave. Implementation details and future work live in `pressure-impl.md`; no legacy generator remains.
 * **`systems/spawning`** accumulates elapsed time from `Event::TimeAdvanced`, advancing a simple linear congruential generator seeded at boot to choose spawn points and colours. It resets when switching to builder mode, ensuring deterministic waves.
 * **`systems/tower_targeting`** reconstructs tower and bug workspaces each frame, deriving the closest eligible target within each tower’s range (computed from `TowerKind::range_in_cells`). Deterministic ordering comes from the sorted snapshots yielded by `TowerView::iter` and `BugView::iter`.
 * **`systems/tower_combat`** filters targeting results using `TowerCooldownView::into_vec()`, which sorts cooldown snapshots by tower ID before checking whether each tower reports readiness.
