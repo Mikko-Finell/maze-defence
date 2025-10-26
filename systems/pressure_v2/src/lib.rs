@@ -12,8 +12,9 @@
 use maze_defence_core::{
     DifficultyLevel, LevelId, PressureSpawnRecord, PressureWaveInputs, WaveId,
 };
-use rand::SeedableRng;
+use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha8Rng;
+use rand_distr::StandardNormal;
 
 const DEFAULT_RNG_SEED: u64 = 0x8955_06d3_3f6b_11d7;
 const FNV_OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
@@ -265,6 +266,7 @@ pub struct PressureV2 {
     tuning: PressureTuning,
     rng: ChaCha8Rng,
     telemetry: PressureTelemetry,
+    work: WaveWork,
 }
 
 impl Default for PressureV2 {
@@ -281,6 +283,7 @@ impl PressureV2 {
             tuning,
             rng: ChaCha8Rng::seed_from_u64(DEFAULT_RNG_SEED),
             telemetry: PressureTelemetry::default(),
+            work: WaveWork::default(),
         }
     }
 
@@ -303,6 +306,8 @@ impl PressureV2 {
         // 3) Cadence sampling (§6) consumes the remaining draws before compression.
         self.telemetry.reset();
         self.telemetry.ensure_placeholders();
+        self.work.reset();
+        self.compute_difficulty_latents(inputs);
         out.clear();
         todo!("pressure v2 generation not implemented");
     }
@@ -316,6 +321,159 @@ impl PressureV2 {
         );
         self.rng = ChaCha8Rng::seed_from_u64(seed);
     }
+
+    fn compute_difficulty_latents(&mut self, inputs: &PressureWaveInputs) {
+        let difficulty = inputs.difficulty().get() as f32;
+        let count_latent = self.draw_bug_count(difficulty);
+        let hp_latent = self.draw_hp_multiplier(difficulty);
+        let speed_latent = self.draw_speed_multiplier(difficulty);
+
+        let hp_wave = BASE_HP * hp_latent.multiplier;
+        let speed_wave = speed_latent.multiplier;
+        let per_bug_pressure = self.tuning.pressure_weights.alpha * hp_wave
+            + self.tuning.pressure_weights.beta
+                * speed_wave.powf(self.tuning.pressure_weights.gamma);
+        let pressure_target = (count_latent.sampled as f32 * per_bug_pressure).round() as u32;
+
+        let difficulty_work = &mut self.work.difficulty;
+        *difficulty_work = WaveDifficultyLatents {
+            count_mean: count_latent.mean,
+            bug_count: count_latent.sampled,
+            hp_multiplier: hp_latent.multiplier,
+            speed_multiplier: speed_latent.multiplier,
+        };
+
+        let telemetry = self.telemetry.difficulty_latents_mut();
+        telemetry.bug_count_mean = difficulty_work.count_mean;
+        telemetry.bug_count_sampled = difficulty_work.bug_count;
+        telemetry.hp_multiplier = difficulty_work.hp_multiplier;
+        telemetry.speed_multiplier = difficulty_work.speed_multiplier;
+        telemetry.hp_mean_multiplier = hp_latent.mean_multiplier;
+        telemetry.speed_mean_multiplier = speed_latent.mean_multiplier;
+        telemetry.hp_absolute = hp_wave;
+        telemetry.speed_absolute = speed_wave;
+        telemetry.per_bug_pressure = per_bug_pressure;
+        telemetry.pressure_target = pressure_target;
+
+        self.work.pressure_target = pressure_target;
+        self.work.hp_wave = hp_wave;
+        self.work.speed_wave = speed_wave;
+        self.work.per_bug_pressure = per_bug_pressure;
+        debug_assert!(self.work.hp_wave >= BASE_HP * self.tuning.hp.min_multiplier);
+        debug_assert!(self.work.speed_wave >= self.tuning.speed.min_multiplier);
+        debug_assert!(self.work.per_bug_pressure >= 0.0);
+    }
+
+    fn draw_bug_count(&mut self, difficulty: f32) -> CountLatent {
+        let logistic = self.count_mean(difficulty);
+        let deviation = logistic * self.tuning.count.deviation_ratio;
+        let floor = self.tuning.count.floor as f32;
+        // RNG draw #1: bug count latent truncated normal sample (σ = count.deviation_ratio).
+        let sample = draw_truncated_normal(
+            &mut self.rng,
+            logistic,
+            deviation,
+            floor,
+            self.tuning.count.cap,
+        );
+        let rounded = sample.round();
+        let clamped = rounded.clamp(floor, self.tuning.count.cap);
+        CountLatent {
+            mean: logistic,
+            sampled: clamped as u32,
+        }
+    }
+
+    fn draw_hp_multiplier(&mut self, difficulty: f32) -> HpLatent {
+        let mean_multiplier = self.hp_mean_multiplier(difficulty);
+        // RNG draw #2: HP multiplier truncated normal sample.
+        let sampled_multiplier = draw_truncated_normal(
+            &mut self.rng,
+            mean_multiplier,
+            self.tuning.hp.deviation,
+            self.tuning.hp.min_multiplier,
+            self.tuning.hp.max_multiplier,
+        );
+
+        HpLatent {
+            mean_multiplier,
+            multiplier: sampled_multiplier,
+        }
+    }
+
+    fn draw_speed_multiplier(&mut self, difficulty: f32) -> SpeedLatent {
+        let mean_multiplier = self.speed_mean_multiplier(difficulty);
+        // RNG draw #3: speed multiplier truncated normal sample.
+        let sampled_multiplier = draw_truncated_normal(
+            &mut self.rng,
+            mean_multiplier,
+            self.tuning.speed.deviation,
+            self.tuning.speed.min_multiplier,
+            self.tuning.speed.max_multiplier,
+        );
+
+        SpeedLatent {
+            mean_multiplier,
+            multiplier: sampled_multiplier,
+        }
+    }
+
+    fn count_mean(&self, difficulty: f32) -> f32 {
+        let tuning = &self.tuning.count;
+        let exponent = -tuning.slope * (difficulty - tuning.midpoint);
+        tuning.minimum + (tuning.cap - tuning.minimum) / (1.0 + exponent.exp())
+    }
+
+    fn hp_mean_multiplier(&self, difficulty: f32) -> f32 {
+        let tuning = &self.tuning.hp;
+        let delta = (difficulty - 1.0).max(0.0);
+        let soft_boost =
+            tuning.soft_boost_fraction * (1.0 - (-tuning.soft_boost_rate * delta).exp());
+        let multiplicative = tuning
+            .post_pivot_growth
+            .powf((difficulty - tuning.growth_pivot).max(0.0));
+        (1.0 + soft_boost) * multiplicative
+    }
+
+    fn speed_mean_multiplier(&self, difficulty: f32) -> f32 {
+        let tuning = &self.tuning.speed;
+        let delta = (difficulty - 1.0).max(0.0);
+        let soft_boost =
+            tuning.soft_boost_fraction * (1.0 - (-tuning.soft_boost_rate * delta).exp());
+        let multiplicative = tuning
+            .post_pivot_growth
+            .powf((difficulty - tuning.growth_pivot).max(0.0));
+        (1.0 + soft_boost) * multiplicative
+    }
+}
+
+#[cfg(test)]
+impl PressureV2 {
+    fn difficulty_work(&self) -> &WaveDifficultyLatents {
+        &self.work.difficulty
+    }
+
+    fn tuning(&self) -> &PressureTuning {
+        &self.tuning
+    }
+
+    fn work_state(&self) -> &WaveWork {
+        &self.work
+    }
+}
+
+const BASE_HP: f32 = 10.0;
+
+fn draw_truncated_normal(
+    rng: &mut ChaCha8Rng,
+    mean: f32,
+    deviation: f32,
+    min: f32,
+    max: f32,
+) -> f32 {
+    let z: f32 = rng.sample(StandardNormal);
+    let value = mean + deviation * z;
+    value.clamp(min, max)
 }
 
 fn wave_seed_hash(
@@ -415,6 +573,48 @@ impl PressureTelemetry {
     }
 }
 
+#[derive(Clone, Debug, Default)]
+struct WaveWork {
+    difficulty: WaveDifficultyLatents,
+    pressure_target: u32,
+    hp_wave: f32,
+    speed_wave: f32,
+    per_bug_pressure: f32,
+}
+
+impl WaveWork {
+    fn reset(&mut self) {
+        self.difficulty = WaveDifficultyLatents::default();
+        self.pressure_target = 0;
+        self.hp_wave = 0.0;
+        self.speed_wave = 0.0;
+        self.per_bug_pressure = 0.0;
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+struct WaveDifficultyLatents {
+    count_mean: f32,
+    bug_count: u32,
+    hp_multiplier: f32,
+    speed_multiplier: f32,
+}
+
+struct HpLatent {
+    mean_multiplier: f32,
+    multiplier: f32,
+}
+
+struct SpeedLatent {
+    mean_multiplier: f32,
+    multiplier: f32,
+}
+
+struct CountLatent {
+    mean: f32,
+    sampled: u32,
+}
+
 /// Difficulty latent telemetry entry carrying placeholder values until the latent implementation lands.
 #[derive(Clone, Debug, Default)]
 pub struct DifficultyLatentsTelemetry {
@@ -425,8 +625,20 @@ pub struct DifficultyLatentsTelemetry {
     pub bug_count_sampled: u32,
     /// Placeholder HP multiplier latent stored for upcoming implementations.
     pub hp_multiplier: f32,
+    /// Placeholder HP multiplier mean prior to sampling.
+    pub hp_mean_multiplier: f32,
     /// Placeholder speed multiplier latent stored for upcoming implementations.
     pub speed_multiplier: f32,
+    /// Placeholder speed multiplier mean prior to sampling.
+    pub speed_mean_multiplier: f32,
+    /// Placeholder absolute HP after applying the sampled multiplier.
+    pub hp_absolute: f32,
+    /// Placeholder speed multiplier after sampling (mirrors `speed_multiplier`).
+    pub speed_absolute: f32,
+    /// Placeholder per-bug pressure contribution derived from the latents.
+    pub per_bug_pressure: f32,
+    /// Placeholder total wave pressure target computed from the latents.
+    pub pressure_target: u32,
 }
 
 impl DifficultyLatentsTelemetry {
@@ -610,5 +822,112 @@ mod tests {
         let merge = telemetry.push_species_merge();
         assert!(merge.is_recorded());
         assert_eq!(telemetry.species_merge().len(), 2);
+    }
+
+    #[test]
+    fn difficulty_latents_are_monotonic_with_difficulty() {
+        let mut generator = PressureV2::default();
+        let base_inputs = |difficulty: u32| {
+            PressureWaveInputs::new(
+                99,
+                LevelId::new(1),
+                WaveId::new(3),
+                DifficultyLevel::new(difficulty),
+            )
+        };
+
+        let low_inputs = base_inputs(1);
+        generator.reseed_rng(&low_inputs);
+        generator.work.reset();
+        generator.compute_difficulty_latents(&low_inputs);
+        let low = generator.difficulty_work().clone();
+        let low_mean_count = generator.count_mean(low_inputs.difficulty().get() as f32);
+        let low_mean_hp = generator.hp_mean_multiplier(low_inputs.difficulty().get() as f32);
+        let low_mean_speed = generator.speed_mean_multiplier(low_inputs.difficulty().get() as f32);
+
+        let high_inputs = base_inputs(9);
+        generator.reseed_rng(&high_inputs);
+        generator.work.reset();
+        generator.compute_difficulty_latents(&high_inputs);
+        let high = generator.difficulty_work().clone();
+        let high_mean_count = generator.count_mean(high_inputs.difficulty().get() as f32);
+        let high_mean_hp = generator.hp_mean_multiplier(high_inputs.difficulty().get() as f32);
+        let high_mean_speed =
+            generator.speed_mean_multiplier(high_inputs.difficulty().get() as f32);
+
+        assert!(high_mean_count > low_mean_count);
+        assert!(high_mean_hp > low_mean_hp);
+        assert!(high_mean_speed > low_mean_speed);
+        assert!(high.count_mean > low.count_mean);
+    }
+
+    #[test]
+    fn difficulty_latents_populate_telemetry_and_respect_bounds() {
+        let mut generator = PressureV2::default();
+        let inputs =
+            PressureWaveInputs::new(7, LevelId::new(2), WaveId::new(1), DifficultyLevel::new(4));
+
+        generator.reseed_rng(&inputs);
+        generator.work.reset();
+        generator.compute_difficulty_latents(&inputs);
+
+        let work = generator.difficulty_work();
+        let work_state = generator.work_state();
+        let telemetry = generator.telemetry.difficulty_latents();
+
+        assert!(telemetry.is_recorded());
+        assert_eq!(telemetry.bug_count_sampled, work.bug_count);
+        assert_eq!(telemetry.bug_count_mean, work.count_mean);
+        assert_eq!(telemetry.hp_multiplier, work.hp_multiplier);
+        assert_eq!(telemetry.speed_multiplier, work.speed_multiplier);
+        assert_eq!(
+            telemetry.hp_mean_multiplier,
+            generator.hp_mean_multiplier(inputs.difficulty().get() as f32)
+        );
+        assert_eq!(
+            telemetry.speed_mean_multiplier,
+            generator.speed_mean_multiplier(inputs.difficulty().get() as f32)
+        );
+        assert_eq!(telemetry.hp_absolute, work_state.hp_wave);
+        assert_eq!(telemetry.speed_absolute, work_state.speed_wave);
+        assert_eq!(telemetry.per_bug_pressure, work_state.per_bug_pressure);
+        assert_eq!(telemetry.pressure_target, work_state.pressure_target);
+
+        let tuning = generator.tuning();
+        assert!(work.bug_count >= tuning.count.floor);
+        assert!(work.hp_multiplier >= tuning.hp.min_multiplier);
+        assert!(work.hp_multiplier <= tuning.hp.max_multiplier);
+        assert!(work.speed_multiplier >= tuning.speed.min_multiplier);
+        assert!(work.speed_multiplier <= tuning.speed.max_multiplier);
+        assert!((work_state.hp_wave - work.hp_multiplier * BASE_HP).abs() < f32::EPSILON);
+        assert!(work_state.pressure_target >= work.bug_count);
+    }
+
+    #[test]
+    fn pressure_target_matches_expected_when_variance_zero() {
+        let mut generator = PressureV2::default();
+        generator.tuning_mut().count.deviation_ratio = 0.0;
+        generator.tuning_mut().hp.deviation = 0.0;
+        generator.tuning_mut().speed.deviation = 0.0;
+
+        let inputs =
+            PressureWaveInputs::new(13, LevelId::new(5), WaveId::new(2), DifficultyLevel::new(6));
+
+        generator.reseed_rng(&inputs);
+        generator.work.reset();
+        generator.compute_difficulty_latents(&inputs);
+
+        let work = generator.difficulty_work();
+        let work_state = generator.work_state();
+        let tuning = generator.tuning();
+        let per_bug_pressure = tuning.pressure_weights.alpha * work_state.hp_wave
+            + tuning.pressure_weights.beta
+                * work_state.speed_wave.powf(tuning.pressure_weights.gamma);
+        let expected = (work.bug_count as f32 * per_bug_pressure).round() as u32;
+        assert_eq!(expected, work_state.pressure_target);
+        assert_eq!(
+            expected,
+            generator.telemetry.difficulty_latents().pressure_target
+        );
     }
 }
