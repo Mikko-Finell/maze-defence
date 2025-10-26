@@ -11,6 +11,7 @@
 
 use std::cmp::Ordering;
 
+use macroquad::color::Color as MacroquadColor;
 use maze_defence_core::{
     DifficultyLevel, LevelId, PressureSpawnRecord, PressureWaveInputs, WaveId,
 };
@@ -692,6 +693,47 @@ impl PressureV2 {
         if merge_count == 0 {
             self.telemetry.record_no_species_merge();
         }
+
+        self.assign_species_tints();
+    }
+
+    fn assign_species_tints(&mut self) {
+        if self.work.provisional_species.is_empty() {
+            return;
+        }
+
+        let mut used = Vec::with_capacity(self.work.provisional_species.len());
+        for index in 0..self.work.provisional_species.len() {
+            let tint = self.draw_unique_tint(&mut used);
+            self.work.provisional_species[index].tint = tint;
+        }
+    }
+
+    fn draw_unique_tint(&mut self, used: &mut Vec<(u8, u8, u8)>) -> MacroquadColor {
+        const MAX_ATTEMPTS: usize = 24;
+        for _ in 0..MAX_ATTEMPTS {
+            // RNG draws: species tint hue, saturation, and value in that order.
+            let hue: f32 = self.rng.gen();
+            let saturation: f32 = self.rng.gen_range(0.55..0.85);
+            let value: f32 = self.rng.gen_range(0.85..0.98);
+            let tint = hsv_to_color(hue, saturation, value);
+            let quantized = quantize_color(tint);
+            if !used.contains(&quantized) {
+                used.push(quantized);
+                return tint;
+            }
+        }
+
+        let mut offset = 0usize;
+        loop {
+            let tint = fallback_tint(used.len() + offset);
+            let quantized = quantize_color(tint);
+            if !used.contains(&quantized) {
+                used.push(quantized);
+                return tint;
+            }
+            offset += 1;
+        }
     }
 
     fn count_mean(&self, difficulty: f32) -> f32 {
@@ -752,6 +794,10 @@ impl PressureV2 {
     fn enforce_minimum_share_for_test(&mut self) {
         self.enforce_minimum_share();
     }
+
+    fn assign_species_tints_for_test(&mut self) {
+        self.assign_species_tints();
+    }
 }
 
 const BASE_HP: f32 = 10.0;
@@ -787,6 +833,63 @@ fn fnv1a(mut state: u64, bytes: &[u8]) -> u64 {
         state = state.wrapping_mul(FNV_PRIME);
     }
     state
+}
+
+fn quantize_color(color: MacroquadColor) -> (u8, u8, u8) {
+    (
+        quantize_channel(color.r),
+        quantize_channel(color.g),
+        quantize_channel(color.b),
+    )
+}
+
+fn quantize_channel(value: f32) -> u8 {
+    let clamped = value.clamp(0.0, 1.0);
+    (clamped * 255.0).round() as u8
+}
+
+fn fallback_tint(index: usize) -> MacroquadColor {
+    const GOLDEN_RATIO_CONJUGATE: f32 = 0.618_033_988_75;
+    let base_hue = (index as f32 * GOLDEN_RATIO_CONJUGATE).fract();
+    let saturation_cycle = match index % 5 {
+        0 => 0.70,
+        1 => 0.80,
+        2 => 0.65,
+        3 => 0.85,
+        _ => 0.75,
+    };
+    let value_cycle = match index % 3 {
+        0 => 0.92,
+        1 => 0.88,
+        _ => 0.95,
+    };
+    hsv_to_color(base_hue, saturation_cycle, value_cycle)
+}
+
+fn hsv_to_color(hue: f32, saturation: f32, value: f32) -> MacroquadColor {
+    let s = saturation.clamp(0.0, 1.0);
+    let v = value.clamp(0.0, 1.0);
+    let h = hue.rem_euclid(1.0) * 6.0;
+
+    let c = v * s;
+    let x = c * (1.0 - ((h % 2.0) - 1.0).abs());
+    let m = v - c;
+
+    let (r1, g1, b1) = if h < 1.0 {
+        (c, x, 0.0)
+    } else if h < 2.0 {
+        (x, c, 0.0)
+    } else if h < 3.0 {
+        (0.0, c, x)
+    } else if h < 4.0 {
+        (0.0, x, c)
+    } else if h < 5.0 {
+        (x, 0.0, c)
+    } else {
+        (c, 0.0, x)
+    };
+
+    MacroquadColor::new(r1 + m, g1 + m, b1 + m, 1.0)
 }
 
 /// Telemetry accumulator for the pressure generator.
@@ -912,6 +1015,7 @@ struct ComponentWork {
     bug_count: u32,
     log_hp_multiplier: f32,
     log_speed_multiplier: f32,
+    tint: MacroquadColor,
 }
 
 impl ComponentWork {
@@ -931,6 +1035,7 @@ impl ComponentWork {
             bug_count: 0,
             log_hp_multiplier,
             log_speed_multiplier,
+            tint: MacroquadColor::new(1.0, 1.0, 1.0, 1.0),
         }
     }
 }
@@ -1098,6 +1203,8 @@ impl CadenceCompressionTelemetry {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashSet;
+
     use rand::RngCore;
 
     fn build_component(
@@ -1125,6 +1232,7 @@ mod tests {
             bug_count,
             log_hp_multiplier: hp_multiplier.ln(),
             log_speed_multiplier: speed_multiplier.ln(),
+            tint: MacroquadColor::new(1.0, 1.0, 1.0, 1.0),
         }
     }
 
@@ -1511,5 +1619,79 @@ mod tests {
         assert_eq!(record.to_component, u32::MAX);
         assert_eq!(record.from_count, 0);
         assert_eq!(record.to_count_after, 0);
+    }
+
+    #[test]
+    fn species_tints_are_unique_after_assignment() {
+        let mut generator = PressureV2::default();
+        generator.telemetry.reset();
+        generator.work.reset();
+
+        let total_bugs = 32;
+        generator.work.difficulty.bug_count = total_bugs;
+        generator.work.minimum_species_size = 4;
+
+        let weights = generator.tuning().pressure_weights.clone();
+        let components = vec![
+            build_component(&weights, 1.0, 1.0, 8, total_bugs),
+            build_component(&weights, 1.2, 0.9, 8, total_bugs),
+            build_component(&weights, 0.9, 1.1, 8, total_bugs),
+            build_component(&weights, 1.3, 1.2, 8, total_bugs),
+        ];
+        generator.work.provisional_species = components;
+        generator.work.provisional_species_count = 4;
+
+        generator.assign_species_tints_for_test();
+
+        let mut seen = HashSet::new();
+        for component in generator.provisional_components() {
+            let quantized = quantize_color(component.tint);
+            assert!(seen.insert(quantized));
+        }
+    }
+
+    #[test]
+    fn species_tints_are_deterministic() {
+        let mut generator_a = PressureV2::default();
+        let mut generator_b = PressureV2::default();
+
+        generator_a.telemetry.reset();
+        generator_b.telemetry.reset();
+        generator_a.work.reset();
+        generator_b.work.reset();
+
+        let total_bugs = 24;
+        generator_a.work.difficulty.bug_count = total_bugs;
+        generator_b.work.difficulty.bug_count = total_bugs;
+        generator_a.work.minimum_species_size = 3;
+        generator_b.work.minimum_species_size = 3;
+
+        let weights = generator_a.tuning().pressure_weights.clone();
+        let components = vec![
+            build_component(&weights, 1.0, 1.0, 8, total_bugs),
+            build_component(&weights, 1.2, 0.9, 8, total_bugs),
+            build_component(&weights, 0.9, 1.1, 8, total_bugs),
+        ];
+
+        generator_a.work.provisional_species = components.clone();
+        generator_b.work.provisional_species = components;
+        generator_a.work.provisional_species_count = 3;
+        generator_b.work.provisional_species_count = 3;
+
+        generator_a.assign_species_tints_for_test();
+        generator_b.assign_species_tints_for_test();
+
+        let tints_a: Vec<_> = generator_a
+            .provisional_components()
+            .iter()
+            .map(|component| quantize_color(component.tint))
+            .collect();
+        let tints_b: Vec<_> = generator_b
+            .provisional_components()
+            .iter()
+            .map(|component| quantize_color(component.tint))
+            .collect();
+
+        assert_eq!(tints_a, tints_b);
     }
 }
