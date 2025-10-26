@@ -91,7 +91,7 @@ pub struct World {
     navigation_field: NavigationField,
     navigation_dirty: bool,
     gold: Gold,
-    difficulty_level: u32,
+    difficulty_level: DifficultyLevel,
     pending_wave_difficulty: PendingWaveDifficulty,
     species_table_version: SpeciesTableVersion,
     species_definitions: Vec<SpeciesDefinition>,
@@ -118,7 +118,7 @@ pub struct World {
 struct ActiveWaveContext {
     id: WaveId,
     difficulty: WaveDifficulty,
-    effective_difficulty: u32,
+    effective_difficulty: DifficultyLevel,
     reward_multiplier: u32,
     pressure_scalar: u32,
 }
@@ -212,7 +212,7 @@ impl World {
             navigation_field: NavigationField::default(),
             navigation_dirty: true,
             gold: INITIAL_GOLD,
-            difficulty_level: 0,
+            difficulty_level: DifficultyLevel::new(0),
             pending_wave_difficulty: PendingWaveDifficulty::Unset,
             species_table_version,
             species_definitions,
@@ -280,7 +280,7 @@ impl World {
         out_events.push(Event::GoldChanged { amount });
     }
 
-    fn update_difficulty_level(&mut self, level: u32, out_events: &mut Vec<Event>) {
+    fn update_difficulty_level(&mut self, level: DifficultyLevel, out_events: &mut Vec<Event>) {
         if self.difficulty_level == level {
             return;
         }
@@ -364,9 +364,12 @@ impl World {
         }
 
         let context = self.prepare_wave_context(wave, difficulty);
-        let effective_level = DifficultyLevel::new(context.effective_difficulty);
-        let inputs =
-            PressureWaveInputs::new(self.wave_seed_global, self.level_id, wave, effective_level);
+        let inputs = PressureWaveInputs::new(
+            self.wave_seed_global,
+            self.level_id,
+            wave,
+            context.effective_difficulty,
+        );
 
         let Some(plan) = self.pressure_wave_cache.get(&inputs) else {
             return;
@@ -404,8 +407,8 @@ impl World {
             WaveDifficulty::Normal => self.difficulty_level,
             WaveDifficulty::Hard => self.difficulty_level.saturating_add(1),
         };
-        let reward_multiplier = effective_difficulty.saturating_add(1);
-        let pressure_scalar = effective_difficulty.saturating_add(1);
+        let reward_multiplier = effective_difficulty.get().saturating_add(1);
+        let pressure_scalar = effective_difficulty.get().saturating_add(1);
         ActiveWaveContext {
             id: wave,
             difficulty,
@@ -419,7 +422,7 @@ impl World {
         self.active_wave
             .as_ref()
             .map(ActiveWaveContext::reward_multiplier)
-            .unwrap_or_else(|| self.difficulty_level.saturating_add(1))
+            .unwrap_or_else(|| self.difficulty_level.saturating_add(1).get())
     }
 
     fn resolve_round_win(
@@ -772,7 +775,7 @@ pub fn apply(world: &mut World, command: Command, out_events: &mut Vec<Event>) {
             world.rebuild_bug_spawners();
             world.clear_bugs();
             world.rebuild_navigation_field_if_dirty();
-            world.update_difficulty_level(0, out_events);
+            world.update_difficulty_level(DifficultyLevel::new(0), out_events);
             world.assign_pending_wave_difficulty(PendingWaveDifficulty::Unset, out_events, true);
             out_events.push(Event::PressureConfigChanged {
                 species_table_version: world.species_table_version,
@@ -852,7 +855,7 @@ pub fn apply(world: &mut World, command: Command, out_events: &mut Vec<Event>) {
             let _ = world.transition_to_play_mode(mode, out_events);
         }
         Command::SetDifficultyLevel { level } => {
-            world.update_difficulty_level(level.get(), out_events);
+            world.update_difficulty_level(level, out_events);
         }
         Command::SpawnBug {
             spawner,
@@ -1493,10 +1496,10 @@ fn cell_rect_contains(region: CellRect, cell: CellCoord) -> bool {
 pub mod query {
     use super::{Bug, World};
     use maze_defence_core::{
-        BugSnapshot, BugView, CellCoord, Goal, Gold, LevelId, NavigationFieldView, OccupancyView,
-        PendingWaveDifficulty, PlayMode, PressureConfig, PressureWaveInputs, PressureWavePlan,
-        ProjectileSnapshot, ReservationLedgerView, SpawnPatchTableView, SpeciesTableView, Target,
-        TileGrid, WaveSeedContext,
+        BugSnapshot, BugView, CellCoord, DifficultyLevel, Goal, Gold, LevelId, NavigationFieldView,
+        OccupancyView, PendingWaveDifficulty, PlayMode, PressureConfig, PressureWaveInputs,
+        PressureWavePlan, ProjectileSnapshot, ReservationLedgerView, SpawnPatchTableView,
+        SpeciesTableView, Target, TileGrid, WaveSeedContext,
     };
 
     use maze_defence_core::structures::{Wall as CellWall, WallView as CellWallView};
@@ -1520,7 +1523,7 @@ pub mod query {
 
     /// Reports the current difficulty level tracked by the world.
     #[must_use]
-    pub fn difficulty_level(world: &World) -> u32 {
+    pub fn difficulty_level(world: &World) -> DifficultyLevel {
         world.difficulty_level
     }
 
@@ -2434,7 +2437,7 @@ mod tests {
             context.global_seed(),
             level_id,
             context.wave(),
-            DifficultyLevel::new(context.difficulty_level()),
+            context.difficulty_level(),
         );
         let plan = PressureWavePlan::new(
             vec![
@@ -2484,11 +2487,11 @@ mod tests {
         assert_eq!(*effective_difficulty, context.difficulty_level());
         assert_eq!(
             *reward_multiplier,
-            context.difficulty_level().saturating_add(1)
+            context.difficulty_level().get().saturating_add(1)
         );
         assert_eq!(
             *pressure_scalar,
-            context.difficulty_level().saturating_add(1)
+            context.difficulty_level().get().saturating_add(1)
         );
         assert_eq!(plan_pressure.get(), 4);
         assert_eq!(plan_species_table_version, &world.species_table_version);

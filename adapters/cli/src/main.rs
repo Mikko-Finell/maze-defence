@@ -149,6 +149,13 @@ pub fn push_projectiles(
     }
 }
 
+fn parse_difficulty_level(value: &str) -> std::result::Result<DifficultyLevel, String> {
+    value
+        .parse::<u32>()
+        .map(DifficultyLevel::new)
+        .map_err(|error| format!("invalid difficulty: {error}"))
+}
+
 /// Command-line arguments for launching the Maze Defence experience.
 #[derive(Debug, Parser)]
 #[command(author, version, about, long_about = None)]
@@ -188,8 +195,8 @@ struct CliArgs {
     )]
     bug_spawn_interval_ms: u64,
     /// Sets the base difficulty level active when the simulation launches.
-    #[arg(long = "difficulty-level", value_name = "LEVEL", value_parser = clap::value_parser!(u32))]
-    difficulty_level: Option<u32>,
+    #[arg(long = "difficulty", value_name = "LEVEL", value_parser = parse_difficulty_level)]
+    difficulty: Option<DifficultyLevel>,
     /// Requests that the renderer either synchronise presentation with the display refresh rate or run uncapped.
     #[arg(long, value_enum, value_name = "on|off")]
     vsync: Option<VsyncMode>,
@@ -311,7 +318,7 @@ fn main() -> Result<()> {
 
     let bug_step_duration = Duration::from_millis(args.bug_step_ms);
     let bug_spawn_interval = Duration::from_millis(args.bug_spawn_interval_ms);
-    let initial_difficulty = args.difficulty_level.map(DifficultyLevel::new);
+    let initial_difficulty = args.difficulty;
     let mut simulation = Simulation::new(
         columns,
         rows,
@@ -361,9 +368,9 @@ fn main() -> Result<()> {
         None,
         Some(ControlPanelView::new(200.0, Color::from_rgb_u8(0, 0, 0))),
         Some(GoldPresentation::new(query::gold(simulation.world()))),
-        Some(DifficultyPresentation::new(query::difficulty_level(
-            simulation.world(),
-        ))),
+        Some(DifficultyPresentation::new(
+            query::difficulty_level(simulation.world()).get(),
+        )),
         None,
     );
     simulation.populate_scene(&mut scene);
@@ -412,7 +419,7 @@ struct Simulation {
     builder_preview: Option<BuilderPlacementPreview>,
     tower_feedback: Option<TowerInteractionFeedback>,
     gold: Gold,
-    difficulty_level: u32,
+    difficulty_level: DifficultyLevel,
     pending_wave_difficulty: PendingWaveDifficulty,
     pending_wave_launch: Option<PendingWaveLaunch>,
     last_placement_rejection: Option<PlacementRejection>,
@@ -1052,11 +1059,11 @@ mod tests {
             Some(DifficultyLevel::new(7)),
         );
 
-        assert_eq!(simulation.difficulty_level, 7);
+        assert_eq!(simulation.difficulty_level, DifficultyLevel::new(7));
         let emitted = simulation
             .last_frame_events
             .iter()
-            .any(|event| matches!(event, Event::DifficultyLevelChanged { level } if *level == 7));
+            .any(|event| matches!(event, Event::DifficultyLevelChanged { level } if *level == DifficultyLevel::new(7)));
         assert!(emitted, "difficulty change should emit an event");
     }
 }
@@ -1225,7 +1232,7 @@ impl Simulation {
             context.global_seed(),
             level_id,
             context.wave(),
-            DifficultyLevel::new(effective_level),
+            effective_level,
         );
 
         self.pending_wave_launch = Some(PendingWaveLaunch {
@@ -1744,7 +1751,7 @@ impl Simulation {
         };
         scene.tower_feedback = self.tower_feedback;
         scene.gold = Some(GoldPresentation::new(self.gold));
-        scene.difficulty = Some(DifficultyPresentation::new(self.difficulty_level));
+        scene.difficulty = Some(DifficultyPresentation::new(self.difficulty_level.get()));
         scene.difficulty_selection = Some(self.difficulty_selection_presentation());
     }
 
@@ -1795,8 +1802,8 @@ impl Simulation {
             PendingWaveDifficulty::Unset => (false, false),
         };
 
-        let normal_level = self.difficulty_level;
-        let hard_level = self.difficulty_level.saturating_add(1);
+        let normal_level = self.difficulty_level.get();
+        let hard_level = self.difficulty_level.saturating_add(1).get();
         let normal_multiplier = normal_level.saturating_add(1);
         let hard_multiplier = hard_level.saturating_add(1);
 
