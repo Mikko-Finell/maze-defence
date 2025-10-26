@@ -444,6 +444,7 @@ impl PressureV2 {
         self.enforce_minimum_share();
     }
 
+    // §5.2 fixed-step bisection
     fn align_pressure_with_eta(&mut self) {
         if self.work.provisional_species.is_empty() {
             self.work.eta = 1.0;
