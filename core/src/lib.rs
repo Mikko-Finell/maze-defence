@@ -927,6 +927,18 @@ pub enum Command {
         /// Upper-left cell that defines the tower's footprint.
         origin: CellCoord,
     },
+    /// Injects a tower directly into the world without spending gold.
+    ///
+    /// This command is intended for layout restoration flows where the
+    /// simulation must mirror a previously captured arrangement regardless of
+    /// the current economy state. The world still validates alignment,
+    /// occupancy, and path constraints before accepting the import.
+    ImportTower {
+        /// Type of tower to insert at the origin.
+        kind: TowerKind,
+        /// Upper-left cell that defines the tower's footprint.
+        origin: CellCoord,
+    },
     /// Requests removal of an existing tower from the world.
     RemoveTower {
         /// Identifier of the tower targeted for removal.

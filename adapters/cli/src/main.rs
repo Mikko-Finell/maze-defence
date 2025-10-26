@@ -999,6 +999,38 @@ mod tests {
         assert!((effect.color.green - expected.green).abs() <= f32::EPSILON);
         assert!((effect.color.blue - expected.blue).abs() <= f32::EPSILON);
     }
+
+    #[test]
+    fn layout_import_bypasses_gold_costs() {
+        let snapshot = TowerLayoutSnapshot::decode("maze:v2:10x10:BAAAyEJDABMlAA8jAAklAA0ZABEdABUfABkjAB8lAB8hABsdABcZABMXAA8TAAkVAAkRAA0NABENABURABkTAB0XAB8RACMVACMZAB8dABsNABcLABMHAA8HAAsHAAcLAAUBAAkBAA0BABEBABUBABkBAB0BACEBACUBACUFACUJACUNACURACUdACUhACUlACEJACEFABsJABcHAB8NAB0FAAcHAA0dAAEBAAEFAAEJAAENAAEVAAkdAAEZAAEdAAchAAcZAAMRAAUlAAEj")
+            .expect("snapshot should decode");
+
+        let mut simulation = Simulation::new(
+            snapshot.columns,
+            snapshot.rows,
+            snapshot.tile_length,
+            snapshot.cells_per_tile,
+            Duration::from_millis(DEFAULT_BUG_STEP_MS),
+            Duration::from_millis(DEFAULT_BUG_SPAWN_INTERVAL_MS),
+            VisualStyle::Primitives,
+        );
+
+        let initial_gold = query::gold(simulation.world());
+        let required_gold: u32 = snapshot
+            .towers
+            .iter()
+            .map(|tower| tower.kind.build_cost().get())
+            .sum();
+        assert!(required_gold > initial_gold.get());
+
+        simulation
+            .apply_layout_snapshot(&snapshot)
+            .expect("layout restoration should succeed");
+
+        let restored = query::towers(simulation.world());
+        assert_eq!(restored.iter().count(), snapshot.towers.len());
+        assert_eq!(query::gold(simulation.world()), initial_gold);
+    }
 }
 
 #[cfg_attr(test, allow(dead_code))]
@@ -1376,7 +1408,7 @@ impl Simulation {
         }
 
         for layout_tower in &snapshot.towers {
-            self.queued_commands.push(Command::PlaceTower {
+            self.queued_commands.push(Command::ImportTower {
                 kind: layout_tower.kind,
                 origin: layout_tower.origin,
             });
