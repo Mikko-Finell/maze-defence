@@ -875,7 +875,16 @@ pub fn apply(world: &mut World, command: Command, out_events: &mut Vec<Event>) {
         Command::PlaceTower { kind, origin } => {
             #[cfg(any(test, feature = "tower_scaffolding"))]
             {
-                world.handle_place_tower(kind, origin, out_events);
+                world.handle_place_tower(kind, origin, TowerPlacementCost::SpendGold, out_events);
+            }
+
+            #[cfg(not(any(test, feature = "tower_scaffolding")))]
+            let _ = (kind, origin);
+        }
+        Command::ImportTower { kind, origin } => {
+            #[cfg(any(test, feature = "tower_scaffolding"))]
+            {
+                world.handle_place_tower(kind, origin, TowerPlacementCost::IgnoreGold, out_events);
             }
 
             #[cfg(not(any(test, feature = "tower_scaffolding")))]
@@ -1136,6 +1145,7 @@ impl World {
         &mut self,
         kind: TowerKind,
         origin: CellCoord,
+        cost_policy: TowerPlacementCost,
         out_events: &mut Vec<Event>,
     ) {
         if self.play_mode != PlayMode::Builder {
@@ -1205,18 +1215,20 @@ impl World {
             return;
         }
 
-        let cost = kind.build_cost();
-        if self.gold.get() < cost.get() {
-            out_events.push(Event::TowerPlacementRejected {
-                kind,
-                origin,
-                reason: PlacementError::InsufficientFunds,
-            });
-            return;
-        }
+        if matches!(cost_policy, TowerPlacementCost::SpendGold) {
+            let cost = kind.build_cost();
+            if self.gold.get() < cost.get() {
+                out_events.push(Event::TowerPlacementRejected {
+                    kind,
+                    origin,
+                    reason: PlacementError::InsufficientFunds,
+                });
+                return;
+            }
 
-        let remaining = self.gold.saturating_sub(cost);
-        self.update_gold(remaining, out_events);
+            let remaining = self.gold.saturating_sub(cost);
+            self.update_gold(remaining, out_events);
+        }
 
         let id = self.towers.allocate();
         self.mark_tower_region(region, true);
@@ -1448,6 +1460,13 @@ impl World {
 
         false
     }
+}
+
+#[cfg(any(test, feature = "tower_scaffolding"))]
+#[derive(Clone, Copy)]
+enum TowerPlacementCost {
+    SpendGold,
+    IgnoreGold,
 }
 
 #[cfg(any(test, feature = "tower_scaffolding"))]
