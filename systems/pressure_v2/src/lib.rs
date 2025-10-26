@@ -9,12 +9,14 @@
 
 //! Deterministic pressure v2 wave generation system stub.
 
+use std::cmp::Ordering;
+
 use maze_defence_core::{
     DifficultyLevel, LevelId, PressureSpawnRecord, PressureWaveInputs, WaveId,
 };
 use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha8Rng;
-use rand_distr::StandardNormal;
+use rand_distr::{Distribution, Gamma, Poisson, StandardNormal};
 
 const DEFAULT_RNG_SEED: u64 = 0x8955_06d3_3f6b_11d7;
 const FNV_OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
@@ -308,6 +310,7 @@ impl PressureV2 {
         self.telemetry.ensure_placeholders();
         self.work.reset();
         self.compute_difficulty_latents(inputs);
+        self.sample_provisional_species(inputs);
         out.clear();
         todo!("pressure v2 generation not implemented");
     }
@@ -418,6 +421,147 @@ impl PressureV2 {
         }
     }
 
+    fn sample_provisional_species(&mut self, inputs: &PressureWaveInputs) {
+        let difficulty = inputs.difficulty().get() as f32;
+        let bug_count = self.work.difficulty.bug_count;
+        let minimum_species_size =
+            ((self.tuning.components.minimum_share * bug_count as f32).ceil() as u32).max(1);
+        self.work.minimum_species_size = minimum_species_size;
+
+        let raw_count = self.draw_raw_component_count(difficulty);
+        let soft_capped = raw_count.min(self.tuning.components.poisson_cap);
+        let count_cap = (bug_count / minimum_species_size).max(1);
+        let final_count = soft_capped.min(count_cap).max(1);
+        self.work.provisional_species_count = final_count;
+
+        self.populate_component_centres(difficulty, final_count as usize);
+        self.allocate_dirichlet_counts(bug_count);
+    }
+
+    fn draw_raw_component_count(&mut self, difficulty: f32) -> u32 {
+        let mean = self.component_poisson_mean(difficulty);
+        // RNG draw #4: provisional component Poisson proposal.
+        let distribution = Poisson::new(f64::from(mean)).expect("positive Poisson mean");
+        distribution.sample(&mut self.rng) as u32
+    }
+
+    fn component_poisson_mean(&self, difficulty: f32) -> f32 {
+        let tuning = &self.tuning.components;
+        let delta = (difficulty - 1.0).max(0.0);
+        let mean = tuning.poisson_intercept + tuning.poisson_slope * delta;
+        mean.max(0.1)
+    }
+
+    fn populate_component_centres(&mut self, difficulty: f32, count: usize) {
+        self.work.provisional_species.clear();
+        self.work.provisional_species.reserve(count);
+
+        let mean_hp_multiplier = self.hp_mean_multiplier(difficulty);
+        let mean_speed_multiplier = self.speed_mean_multiplier(difficulty);
+        let tuning = &self.tuning.components;
+        let rho = tuning.log_correlation.clamp(-0.999, 0.999);
+        let orthogonal_scale = (1.0 - rho * rho).max(0.0).sqrt();
+
+        for _ in 0..count {
+            // RNG draws #5-6: bivariate log-space component centre.
+            let z_hp: f32 = self.rng.sample(StandardNormal);
+            let z_speed: f32 = self.rng.sample(StandardNormal);
+
+            let log_hp = mean_hp_multiplier.ln() + tuning.log_hp_sigma * z_hp;
+            let log_speed = mean_speed_multiplier.ln()
+                + tuning.log_speed_sigma * (rho * z_hp + orthogonal_scale * z_speed);
+
+            let hp_multiplier = log_hp
+                .exp()
+                .clamp(tuning.hp_multiplier_min, tuning.hp_multiplier_max);
+            let speed_multiplier = log_speed
+                .exp()
+                .clamp(tuning.speed_multiplier_min, tuning.speed_multiplier_max);
+
+            let hp_pre = BASE_HP * hp_multiplier;
+            let speed_pre = speed_multiplier;
+            let pressure_weight = self.tuning.pressure_weights.alpha * hp_pre
+                + self.tuning.pressure_weights.beta
+                    * speed_pre.powf(self.tuning.pressure_weights.gamma);
+
+            self.work.provisional_species.push(ComponentWork::new(
+                hp_pre,
+                speed_pre,
+                pressure_weight,
+            ));
+        }
+    }
+
+    fn allocate_dirichlet_counts(&mut self, bug_count: u32) {
+        let component_count = self.work.provisional_species.len();
+        debug_assert!(component_count > 0);
+
+        let alpha = self.tuning.components.dirichlet_concentration;
+        let dirichlet =
+            Gamma::new(f64::from(alpha), 1.0).expect("positive Dirichlet concentration");
+        let mut draws = Vec::with_capacity(component_count);
+        for _ in 0..component_count {
+            // RNG draw #7+: Dirichlet gamma sample per component.
+            draws.push(dirichlet.sample(&mut self.rng) as f32);
+        }
+
+        let sum: f32 = draws.iter().sum();
+        let normaliser = if sum.is_finite() && sum > f32::EPSILON {
+            sum
+        } else {
+            component_count as f32
+        };
+
+        let mut floor_sum = 0u32;
+        let mut remainders = Vec::with_capacity(component_count);
+        for (component, draw) in self.work.provisional_species.iter_mut().zip(draws.iter()) {
+            let share = (*draw / normaliser).max(0.0);
+            component.dirichlet_share = share;
+            let fractional = share * bug_count as f32;
+            component.fractional_count = fractional;
+            let floor = fractional.floor() as u32;
+            component.bug_count = floor;
+            floor_sum = floor_sum.saturating_add(floor);
+            remainders.push(fractional - floor as f32);
+        }
+
+        let bug_count_i32 = bug_count as i32;
+        let floor_sum_i32 = floor_sum as i32;
+        match bug_count_i32 - floor_sum_i32 {
+            diff if diff > 0 => {
+                let mut indices: Vec<usize> = (0..component_count).collect();
+                indices.sort_by(|a, b| {
+                    remainders[*b]
+                        .partial_cmp(&remainders[*a])
+                        .unwrap_or(Ordering::Equal)
+                        .then_with(|| a.cmp(b))
+                });
+                for index in indices.into_iter().take(diff as usize) {
+                    self.work.provisional_species[index].bug_count = self.work.provisional_species
+                        [index]
+                        .bug_count
+                        .saturating_add(1);
+                }
+            }
+            diff if diff < 0 => {
+                let mut indices: Vec<usize> = (0..component_count).collect();
+                indices.sort_by(|a, b| {
+                    remainders[*a]
+                        .partial_cmp(&remainders[*b])
+                        .unwrap_or(Ordering::Equal)
+                        .then_with(|| a.cmp(b))
+                });
+                for index in indices.into_iter().take(diff.abs() as usize) {
+                    self.work.provisional_species[index].bug_count = self.work.provisional_species
+                        [index]
+                        .bug_count
+                        .saturating_sub(1);
+                }
+            }
+            _ => {}
+        }
+    }
+
     fn count_mean(&self, difficulty: f32) -> f32 {
         let tuning = &self.tuning.count;
         let exponent = -tuning.slope * (difficulty - tuning.midpoint);
@@ -459,6 +603,18 @@ impl PressureV2 {
 
     fn work_state(&self) -> &WaveWork {
         &self.work
+    }
+
+    fn provisional_components(&self) -> &[ComponentWork] {
+        &self.work.provisional_species
+    }
+
+    fn provisional_species_count(&self) -> u32 {
+        self.work.provisional_species_count
+    }
+
+    fn minimum_species_size(&self) -> u32 {
+        self.work.minimum_species_size
     }
 }
 
@@ -580,6 +736,9 @@ struct WaveWork {
     hp_wave: f32,
     speed_wave: f32,
     per_bug_pressure: f32,
+    provisional_species: Vec<ComponentWork>,
+    provisional_species_count: u32,
+    minimum_species_size: u32,
 }
 
 impl WaveWork {
@@ -589,6 +748,33 @@ impl WaveWork {
         self.hp_wave = 0.0;
         self.speed_wave = 0.0;
         self.per_bug_pressure = 0.0;
+        self.provisional_species.clear();
+        self.provisional_species_count = 0;
+        self.minimum_species_size = 0;
+    }
+}
+
+#[allow(dead_code)]
+#[derive(Clone, Debug)]
+struct ComponentWork {
+    hp_pre: f32,
+    speed_pre: f32,
+    pressure_weight_pre: f32,
+    dirichlet_share: f32,
+    fractional_count: f32,
+    bug_count: u32,
+}
+
+impl ComponentWork {
+    fn new(hp_pre: f32, speed_pre: f32, pressure_weight_pre: f32) -> Self {
+        Self {
+            hp_pre,
+            speed_pre,
+            pressure_weight_pre,
+            dirichlet_share: 0.0,
+            fractional_count: 0.0,
+            bug_count: 0,
+        }
     }
 }
 
@@ -929,5 +1115,104 @@ mod tests {
             expected,
             generator.telemetry.difficulty_latents().pressure_target
         );
+    }
+
+    #[test]
+    fn provisional_species_sampling_populates_work_state() {
+        let mut generator = PressureV2::default();
+        let inputs =
+            PressureWaveInputs::new(17, LevelId::new(4), WaveId::new(2), DifficultyLevel::new(5));
+
+        generator.reseed_rng(&inputs);
+        generator.work.reset();
+        generator.compute_difficulty_latents(&inputs);
+        generator.sample_provisional_species(&inputs);
+
+        let components = generator.provisional_components();
+        assert!(!components.is_empty());
+
+        let tuning = &generator.tuning().components;
+        let hp_min = tuning.hp_multiplier_min * BASE_HP;
+        let hp_max = tuning.hp_multiplier_max * BASE_HP;
+        let speed_min = tuning.speed_multiplier_min;
+        let speed_max = tuning.speed_multiplier_max;
+        let bug_count = generator.difficulty_work().bug_count;
+        let allocated: u32 = components.iter().map(|component| component.bug_count).sum();
+        assert_eq!(allocated, bug_count);
+
+        let share_sum: f32 = components
+            .iter()
+            .map(|component| component.dirichlet_share)
+            .sum();
+        assert!((share_sum - 1.0).abs() < 1e-3);
+
+        for component in components {
+            assert!(component.hp_pre >= hp_min);
+            assert!(component.hp_pre <= hp_max);
+            assert!(component.speed_pre >= speed_min);
+            assert!(component.speed_pre <= speed_max);
+            assert!(component.dirichlet_share.is_finite());
+            assert!(component.fractional_count.is_finite());
+        }
+    }
+
+    #[test]
+    fn provisional_species_count_respects_caps() {
+        let mut generator = PressureV2::default();
+        {
+            let tuning = generator.tuning_mut();
+            tuning.components.poisson_intercept = 6.0;
+            tuning.components.poisson_slope = 0.0;
+            tuning.components.minimum_share = 0.4;
+        }
+        let poisson_cap = generator.tuning().components.poisson_cap;
+
+        let inputs =
+            PressureWaveInputs::new(23, LevelId::new(8), WaveId::new(3), DifficultyLevel::new(2));
+
+        generator.reseed_rng(&inputs);
+        generator.work.reset();
+        generator.compute_difficulty_latents(&inputs);
+        generator.sample_provisional_species(&inputs);
+
+        let bug_count = generator.difficulty_work().bug_count;
+        let min_share = generator.minimum_species_size();
+        let count_cap = (bug_count / min_share).max(1);
+        let provisional = generator.provisional_species_count();
+
+        assert!(provisional >= 1);
+        assert!(provisional <= poisson_cap);
+        assert!(provisional <= count_cap);
+    }
+
+    #[test]
+    fn provisional_species_sampling_is_deterministic() {
+        let mut generator_a = PressureV2::default();
+        let mut generator_b = PressureV2::default();
+        let inputs =
+            PressureWaveInputs::new(31, LevelId::new(5), WaveId::new(4), DifficultyLevel::new(7));
+
+        generator_a.reseed_rng(&inputs);
+        generator_a.work.reset();
+        generator_a.compute_difficulty_latents(&inputs);
+        generator_a.sample_provisional_species(&inputs);
+
+        generator_b.reseed_rng(&inputs);
+        generator_b.work.reset();
+        generator_b.compute_difficulty_latents(&inputs);
+        generator_b.sample_provisional_species(&inputs);
+
+        let comps_a = generator_a.provisional_components();
+        let comps_b = generator_b.provisional_components();
+
+        assert_eq!(comps_a.len(), comps_b.len());
+        for (a, b) in comps_a.iter().zip(comps_b.iter()) {
+            assert!((a.hp_pre - b.hp_pre).abs() < f32::EPSILON);
+            assert!((a.speed_pre - b.speed_pre).abs() < f32::EPSILON);
+            assert!((a.pressure_weight_pre - b.pressure_weight_pre).abs() < f32::EPSILON);
+            assert_eq!(a.bug_count, b.bug_count);
+            assert!((a.dirichlet_share - b.dirichlet_share).abs() < f32::EPSILON);
+            assert!((a.fractional_count - b.fractional_count).abs() < f32::EPSILON);
+        }
     }
 }
