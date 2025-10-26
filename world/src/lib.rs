@@ -309,10 +309,48 @@ impl World {
         plan: PressureWavePlan,
         out_events: &mut Vec<Event>,
     ) {
+        self.apply_wave_prototypes(&plan);
         let cached_inputs = inputs.clone();
         let cached_plan = plan.clone();
         let _ = self.pressure_wave_cache.insert(cached_inputs, cached_plan);
         out_events.push(Event::PressureWaveReady { inputs, plan });
+    }
+
+    fn apply_wave_prototypes(&mut self, plan: &PressureWavePlan) {
+        let prototypes = plan.prototypes();
+        if prototypes.is_empty() {
+            return;
+        }
+
+        let mut changed = false;
+        let mut updated = Vec::with_capacity(self.species_definitions.len());
+        for definition in &self.species_definitions {
+            let replacement = usize::try_from(definition.id().get())
+                .ok()
+                .and_then(|index| prototypes.get(index))
+                .copied()
+                .unwrap_or_else(|| definition.prototype());
+            if replacement != definition.prototype() {
+                changed = true;
+            }
+            updated.push(SpeciesDefinition::new(
+                definition.id(),
+                definition.patch(),
+                replacement,
+                definition.weight(),
+                definition.dirichlet_weight(),
+                definition.min_burst_spawn(),
+                definition.max_population(),
+                definition.cadence_range(),
+                definition.gap_range(),
+            ));
+        }
+
+        if changed {
+            self.species_definitions = updated;
+            let next_version = self.species_table_version.get().saturating_add(1);
+            self.species_table_version = SpeciesTableVersion::new(next_version);
+        }
     }
 
     fn launch_wave(
@@ -854,8 +892,11 @@ pub fn apply(world: &mut World, command: Command, out_events: &mut Vec<Event>) {
         }
         Command::GeneratePressureWave { inputs } => {
             let mut spawns = Vec::new();
-            world.pressure_v2.generate(&inputs, &mut spawns);
-            let plan = PressureWavePlan::new(spawns);
+            let mut prototypes = Vec::new();
+            world
+                .pressure_v2
+                .generate(&inputs, &mut spawns, &mut prototypes);
+            let plan = PressureWavePlan::new(spawns, prototypes);
             world.cache_pressure_wave(inputs, plan, out_events);
         }
         Command::CachePressureWave { inputs, plan } => {
@@ -2260,9 +2301,10 @@ fn advance_cell(
 mod tests {
     use super::*;
     use maze_defence_core::{
-        DifficultyLevel, LevelId, PlayMode, PressureSpawnRecord, PressureWaveInputs,
-        PressureWavePlan, WaveDifficulty, WaveId,
+        BugColor, DifficultyLevel, Health, LevelId, PlayMode, PressureSpawnRecord,
+        PressureWaveInputs, PressureWavePlan, SpeciesPrototype, WaveDifficulty, WaveId,
     };
+    use std::num::NonZeroU32;
 
     #[test]
     fn generate_pressure_wave_caches_plan_and_emits_event() {
@@ -2292,6 +2334,10 @@ mod tests {
             !plan.spawns().is_empty(),
             "generated plan should contain spawns"
         );
+        assert!(
+            !plan.prototypes().is_empty(),
+            "generated plan should contain prototypes"
+        );
 
         let cached =
             query::pressure_wave_plan(&world, &inputs).expect("world should cache generated plan");
@@ -2304,7 +2350,14 @@ mod tests {
         let mut events = Vec::new();
         let inputs =
             PressureWaveInputs::new(7, LevelId::new(2), WaveId::new(1), DifficultyLevel::new(3));
-        let plan = PressureWavePlan::new(vec![PressureSpawnRecord::new(0, 15, 1.2, 0)]);
+        let initial_version = query::species_table(&world).version();
+        let tinted = SpeciesPrototype::new(
+            BugColor::from_rgb(0x11, 0x22, 0x33),
+            Health::new(15),
+            NonZeroU32::new(320).expect("non-zero cadence"),
+        );
+        let plan =
+            PressureWavePlan::new(vec![PressureSpawnRecord::new(0, 15, 1.2, 0)], vec![tinted]);
 
         apply(
             &mut world,
@@ -2329,6 +2382,14 @@ mod tests {
         let cached =
             query::pressure_wave_plan(&world, &inputs).expect("world should cache supplied plan");
         assert_eq!(cached, &plan);
+
+        let table = query::species_table(&world);
+        assert!(table.version().get() > initial_version.get());
+        let first = table
+            .definitions()
+            .first()
+            .expect("species table should contain at least one definition");
+        assert_eq!(first.prototype(), tinted);
     }
 
     #[test]
@@ -2353,11 +2414,18 @@ mod tests {
             context.wave(),
             DifficultyLevel::new(context.difficulty_level()),
         );
-        let plan = PressureWavePlan::new(vec![
-            PressureSpawnRecord::new(0, 20, 1.0, 0),
-            PressureSpawnRecord::new(250, 25, 1.0, 0),
-            PressureSpawnRecord::new(500, 30, 1.0, 0),
-        ]);
+        let plan = PressureWavePlan::new(
+            vec![
+                PressureSpawnRecord::new(0, 20, 1.0, 0),
+                PressureSpawnRecord::new(250, 25, 1.0, 0),
+                PressureSpawnRecord::new(500, 30, 1.0, 0),
+            ],
+            vec![SpeciesPrototype::new(
+                BugColor::from_rgb(0x44, 0x55, 0x66),
+                Health::new(20),
+                NonZeroU32::new(400).expect("non-zero cadence"),
+            )],
+        );
 
         apply(
             &mut world,

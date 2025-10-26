@@ -834,19 +834,26 @@ impl PressureSpawnRecord {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct PressureWavePlan {
     spawns: Vec<PressureSpawnRecord>,
+    prototypes: Vec<SpeciesPrototype>,
 }
 
 impl PressureWavePlan {
     /// Creates a new spawn list populated with generator output.
     #[must_use]
-    pub fn new(spawns: Vec<PressureSpawnRecord>) -> Self {
-        Self { spawns }
+    pub fn new(spawns: Vec<PressureSpawnRecord>, prototypes: Vec<SpeciesPrototype>) -> Self {
+        Self { spawns, prototypes }
     }
 
     /// Returns the captured spawn descriptors in deterministic order.
     #[must_use]
     pub fn spawns(&self) -> &[PressureSpawnRecord] {
         &self.spawns
+    }
+
+    /// Returns the species prototypes associated with the generated wave.
+    #[must_use]
+    pub fn prototypes(&self) -> &[SpeciesPrototype] {
+        &self.prototypes
     }
 }
 

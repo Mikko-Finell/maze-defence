@@ -9,11 +9,12 @@
 
 //! Deterministic pressure v2 wave generation system stub.
 
-use std::cmp::Ordering;
+use std::{cmp::Ordering, num::NonZeroU32};
 
 use macroquad::color::Color as MacroquadColor;
 use maze_defence_core::{
-    DifficultyLevel, LevelId, PressureSpawnRecord, PressureWaveInputs, WaveId,
+    BugColor, DifficultyLevel, Health, LevelId, PressureSpawnRecord, PressureWaveInputs,
+    SpeciesPrototype, WaveId,
 };
 use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha8Rng;
@@ -304,7 +305,12 @@ impl PressureV2 {
     }
 
     /// Generates v2 pressure spawns according to the provided inputs.
-    pub fn generate(&mut self, inputs: &PressureWaveInputs, out: &mut Vec<PressureSpawnRecord>) {
+    pub fn generate(
+        &mut self,
+        inputs: &PressureWaveInputs,
+        spawns: &mut Vec<PressureSpawnRecord>,
+        prototypes: &mut Vec<SpeciesPrototype>,
+    ) {
         self.reseed_rng(inputs);
         // RNG draw order (documented for determinism auditing):
         //   1: `draw_bug_count` pulls a truncated normal using
@@ -336,7 +342,8 @@ impl PressureV2 {
         self.align_pressure_with_eta();
         self.sample_cadence_and_start_offsets(inputs);
         self.enforce_duration_caps(inputs);
-        self.write_final_spawn_records(out);
+        self.write_final_spawn_records(spawns);
+        self.write_final_species_prototypes(prototypes);
     }
 
     fn reseed_rng(&mut self, inputs: &PressureWaveInputs) {
@@ -680,6 +687,24 @@ impl PressureV2 {
         for (time, species_id, _, hp, speed) in scratch {
             let hp_value = hp.round().clamp(1.0, u32::MAX as f32) as u32;
             out.push(PressureSpawnRecord::new(time, hp_value, speed, species_id));
+        }
+    }
+
+    fn write_final_species_prototypes(&self, out: &mut Vec<SpeciesPrototype>) {
+        out.clear();
+        if self.work.provisional_species.is_empty() {
+            return;
+        }
+
+        out.reserve(self.work.provisional_species.len());
+        for component in &self.work.provisional_species {
+            let (red, green, blue) = quantize_color(component.tint);
+            let color = BugColor::from_rgb(red, green, blue);
+            let hp_value = component.hp_post.round().clamp(1.0, u32::MAX as f32) as u32;
+            let health = Health::new(hp_value);
+            let cadence = component.cadence_ms.max(1);
+            let step_ms = NonZeroU32::new(cadence).expect("component cadence should be non-zero");
+            out.push(SpeciesPrototype::new(color, health, step_ms));
         }
     }
 
@@ -1121,6 +1146,10 @@ impl PressureV2 {
 
     fn write_spawn_records_for_test(&self, out: &mut Vec<PressureSpawnRecord>) {
         self.write_final_spawn_records(out);
+    }
+
+    fn write_species_prototypes_for_test(&self, out: &mut Vec<SpeciesPrototype>) {
+        self.write_final_species_prototypes(out);
     }
 
     fn component_cadence_ms(&self, index: usize) -> u32 {
@@ -2397,5 +2426,40 @@ mod tests {
         assert!((speeds[1] - 0.9).abs() < f32::EPSILON);
         assert!((speeds[2] - 0.9).abs() < f32::EPSILON);
         assert!((speeds[3] - 1.25).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn species_prototypes_capture_component_state() {
+        let mut generator = PressureV2::default();
+        generator.telemetry.reset();
+        generator.work.reset();
+
+        let weights = generator.tuning().pressure_weights.clone();
+        let mut component_a = build_component(&weights, 1.0, 1.0, 2, 4);
+        component_a.hp_post = 17.6;
+        component_a.cadence_ms = 480;
+        component_a.tint = MacroquadColor::new(0.4, 0.5, 0.6, 1.0);
+
+        let mut component_b = build_component(&weights, 1.0, 1.0, 2, 4);
+        component_b.hp_post = 23.1;
+        component_b.cadence_ms = 320;
+        component_b.tint = MacroquadColor::new(0.7, 0.2, 0.3, 1.0);
+
+        generator.work.provisional_species = vec![component_a, component_b];
+        generator.work.provisional_species_count = 2;
+
+        let mut prototypes = Vec::new();
+        generator.write_species_prototypes_for_test(&mut prototypes);
+
+        assert_eq!(prototypes.len(), 2);
+        let proto_a = prototypes[0];
+        assert_eq!(proto_a.color(), BugColor::from_rgb(102, 128, 153));
+        assert_eq!(proto_a.health().get(), 18);
+        assert_eq!(proto_a.step_ms().get(), 480);
+
+        let proto_b = prototypes[1];
+        assert_eq!(proto_b.color(), BugColor::from_rgb(179, 51, 77));
+        assert_eq!(proto_b.health().get(), 23);
+        assert_eq!(proto_b.step_ms().get(), 320);
     }
 }
