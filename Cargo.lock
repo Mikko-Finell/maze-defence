@@ -372,6 +372,7 @@ dependencies = [
 name = "maze-defence-pressure-v2"
 version = "0.1.0"
 dependencies = [
+ "macroquad",
  "maze-defence-core",
  "rand",
  "rand_chacha",

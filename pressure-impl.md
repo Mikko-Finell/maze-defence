@@ -69,7 +69,7 @@ usage order.
 **Exit checks:** Unit tests cover low/high difficulty cases, confirming tuning knobs
 produce monotonic count/HP/speed changes and that telemetry serialises expected data.
 
-# 4) [TODO] Species sampling, allocation, and merging
+# 4) [DONE] Species sampling, allocation, and merging
 
 **Goal:** Fulfil §4 of the spec with deterministic merges and unique sprite tint
 assignment for each species.
@@ -82,7 +82,7 @@ assignment for each species.
 - [x] Implement the “no tiny species” merge algorithm with deterministic nearest-neighbour
   selection. Emit `species_merge` telemetry for every merge (or an explicit no-merge
   event) and update indices accordingly.
-- [ ] Generate a distinct `macroquad::Color` per final species by sampling hues/saturations
+- [x] Generate a distinct `macroquad::Color` per final species by sampling hues/saturations
   with the same RNG. Assign the tint alongside species stats and ensure colours are
   deduplicated (retry draws if necessary) so every species renders differently.
 
