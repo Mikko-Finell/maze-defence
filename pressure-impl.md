@@ -139,10 +139,10 @@ system remain.
 
 - [ ] Add headless replay tests covering representative waves (low/high difficulty,
   compression engaged, multi-species merges) and assert telemetry streams.
-- [ ] Update `architecture.md`, `pressure-spec.md` (legacy pointer), and any onboarding docs
+- [x] Update `architecture.md`, `pressure-spec.md` (legacy pointer), and any onboarding docs
   to reference the new `pressure-impl.md` plan, the `PressureTuning` entry point, and
   the v2-only implementation.
-- [ ] Document the RNG ordering and tuning field meanings directly in code comments so
+- [x] Document the RNG ordering and tuning field meanings directly in code comments so
   future tweaks know exactly which knob affects HP, speed, counts, and cadence.
 
 **Exit checks:** All docs are updated, replay tests are deterministic, and designers have

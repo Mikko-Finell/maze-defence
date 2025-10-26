@@ -127,3 +127,7 @@ Sprite descriptors resolve to textures declared in [`assets/manifest.toml`](asse
 * Entering or leaving build mode automatically prints the latest layout snapshot to stdout, making it easy to capture
   incremental edits without relying on the clipboard. 【F:adapters/cli/src/main.rs†L702-L714】
 * Whenever the process exits it prints the most recent snapshot so you can recover the layout after a run. 【F:adapters/cli/src/main.rs†L1270-L1272】
+
+## Wave generation implementation
+
+Wave construction now routes exclusively through the `systems/pressure_v2` crate. Designers adjust wave behaviour by mutating the sole `PressureTuning` entry point exposed by `PressureV2::tuning_mut()` during adapter setup. Implementation details, outstanding todos, and integration guidance live in `pressure-impl.md`, which stays aligned with the normative rules in `pressure-spec-v2.md`.
