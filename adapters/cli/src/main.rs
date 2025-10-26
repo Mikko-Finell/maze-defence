@@ -193,6 +193,9 @@ struct CliArgs {
     /// Restores the provided layout snapshot before the first frame renders.
     #[arg(long, value_name = "LAYOUT")]
     layout: Option<String>,
+    /// Sets the starting difficulty level before the first frame renders.
+    #[arg(long, value_name = "LEVEL", value_parser = clap::value_parser!(u32))]
+    difficulty_level: Option<u32>,
     /// Controls whether per-second frame timing metrics are printed to stdout.
     #[arg(long = "show-fps", value_enum, value_name = "on|off", default_value_t = Toggle::Off)]
     show_fps: Toggle,
@@ -322,6 +325,9 @@ fn main() -> Result<()> {
             .apply_layout_snapshot(snapshot)
             .map_err(anyhow::Error::from)
             .with_context(|| "failed to restore layout from --layout")?;
+    }
+    if let Some(level) = args.difficulty_level {
+        simulation.override_difficulty_level(level);
     }
     let bootstrap = Bootstrap;
     let (banner, grid_scene, wall_color) = {
@@ -1357,6 +1363,12 @@ impl Simulation {
             });
         }
         Ok(())
+    }
+
+    fn override_difficulty_level(&mut self, level: u32) {
+        self.queued_commands
+            .push(Command::SetDifficultyLevel { level });
+        self.process_layout_commands_immediately();
     }
 
     fn queue_layout_import(

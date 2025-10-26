@@ -851,6 +851,10 @@ pub fn apply(world: &mut World, command: Command, out_events: &mut Vec<Event>) {
         Command::SetPlayMode { mode } => {
             let _ = world.transition_to_play_mode(mode, out_events);
         }
+        Command::SetDifficultyLevel { level } => {
+            world.update_difficulty_level(level, out_events);
+            world.assign_pending_wave_difficulty(PendingWaveDifficulty::Unset, out_events, false);
+        }
         Command::SpawnBug {
             spawner,
             color,
@@ -2320,8 +2324,9 @@ fn advance_cell(
 mod tests {
     use super::*;
     use maze_defence_core::{
-        BugColor, DifficultyLevel, Health, LevelId, PlayMode, PressureSpawnRecord,
-        PressureWaveInputs, PressureWavePlan, SpeciesPrototype, WaveDifficulty, WaveId,
+        BugColor, DifficultyLevel, Health, LevelId, PendingWaveDifficulty, PlayMode,
+        PressureSpawnRecord, PressureWaveInputs, PressureWavePlan, SpeciesPrototype,
+        WaveDifficulty, WaveId,
     };
     use std::num::NonZeroU32;
 
@@ -2491,5 +2496,37 @@ mod tests {
         assert_eq!(plan_species_table_version, &world.species_table_version);
         assert_eq!(*plan_burst_count, 1);
         assert!(world.active_wave.is_some());
+    }
+
+    #[test]
+    fn set_difficulty_level_updates_world_and_clears_pending_wave() {
+        let mut world = World::new();
+        let mut events = Vec::new();
+
+        world.assign_pending_wave_difficulty(
+            PendingWaveDifficulty::Selected(WaveDifficulty::Hard),
+            &mut events,
+            false,
+        );
+        events.clear();
+
+        apply(
+            &mut world,
+            Command::SetDifficultyLevel { level: 7 },
+            &mut events,
+        );
+
+        assert!(events.iter().any(|event| {
+            matches!(event, Event::DifficultyLevelChanged { level } if *level == 7)
+        }));
+        assert_eq!(query::difficulty_level(&world), 7);
+        assert!(events.iter().any(|event| {
+            matches!(
+                event,
+                Event::PendingWaveDifficultyChanged {
+                    pending: PendingWaveDifficulty::Unset,
+                }
+            )
+        }));
     }
 }

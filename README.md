@@ -34,6 +34,7 @@ The CLI exposes the following arguments:
 | `--bug-spawn-interval-ms MILLISECONDS` | Controls the interval between automatic spawns while in attack mode. Accepts values from `1` to `60_000`. | `1_000` |
 | `--vsync on\|off` | Requests enabling (`on`) or disabling (`off`) vertical sync. | Platform default |
 | `--layout LAYOUT` | Restores a serialized tower layout before launching the renderer. | None |
+| `--difficulty-level LEVEL` | Sets the base difficulty level before the first frame renders. | `0` |
 | `--show-fps on\|off` | Prints per-second frame timing metrics to stdout when set to `on`. | `off` |
 | `--visual-style sprites\|primitives` | Chooses between sprite-based visuals (`sprites`) and the legacy primitive renderer (`primitives`). | `sprites` |
 
@@ -86,6 +87,16 @@ cargo run --bin maze-defence -- --bug-spawn-interval-ms 2000
 ```
 
 The accepted range matches `--bug-step-ms` — anything between 1 and 60,000 milliseconds is valid.
+
+## Jumping to a specific difficulty level
+
+Skip straight to later waves by launching the CLI with `--difficulty-level`:
+
+```bash
+cargo run --bin maze-defence -- --difficulty-level 12
+```
+
+This overrides the world's base difficulty before the first frame renders and clears any pending wave selection so you can pick a fresh difficulty when starting the next wave.
 
 ## Toggling vertical sync
 
