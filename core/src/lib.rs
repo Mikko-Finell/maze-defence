@@ -731,6 +731,18 @@ impl DifficultyLevel {
     pub const fn get(&self) -> u32 {
         self.0
     }
+
+    /// Returns a level increased by the provided offset, saturating at `u32::MAX`.
+    #[must_use]
+    pub const fn saturating_add(self, value: u32) -> Self {
+        Self(self.0.saturating_add(value))
+    }
+
+    /// Returns a level decreased by the provided offset, saturating at zero.
+    #[must_use]
+    pub const fn saturating_sub(self, value: u32) -> Self {
+        Self(self.0.saturating_sub(value))
+    }
 }
 
 /// Inputs required by the pressure v2 wave generator.
@@ -1040,7 +1052,7 @@ pub enum Event {
         /// Difficulty selection applied to the launch.
         difficulty: WaveDifficulty,
         /// Effective difficulty applied for this wave, including Hard escalations.
-        effective_difficulty: u32,
+        effective_difficulty: DifficultyLevel,
         /// Multiplier applied to gold rewards while the wave is active.
         reward_multiplier: u32,
         /// Scalar applied to pressure calculations for the wave contents.
@@ -1057,14 +1069,14 @@ pub enum Event {
         /// Identifier of the wave cleared on Hard difficulty.
         wave: WaveId,
         /// Difficulty level before applying the Hard victory promotion.
-        previous_level: u32,
+        previous_level: DifficultyLevel,
         /// Difficulty level after applying the Hard victory promotion.
-        new_level: u32,
+        new_level: DifficultyLevel,
     },
     /// Reports that the experience's difficulty level changed.
     DifficultyLevelChanged {
         /// Difficulty level active after the adjustment.
-        level: u32,
+        level: DifficultyLevel,
     },
     /// Confirms that a bug was created by a spawner.
     BugSpawned {
@@ -1349,13 +1361,13 @@ impl WaveId {
 pub struct WaveSeedContext {
     global_seed: u64,
     wave: WaveId,
-    difficulty_level: u32,
+    difficulty_level: DifficultyLevel,
 }
 
 impl WaveSeedContext {
     /// Creates a new seed context for the provided wave.
     #[must_use]
-    pub const fn new(global_seed: u64, wave: WaveId, difficulty_level: u32) -> Self {
+    pub const fn new(global_seed: u64, wave: WaveId, difficulty_level: DifficultyLevel) -> Self {
         Self {
             global_seed,
             wave,
@@ -1377,7 +1389,7 @@ impl WaveSeedContext {
 
     /// Returns the difficulty level active when the context was recorded.
     #[must_use]
-    pub const fn difficulty_level(&self) -> u32 {
+    pub const fn difficulty_level(&self) -> DifficultyLevel {
         self.difficulty_level
     }
 }

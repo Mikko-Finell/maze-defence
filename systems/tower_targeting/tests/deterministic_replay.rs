@@ -366,7 +366,7 @@ impl From<Event> for EventRecord {
             } => Self::WaveStarted {
                 wave,
                 difficulty,
-                effective_difficulty,
+                effective_difficulty: effective_difficulty.get(),
                 reward_multiplier,
                 pressure_scalar,
                 plan_pressure: plan_pressure.get(),
