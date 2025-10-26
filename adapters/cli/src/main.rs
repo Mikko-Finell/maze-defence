@@ -13,6 +13,7 @@ mod layout_transfer;
 
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap, VecDeque},
+    convert::TryFrom,
     f32::consts::{FRAC_PI_2, PI},
     fmt,
     num::NonZeroU32,
@@ -685,7 +686,14 @@ impl WaveState {
             let prototype = species
                 .get(&species_id)
                 .copied()
+                .or_else(|| {
+                    usize::try_from(species_id.get())
+                        .ok()
+                        .and_then(|index| plan.prototypes().get(index))
+                        .copied()
+                })
                 .or_else(|| species.values().copied().next())
+                .or_else(|| plan.prototypes().first().copied())
                 .unwrap_or_else(|| {
                     SpeciesPrototype::new(
                         BugColor::from_rgb(0xff, 0xff, 0xff),
@@ -814,7 +822,7 @@ fn spawn_band_seed(inputs: &PressureWaveInputs) -> u64 {
 mod tests {
     use super::*;
     use maze_defence_core::{DifficultyLevel, LevelId, PressureSpawnRecord, WaveDifficulty};
-    use std::time::Duration;
+    use std::{collections::HashSet, time::Duration};
 
     fn species_proto(color: BugColor, health: u32, step_ms: u32) -> SpeciesPrototype {
         SpeciesPrototype::new(
@@ -824,7 +832,12 @@ mod tests {
         )
     }
 
-    fn build_plan(spawn_count: usize, species: u32, spacing: u32) -> PressureWavePlan {
+    fn build_plan(
+        spawn_count: usize,
+        species: u32,
+        spacing: u32,
+        prototype: SpeciesPrototype,
+    ) -> PressureWavePlan {
         let mut spawns = Vec::with_capacity(spawn_count);
         for index in 0..spawn_count {
             spawns.push(PressureSpawnRecord::new(
@@ -834,7 +847,20 @@ mod tests {
                 species,
             ));
         }
-        PressureWavePlan::new(spawns)
+        let mut prototypes = Vec::new();
+        let index = usize::try_from(species).unwrap_or(0);
+        if prototypes.len() <= index {
+            prototypes.resize(
+                index + 1,
+                SpeciesPrototype::new(
+                    BugColor::from_rgb(0xff, 0xff, 0xff),
+                    Health::new(1),
+                    NonZeroU32::new(1).expect("non-zero default step"),
+                ),
+            );
+        }
+        prototypes[index] = prototype;
+        PressureWavePlan::new(spawns, prototypes)
     }
 
     fn band_spawners(count: u32) -> Vec<CellCoord> {
@@ -843,10 +869,11 @@ mod tests {
 
     #[test]
     fn species_uses_multiple_spawners() {
-        let plan = build_plan(12, 0, 200);
         let mut species = HashMap::new();
         let color = BugColor::from_rgb(0x12, 0x34, 0x56);
-        let _ = species.insert(SpeciesId::new(0), species_proto(color, 5, 500));
+        let prototype = species_proto(color, 5, 500);
+        let plan = build_plan(12, 0, 200, prototype);
+        let _ = species.insert(SpeciesId::new(0), prototype);
         let spawners = band_spawners(20);
 
         let wave = WaveState::new(&plan, &species, &spawners, 0xfeed_beef);
@@ -858,12 +885,10 @@ mod tests {
 
     #[test]
     fn respects_per_spawner_cadence() {
-        let plan = build_plan(30, 0, 10);
         let mut species = HashMap::new();
-        let _ = species.insert(
-            SpeciesId::new(0),
-            species_proto(BugColor::from_rgb(1, 2, 3), 5, 400),
-        );
+        let prototype = species_proto(BugColor::from_rgb(1, 2, 3), 5, 400);
+        let plan = build_plan(30, 0, 10, prototype);
+        let _ = species.insert(SpeciesId::new(0), prototype);
         let spawners = band_spawners(5);
 
         let wave = WaveState::new(&plan, &species, &spawners, 0x1234_5678);
@@ -892,12 +917,10 @@ mod tests {
 
     #[test]
     fn deterministic_band_assignment() {
-        let plan = build_plan(16, 0, 120);
         let mut species = HashMap::new();
-        let _ = species.insert(
-            SpeciesId::new(0),
-            species_proto(BugColor::from_rgb(5, 6, 7), 9, 360),
-        );
+        let prototype = species_proto(BugColor::from_rgb(5, 6, 7), 9, 360);
+        let plan = build_plan(16, 0, 120, prototype);
+        let _ = species.insert(SpeciesId::new(0), prototype);
         let spawners = band_spawners(12);
 
         let left = WaveState::new(&plan, &species, &spawners, 0x77aa_bbcc);
@@ -909,6 +932,25 @@ mod tests {
             assert_eq!(lhs.at, rhs.at);
             assert_eq!(lhs.step_ms, rhs.step_ms);
         }
+    }
+
+    #[test]
+    fn wave_state_uses_plan_prototypes_for_missing_species() {
+        let prototype_a = species_proto(BugColor::from_rgb(0x10, 0x20, 0x30), 7, 420);
+        let prototype_b = species_proto(BugColor::from_rgb(0x40, 0x50, 0x60), 9, 360);
+        let spawns = vec![
+            PressureSpawnRecord::new(0, 10, 1.0, 0),
+            PressureSpawnRecord::new(100, 12, 1.0, 1),
+        ];
+        let plan = PressureWavePlan::new(spawns, vec![prototype_a, prototype_b]);
+        let mut species = HashMap::new();
+        let _ = species.insert(SpeciesId::new(0), prototype_a);
+        let spawners = band_spawners(4);
+
+        let wave = WaveState::new(&plan, &species, &spawners, 0xfeed_face);
+        let colors: HashSet<_> = wave.scheduled.iter().map(|spawn| spawn.color).collect();
+        assert!(colors.contains(&prototype_a.color()));
+        assert!(colors.contains(&prototype_b.color()));
     }
 
     #[test]
@@ -928,9 +970,10 @@ mod tests {
 
         let tint = BugColor::from_rgb(0xaa, 0xbb, 0xcc);
         simulation.species_prototypes.clear();
+        let prototype = species_proto(tint, 12, 360);
         let _ = simulation
             .species_prototypes
-            .insert(SpeciesId::new(1), species_proto(tint, 12, 360));
+            .insert(SpeciesId::new(1), prototype);
 
         let inputs = PressureWaveInputs::new(
             0x1234_5678,
@@ -938,7 +981,7 @@ mod tests {
             WaveId::new(3),
             DifficultyLevel::new(4),
         );
-        let plan = build_plan(8, 1, 90);
+        let plan = build_plan(8, 1, 90, prototype);
         simulation.ready_wave_launches.push_back(ReadyWaveLaunch {
             inputs,
             wave: WaveId::new(3),
@@ -1138,6 +1181,7 @@ impl Simulation {
                         };
                         self.ready_wave_launches.push_back(launch);
                         self.pending_wave_launch = None;
+                        self.refresh_species_and_patches();
                     }
                 }
             }
@@ -1169,6 +1213,8 @@ impl Simulation {
             .as_ref()
             .expect("wave plan should be stored before activation");
 
+        self.print_wave_launch_summary(wave, difficulty, plan_ref);
+
         let spawners = query::bug_spawners(&self.world);
         let band_seed = spawn_band_seed(&inputs);
         let wave_state = WaveState::new(plan_ref, &self.species_prototypes, &spawners, band_seed);
@@ -1178,6 +1224,54 @@ impl Simulation {
 
         self.apply_command(Command::StartWave { wave, difficulty }, emitted_events);
         next_events.append(emitted_events);
+    }
+
+    fn print_wave_launch_summary(
+        &self,
+        wave: WaveId,
+        difficulty: WaveDifficulty,
+        plan: &PressureWavePlan,
+    ) {
+        if plan.prototypes().is_empty() {
+            println!(
+                "\n=== Wave {} ({:?}) ===\n  No species scheduled.\n",
+                wave.get(),
+                difficulty
+            );
+            return;
+        }
+
+        let mut counts = vec![0u32; plan.prototypes().len()];
+        for spawn in plan.spawns() {
+            if let Ok(index) = usize::try_from(spawn.species_id()) {
+                if let Some(count) = counts.get_mut(index) {
+                    *count += 1;
+                }
+            }
+        }
+
+        println!(
+            "\n=== Wave {} ({:?}) ===\nSpecies breakdown:",
+            wave.get(),
+            difficulty
+        );
+
+        for (index, prototype) in plan.prototypes().iter().enumerate() {
+            let color = prototype.color();
+            let hp = prototype.health().get();
+            let cadence_ms = prototype.step_ms().get();
+            let steps_per_second = 1000.0 / (cadence_ms as f32);
+            let count = counts.get(index).copied().unwrap_or_default();
+
+            println!(
+                "  • Species {index}\n    Bugs: {count}\n    HP: {hp}\n    Speed: {steps_per_second:.2} steps/s ({cadence_ms} ms cadence)\n    Color: #{:02X}{:02X}{:02X}",
+                color.red(),
+                color.green(),
+                color.blue()
+            );
+        }
+
+        println!();
     }
 
     fn queue_round_outcome(&mut self, outcome: RoundOutcome) -> bool {
@@ -1371,6 +1465,12 @@ impl Simulation {
             Command::GeneratePressureWave { inputs } => {
                 let command = Command::GeneratePressureWave { inputs };
                 world::apply(&mut self.world, command, out_events);
+                self.refresh_species_and_patches();
+            }
+            Command::CachePressureWave { inputs, plan } => {
+                let command = Command::CachePressureWave { inputs, plan };
+                world::apply(&mut self.world, command, out_events);
+                self.refresh_species_and_patches();
             }
             other => {
                 world::apply(&mut self.world, other, out_events);
