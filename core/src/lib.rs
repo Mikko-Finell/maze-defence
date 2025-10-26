@@ -734,7 +734,7 @@ impl DifficultyLevel {
 }
 
 /// Inputs required by the pressure v2 wave generator.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct PressureWaveInputs {
     game_seed: u64,
     level_id: LevelId,

@@ -29,14 +29,14 @@ use towers::{footprint_for, TowerRegistry, TowerState};
 use maze_defence_core::{
     BugColor, BugId, BurstGapRange, BurstSchedulingConfig, CadenceRange, CellCoord, CellPointHalf,
     CellRect, CellRectSize, Command, Damage, Direction, DirichletWeight, Event, Gold, Health,
-    PendingWaveDifficulty, PlayMode, Pressure, PressureConfig, PressureCurve, PressureWeight,
-    ProjectileId, ReservationClaim, RoundOutcome, SpawnPatchDescriptor, SpawnPatchId,
-    SpeciesDefinition, SpeciesId, SpeciesPrototype, SpeciesTableVersion, Target, TargetCell,
-    TileCoord, TileGrid, WaveDifficulty, WaveId, WELCOME_BANNER,
+    PendingWaveDifficulty, PlayMode, Pressure, PressureConfig, PressureCurve, PressureWaveInputs,
+    PressureWavePlan, PressureWeight, ProjectileId, ReservationClaim, RoundOutcome,
+    SpawnPatchDescriptor, SpawnPatchId, SpeciesDefinition, SpeciesId, SpeciesPrototype,
+    SpeciesTableVersion, Target, TargetCell, TileCoord, TileGrid, WaveDifficulty, WaveId,
+    WELCOME_BANNER,
 };
 
-#[cfg(test)]
-use maze_defence_core::BurstPlan;
+use maze_defence_pressure_v2::PressureV2;
 
 #[cfg(any(test, feature = "tower_scaffolding"))]
 use maze_defence_core::ProjectileRejection;
@@ -96,6 +96,8 @@ pub struct World {
     species_definitions: Vec<SpeciesDefinition>,
     spawn_patches: Vec<SpawnPatchDescriptor>,
     pressure_config: PressureConfig,
+    pressure_wave_cache: HashMap<PressureWaveInputs, PressureWavePlan>,
+    pressure_v2: PressureV2,
     wave_seed_global: u64,
     active_wave: Option<ActiveWaveContext>,
     next_wave_id: WaveId,
@@ -214,6 +216,8 @@ impl World {
             species_definitions,
             spawn_patches,
             pressure_config,
+            pressure_wave_cache: HashMap::new(),
+            pressure_v2: PressureV2::default(),
             wave_seed_global: DEFAULT_WAVE_GLOBAL_SEED,
             active_wave: None,
             next_wave_id: WaveId::new(0),
@@ -294,6 +298,18 @@ impl World {
 
         self.pending_wave_difficulty = pending;
         out_events.push(Event::PendingWaveDifficultyChanged { pending });
+    }
+
+    fn cache_pressure_wave(
+        &mut self,
+        inputs: PressureWaveInputs,
+        plan: PressureWavePlan,
+        out_events: &mut Vec<Event>,
+    ) {
+        let cached_inputs = inputs.clone();
+        let cached_plan = plan.clone();
+        let _ = self.pressure_wave_cache.insert(cached_inputs, cached_plan);
+        out_events.push(Event::PressureWaveReady { inputs, plan });
     }
 
     fn launch_wave(
@@ -678,6 +694,7 @@ pub fn apply(world: &mut World, command: Command, out_events: &mut Vec<Event>) {
             world.species_definitions = species_definitions;
             world.spawn_patches = spawn_patches;
             world.pressure_config = pressure_config.clone();
+            world.pressure_wave_cache.clear();
             world.wave_seed_global = DEFAULT_WAVE_GLOBAL_SEED;
             world.mark_navigation_dirty();
             #[cfg(any(test, feature = "tower_scaffolding"))]
@@ -807,12 +824,13 @@ pub fn apply(world: &mut World, command: Command, out_events: &mut Vec<Event>) {
             let _ = tower;
         }
         Command::GeneratePressureWave { inputs } => {
-            let _ = inputs;
-            panic!("pressure v2 not implemented");
+            let mut spawns = Vec::new();
+            world.pressure_v2.generate(&inputs, &mut spawns);
+            let plan = PressureWavePlan::new(spawns);
+            world.cache_pressure_wave(inputs, plan, out_events);
         }
         Command::CachePressureWave { inputs, plan } => {
-            let _ = (inputs, plan);
-            panic!("pressure v2 not implemented");
+            world.cache_pressure_wave(inputs, plan, out_events);
         }
         Command::StartWave { wave, difficulty } => {
             world.launch_wave(wave, difficulty, out_events);
@@ -1329,8 +1347,9 @@ pub mod query {
     use super::{Bug, World};
     use maze_defence_core::{
         BugSnapshot, BugView, CellCoord, Goal, Gold, NavigationFieldView, OccupancyView,
-        PendingWaveDifficulty, PlayMode, PressureConfig, ProjectileSnapshot, ReservationLedgerView,
-        SpawnPatchTableView, SpeciesTableView, Target, TileGrid, WaveSeedContext,
+        PendingWaveDifficulty, PlayMode, PressureConfig, PressureWaveInputs, PressureWavePlan,
+        ProjectileSnapshot, ReservationLedgerView, SpawnPatchTableView, SpeciesTableView, Target,
+        TileGrid, WaveSeedContext,
     };
 
     use maze_defence_core::structures::{Wall as CellWall, WallView as CellWallView};
@@ -1380,6 +1399,15 @@ pub mod query {
     #[must_use]
     pub fn pressure_config(world: &World) -> &PressureConfig {
         &world.pressure_config
+    }
+
+    /// Retrieves a cached pressure wave plan for the specified inputs, if present.
+    #[must_use]
+    pub fn pressure_wave_plan<'a>(
+        world: &'a World,
+        inputs: &PressureWaveInputs,
+    ) -> Option<&'a PressureWavePlan> {
+        world.pressure_wave_cache.get(inputs)
     }
 
     /// Captures the wave seed derivation context for the next generated wave.
@@ -1778,6 +1806,7 @@ impl BugSpawnerRegistry {
     }
 
     #[cfg(test)]
+    #[allow(dead_code)]
     fn cells(&self) -> &BTreeSet<CellCoord> {
         &self.cells
     }
@@ -2051,6 +2080,7 @@ fn visible_wall_row_for_tile_grid(rows: TileCoord, cells_per_tile: u32) -> Optio
 }
 
 #[cfg(test)]
+#[allow(dead_code)]
 fn walkway_row_for_tile_grid(rows: TileCoord, cells_per_tile: u32) -> Option<u32> {
     let wall_row = visible_wall_row_for_tile_grid(rows, cells_per_tile)?;
     wall_row.checked_sub(1)
@@ -2137,4 +2167,76 @@ fn advance_cell(
 }
 
 #[cfg(test)]
-mod tests {}
+mod tests {
+    use super::*;
+    use maze_defence_core::{
+        DifficultyLevel, LevelId, PressureSpawnRecord, PressureWaveInputs, PressureWavePlan, WaveId,
+    };
+
+    #[test]
+    fn generate_pressure_wave_caches_plan_and_emits_event() {
+        let mut world = World::new();
+        let mut events = Vec::new();
+        let inputs =
+            PressureWaveInputs::new(42, LevelId::new(7), WaveId::new(3), DifficultyLevel::new(5));
+
+        apply(
+            &mut world,
+            Command::GeneratePressureWave {
+                inputs: inputs.clone(),
+            },
+            &mut events,
+        );
+
+        assert_eq!(events.len(), 1);
+        let Some(Event::PressureWaveReady {
+            inputs: ready_inputs,
+            plan,
+        }) = events.last()
+        else {
+            panic!("expected pressure wave ready event");
+        };
+        assert_eq!(ready_inputs, &inputs);
+        assert!(
+            !plan.spawns().is_empty(),
+            "generated plan should contain spawns"
+        );
+
+        let cached =
+            query::pressure_wave_plan(&world, &inputs).expect("world should cache generated plan");
+        assert_eq!(cached, plan);
+    }
+
+    #[test]
+    fn cache_pressure_wave_stores_plan_and_emits_event() {
+        let mut world = World::new();
+        let mut events = Vec::new();
+        let inputs =
+            PressureWaveInputs::new(7, LevelId::new(2), WaveId::new(1), DifficultyLevel::new(3));
+        let plan = PressureWavePlan::new(vec![PressureSpawnRecord::new(0, 15, 1.2, 0)]);
+
+        apply(
+            &mut world,
+            Command::CachePressureWave {
+                inputs: inputs.clone(),
+                plan: plan.clone(),
+            },
+            &mut events,
+        );
+
+        assert_eq!(events.len(), 1);
+        let Some(Event::PressureWaveReady {
+            inputs: ready_inputs,
+            plan: cached_plan,
+        }) = events.last()
+        else {
+            panic!("expected pressure wave ready event");
+        };
+        assert_eq!(ready_inputs, &inputs);
+        assert_eq!(cached_plan, &plan);
+
+        let cached =
+            query::pressure_wave_plan(&world, &inputs).expect("world should cache supplied plan");
+        assert_eq!(cached, &plan);
+    }
+}

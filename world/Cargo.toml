@@ -11,3 +11,4 @@ tower_scaffolding = []
 
 [dependencies]
 maze-defence-core = { path = "../core" }
+maze-defence-pressure-v2 = { path = "../systems/pressure_v2" }

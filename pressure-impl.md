@@ -117,7 +117,7 @@ legacy pieces.
 
 **Deliverables:**
 
-- [ ] Update world/apply code to request waves from `PressureV2`, replace `tier` naming with
+- [x] Update world/apply code to request waves from `PressureV2`, replace `tier` naming with
   `difficulty` everywhere, and persist per-bug spawn records using the new types.
 - [ ] Spawn bugs from multiple map locations by assigning each species a band of 5–10
   consecutive spawner cells sampled (deterministically) around the map instead of the
