@@ -12,7 +12,7 @@
 mod layout_transfer;
 
 use std::{
-    collections::HashMap,
+    collections::{BTreeSet, HashMap},
     f32::consts::{FRAC_PI_2, PI},
     fmt,
     num::NonZeroU32,
@@ -51,6 +51,8 @@ use maze_defence_system_spawning::{Config as SpawningConfig, Spawning};
 use maze_defence_system_tower_combat::TowerCombat;
 use maze_defence_system_tower_targeting::TowerTargeting;
 use maze_defence_world::{self as world, query, World};
+use rand::{Rng, SeedableRng};
+use rand_chacha::ChaCha8Rng;
 
 const DEFAULT_GRID_COLUMNS: u32 = 10;
 const DEFAULT_GRID_ROWS: u32 = 10;
@@ -61,6 +63,8 @@ const SPAWN_RNG_SEED: u64 = 0x4d59_5df4_d0f3_3173;
 const TILE_LENGTH_TOLERANCE: f32 = 1e-3;
 const DEFAULT_BUG_HEADING: f32 = 0.0;
 const GROUND_TILE_MULTIPLIER: f32 = 4.0;
+const MIN_SPAWN_BAND: usize = 5;
+const MAX_SPAWN_BAND: usize = 10;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct PlacementRejection {
     kind: TowerKind,
@@ -569,10 +573,165 @@ impl WaveState {
     fn new(
         plan: &PressureWavePlan,
         species: &HashMap<SpeciesId, SpeciesPrototype>,
-        patches: &HashMap<SpawnPatchId, CellCoord>,
+        spawners: &[CellCoord],
+        seed: u64,
     ) -> Self {
-        let _ = (plan, species, patches);
-        todo!("pressure v2 not implemented");
+        if plan.spawns().is_empty() || spawners.is_empty() {
+            return Self {
+                scheduled: Vec::new(),
+                next_spawn: 0,
+                elapsed: Duration::ZERO,
+            };
+        }
+
+        let mut rng = ChaCha8Rng::seed_from_u64(seed);
+        let mut ordered_spawners: Vec<CellCoord> = spawners.iter().copied().collect();
+        ordered_spawners.sort_by_key(|coord| (coord.row(), coord.column()));
+
+        let spawner_count = ordered_spawners.len();
+        if spawner_count == 0 {
+            return Self {
+                scheduled: Vec::new(),
+                next_spawn: 0,
+                elapsed: Duration::ZERO,
+            };
+        }
+
+        let mut species_ids = BTreeSet::new();
+        for spawn in plan.spawns() {
+            let _ = species_ids.insert(SpeciesId::new(spawn.species_id()));
+        }
+        if species_ids.is_empty() {
+            return Self {
+                scheduled: Vec::new(),
+                next_spawn: 0,
+                elapsed: Duration::ZERO,
+            };
+        }
+
+        let mut next_band_start = if spawner_count == 0 {
+            0
+        } else {
+            rng.gen_range(0..spawner_count)
+        };
+
+        #[derive(Clone, Debug)]
+        struct BandState {
+            cells: Vec<CellCoord>,
+            cursor: usize,
+        }
+
+        let mut bands: HashMap<SpeciesId, BandState> = HashMap::new();
+
+        for species_id in &species_ids {
+            let max_band = MAX_SPAWN_BAND.min(spawner_count).max(1);
+            let min_band = MIN_SPAWN_BAND.min(spawner_count).max(1);
+            let band_len = if min_band >= max_band {
+                min_band
+            } else {
+                rng.gen_range(min_band..=max_band)
+            };
+
+            let mut cells = Vec::with_capacity(band_len);
+            if spawner_count == band_len {
+                cells.extend(ordered_spawners.iter().copied());
+            } else {
+                for offset in 0..band_len {
+                    let index = (next_band_start + offset) % spawner_count;
+                    cells.push(ordered_spawners[index]);
+                }
+            }
+
+            let band_state = BandState { cells, cursor: 0 };
+            let _ = bands.insert(*species_id, band_state);
+            if spawner_count > 0 {
+                next_band_start = (next_band_start + band_len) % spawner_count;
+            }
+        }
+
+        let mut availability: HashMap<CellCoord, Duration> = HashMap::new();
+        for cell in &ordered_spawners {
+            let _ = availability.insert(*cell, Duration::ZERO);
+        }
+
+        let mut scheduled = Vec::with_capacity(plan.spawns().len());
+        for (index, spawn) in plan.spawns().iter().enumerate() {
+            let species_id = SpeciesId::new(spawn.species_id());
+            let band = if bands.contains_key(&species_id) {
+                bands
+                    .get_mut(&species_id)
+                    .expect("species band should exist once assigned")
+            } else {
+                let fallback_id = *bands
+                    .keys()
+                    .next()
+                    .expect("at least one band must be registered");
+                bands
+                    .get_mut(&fallback_id)
+                    .expect("fallback band should exist")
+            };
+            let cell = if band.cells.is_empty() {
+                ordered_spawners[index % spawner_count]
+            } else {
+                let cell = band.cells[band.cursor % band.cells.len()];
+                band.cursor = band.cursor.wrapping_add(1);
+                cell
+            };
+
+            let prototype = species
+                .get(&species_id)
+                .copied()
+                .or_else(|| species.values().copied().next())
+                .unwrap_or_else(|| {
+                    SpeciesPrototype::new(
+                        BugColor::from_rgb(0xff, 0xff, 0xff),
+                        Health::new(spawn.hp()),
+                        NonZeroU32::new(1).expect("non-zero fallback step"),
+                    )
+                });
+
+            let step_ms = resolve_step_ms(prototype.step_ms(), spawn.speed_mult());
+            let color = prototype.color();
+            let health = Health::new(spawn.hp());
+            let planned_at = Duration::from_millis(u64::from(spawn.time_ms()));
+            let ready_at = availability.get(&cell).copied().unwrap_or_default();
+            let scheduled_at = planned_at.max(ready_at);
+            let cooldown = Duration::from_millis(u64::from(step_ms.get()));
+            let _ = availability.insert(cell, scheduled_at.saturating_add(cooldown));
+
+            scheduled.push((
+                index,
+                ScheduledSpawn {
+                    at: scheduled_at,
+                    spawner: cell,
+                    color,
+                    health,
+                    step_ms,
+                },
+            ));
+        }
+
+        scheduled.sort_by(|left, right| {
+            let time_order = left.1.at.cmp(&right.1.at);
+            if time_order != std::cmp::Ordering::Equal {
+                return time_order;
+            }
+            let cell_left = (left.1.spawner.row(), left.1.spawner.column());
+            let cell_right = (right.1.spawner.row(), right.1.spawner.column());
+            let cell_order = cell_left.cmp(&cell_right);
+            if cell_order != std::cmp::Ordering::Equal {
+                return cell_order;
+            }
+            left.0.cmp(&right.0)
+        });
+
+        let scheduled = scheduled.into_iter().map(|(_, spawn)| spawn).collect();
+
+        Self {
+            scheduled,
+            next_spawn: 0,
+            elapsed: Duration::ZERO,
+        }
     }
 
     fn advance(&mut self, dt: Duration, out: &mut Vec<Command>) {
@@ -596,6 +755,119 @@ impl WaveState {
     }
 }
 
+fn resolve_step_ms(base: NonZeroU32, speed_mult: f32) -> NonZeroU32 {
+    let baseline = base.get().max(1);
+    let multiplier = if speed_mult.is_finite() && speed_mult > f32::EPSILON {
+        speed_mult
+    } else {
+        1.0
+    };
+    let adjusted = (baseline as f32 / multiplier).round() as u32;
+    NonZeroU32::new(adjusted.max(1)).expect("non-zero step duration")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use maze_defence_core::PressureSpawnRecord;
+
+    fn species_proto(color: BugColor, health: u32, step_ms: u32) -> SpeciesPrototype {
+        SpeciesPrototype::new(
+            color,
+            Health::new(health),
+            NonZeroU32::new(step_ms.max(1)).expect("non-zero step"),
+        )
+    }
+
+    fn build_plan(spawn_count: usize, species: u32, spacing: u32) -> PressureWavePlan {
+        let mut spawns = Vec::with_capacity(spawn_count);
+        for index in 0..spawn_count {
+            spawns.push(PressureSpawnRecord::new(
+                spacing.saturating_mul(u32::try_from(index).unwrap_or(0)),
+                10,
+                1.0,
+                species,
+            ));
+        }
+        PressureWavePlan::new(spawns)
+    }
+
+    fn band_spawners(count: u32) -> Vec<CellCoord> {
+        (0..count).map(|column| CellCoord::new(column, 0)).collect()
+    }
+
+    #[test]
+    fn species_uses_multiple_spawners() {
+        let plan = build_plan(12, 0, 200);
+        let mut species = HashMap::new();
+        let color = BugColor::from_rgb(0x12, 0x34, 0x56);
+        let _ = species.insert(SpeciesId::new(0), species_proto(color, 5, 500));
+        let spawners = band_spawners(20);
+
+        let wave = WaveState::new(&plan, &species, &spawners, 0xfeed_beef);
+        assert_eq!(wave.scheduled.len(), plan.spawns().len());
+
+        let unique: BTreeSet<_> = wave.scheduled.iter().map(|spawn| spawn.spawner).collect();
+        assert!(unique.len() >= MIN_SPAWN_BAND.min(spawners.len()));
+    }
+
+    #[test]
+    fn respects_per_spawner_cadence() {
+        let plan = build_plan(30, 0, 10);
+        let mut species = HashMap::new();
+        let _ = species.insert(
+            SpeciesId::new(0),
+            species_proto(BugColor::from_rgb(1, 2, 3), 5, 400),
+        );
+        let spawners = band_spawners(5);
+
+        let wave = WaveState::new(&plan, &species, &spawners, 0x1234_5678);
+
+        let mut per_cell: HashMap<CellCoord, Vec<(Duration, u32)>> = HashMap::new();
+        for spawn in &wave.scheduled {
+            per_cell
+                .entry(spawn.spawner)
+                .or_default()
+                .push((spawn.at, spawn.step_ms.get()));
+        }
+
+        for entries in per_cell.values_mut() {
+            if entries.len() < 2 {
+                continue;
+            }
+            entries.sort_by_key(|entry| entry.0);
+            for window in entries.windows(2) {
+                let previous = window[0];
+                let next = window[1];
+                let required_gap = Duration::from_millis(u64::from(previous.1));
+                assert!(next.0 >= previous.0 + required_gap);
+            }
+        }
+    }
+
+    #[test]
+    fn deterministic_band_assignment() {
+        let plan = build_plan(16, 0, 120);
+        let mut species = HashMap::new();
+        let _ = species.insert(
+            SpeciesId::new(0),
+            species_proto(BugColor::from_rgb(5, 6, 7), 9, 360),
+        );
+        let spawners = band_spawners(12);
+
+        let left = WaveState::new(&plan, &species, &spawners, 0x77aa_bbcc);
+        let right = WaveState::new(&plan, &species, &spawners, 0x77aa_bbcc);
+
+        assert_eq!(left.scheduled.len(), right.scheduled.len());
+        for (lhs, rhs) in left.scheduled.iter().zip(right.scheduled.iter()) {
+            assert_eq!(lhs.spawner, rhs.spawner);
+            assert_eq!(lhs.at, rhs.at);
+            assert_eq!(lhs.step_ms, rhs.step_ms);
+        }
+    }
+}
+
+#[cfg_attr(test, allow(dead_code))]
 impl Simulation {
     fn new(
         columns: u32,
@@ -1811,6 +2083,3 @@ impl Drop for Simulation {
         println!("{encoded}");
     }
 }
-
-#[cfg(test)]
-mod tests {}

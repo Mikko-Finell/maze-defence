@@ -357,6 +357,8 @@ dependencies = [
  "maze-defence-system-tower-combat",
  "maze-defence-system-tower-targeting",
  "maze-defence-world",
+ "rand",
+ "rand_chacha",
  "serde",
 ]
 
