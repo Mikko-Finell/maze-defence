@@ -527,6 +527,10 @@ enum EventRecord {
     PressureConfigChanged {
         species_table_version: SpeciesTableVersion,
     },
+    PressureWaveReady {
+        wave: WaveId,
+        spawn_count: usize,
+    },
     WaveStarted {
         wave: WaveId,
         difficulty: WaveDifficulty,
@@ -585,6 +589,10 @@ impl From<&Event> for EventRecord {
                 ..
             } => Self::PressureConfigChanged {
                 species_table_version: *species_table_version,
+            },
+            Event::PressureWaveReady { inputs, plan } => Self::PressureWaveReady {
+                wave: inputs.wave(),
+                spawn_count: plan.spawns().len(),
             },
             Event::WaveStarted {
                 wave,

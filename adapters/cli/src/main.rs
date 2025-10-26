@@ -12,7 +12,7 @@
 mod layout_transfer;
 
 use std::{
-    collections::{BTreeMap, BTreeSet, HashMap},
+    collections::{BTreeMap, BTreeSet, HashMap, VecDeque},
     f32::consts::{FRAC_PI_2, PI},
     fmt,
     num::NonZeroU32,
@@ -25,13 +25,12 @@ use clap::{Parser, ValueEnum};
 use glam::Vec2;
 use layout_transfer::{TowerLayoutSnapshot, TowerLayoutTower};
 use maze_defence_core::{
-    BugColor, BugId, BugView, CellCoord, CellPointHalf, CellRect, CellRectSize, Command, Event,
-    Gold, Health, PendingWaveDifficulty, PlacementError, PlayMode, PressureWavePlan,
-    ProjectileSnapshot, RemovalError, RoundOutcome, SpawnPatchId, SpeciesId, SpeciesPrototype,
-    SpeciesTableVersion, TileCoord, TowerCooldownView, TowerId, TowerKind, TowerTarget,
-    WaveDifficulty, WaveId,
+    BugColor, BugId, BugView, CellCoord, CellPointHalf, CellRect, CellRectSize, Command,
+    DifficultyLevel, Event, Gold, Health, PendingWaveDifficulty, PlacementError, PlayMode,
+    PressureWaveInputs, PressureWavePlan, ProjectileSnapshot, RemovalError, RoundOutcome,
+    SpawnPatchId, SpeciesId, SpeciesPrototype, SpeciesTableVersion, TileCoord, TowerCooldownView,
+    TowerId, TowerKind, TowerTarget, WaveDifficulty, WaveId,
 };
-use maze_defence_pressure_v2::{PressureTuning, PressureV2};
 use maze_defence_rendering::{
     visuals, BugHealthPresentation, BugPresentation, BugVisual, Color, ControlPanelView,
     DifficultyButtonPresentation, DifficultyPresentation, DifficultySelectionPresentation,
@@ -65,6 +64,8 @@ const DEFAULT_BUG_HEADING: f32 = 0.0;
 const GROUND_TILE_MULTIPLIER: f32 = 4.0;
 const MIN_SPAWN_BAND: usize = 5;
 const MAX_SPAWN_BAND: usize = 10;
+const SPAWN_BAND_FNV_OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
+const SPAWN_BAND_FNV_PRIME: u64 = 0x0000_0001_0000_01b3;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct PlacementRejection {
     kind: TowerKind,
@@ -393,7 +394,6 @@ struct Simulation {
     builder: TowerBuilder,
     movement: Movement,
     spawning: Spawning,
-    pressure_v2: PressureV2,
     tower_targeting: TowerTargeting,
     tower_combat: TowerCombat,
     tower_cooldowns: TowerCooldownView,
@@ -408,6 +408,7 @@ struct Simulation {
     gold: Gold,
     difficulty_level: u32,
     pending_wave_difficulty: PendingWaveDifficulty,
+    pending_wave_launch: Option<PendingWaveLaunch>,
     last_placement_rejection: Option<PlacementRejection>,
     last_removal_rejection: Option<RemovalRejection>,
     bug_step_duration: Duration,
@@ -421,6 +422,8 @@ struct Simulation {
     last_advance_profile: AdvanceProfile,
     last_announced_play_mode: PlayMode,
     active_wave: Option<WaveState>,
+    active_wave_plan: Option<PressureWavePlan>,
+    ready_wave_launches: VecDeque<ReadyWaveLaunch>,
     auto_spawn_enabled: bool,
     pending_outcome_command: bool,
     awaiting_round_resolution: bool,
@@ -765,6 +768,21 @@ impl WaveState {
     }
 }
 
+#[derive(Clone, Debug)]
+struct PendingWaveLaunch {
+    inputs: PressureWaveInputs,
+    wave: WaveId,
+    difficulty: WaveDifficulty,
+}
+
+#[derive(Clone, Debug)]
+struct ReadyWaveLaunch {
+    inputs: PressureWaveInputs,
+    wave: WaveId,
+    difficulty: WaveDifficulty,
+    plan: PressureWavePlan,
+}
+
 fn resolve_step_ms(base: NonZeroU32, speed_mult: f32) -> NonZeroU32 {
     let baseline = base.get().max(1);
     let multiplier = if speed_mult.is_finite() && speed_mult > f32::EPSILON {
@@ -776,10 +794,27 @@ fn resolve_step_ms(base: NonZeroU32, speed_mult: f32) -> NonZeroU32 {
     NonZeroU32::new(adjusted.max(1)).expect("non-zero step duration")
 }
 
+fn spawn_band_seed(inputs: &PressureWaveInputs) -> u64 {
+    fn fnv1a(mut state: u64, bytes: &[u8]) -> u64 {
+        for byte in bytes {
+            state ^= u64::from(*byte);
+            state = state.wrapping_mul(SPAWN_BAND_FNV_PRIME);
+        }
+        state
+    }
+
+    let mut hash = SPAWN_BAND_FNV_OFFSET_BASIS;
+    hash = fnv1a(hash, &inputs.game_seed().to_le_bytes());
+    hash = fnv1a(hash, &inputs.level_id().get().to_le_bytes());
+    hash = fnv1a(hash, &inputs.wave().get().to_le_bytes());
+    fnv1a(hash, &inputs.difficulty().get().to_le_bytes())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use maze_defence_core::PressureSpawnRecord;
+    use maze_defence_core::{DifficultyLevel, LevelId, PressureSpawnRecord, WaveDifficulty};
+    use std::time::Duration;
 
     fn species_proto(color: BugColor, health: u32, step_ms: u32) -> SpeciesPrototype {
         SpeciesPrototype::new(
@@ -875,6 +910,52 @@ mod tests {
             assert_eq!(lhs.step_ms, rhs.step_ms);
         }
     }
+
+    #[test]
+    fn spawn_effect_preview_uses_ready_launch_plan() {
+        let mut simulation = Simulation::new(
+            4,
+            4,
+            48.0,
+            1,
+            Duration::from_millis(400),
+            Duration::from_millis(1_000),
+            VisualStyle::Primitives,
+        );
+        simulation.ready_wave_launches.clear();
+        simulation.active_wave = None;
+        simulation.active_wave_plan = None;
+
+        let tint = BugColor::from_rgb(0xaa, 0xbb, 0xcc);
+        simulation.species_prototypes.clear();
+        let _ = simulation
+            .species_prototypes
+            .insert(SpeciesId::new(1), species_proto(tint, 12, 360));
+
+        let inputs = PressureWaveInputs::new(
+            0x1234_5678,
+            LevelId::new(2),
+            WaveId::new(3),
+            DifficultyLevel::new(4),
+        );
+        let plan = build_plan(8, 1, 90);
+        simulation.ready_wave_launches.push_back(ReadyWaveLaunch {
+            inputs,
+            wave: WaveId::new(3),
+            difficulty: WaveDifficulty::Normal,
+            plan,
+        });
+
+        let effects = simulation.spawn_effects();
+        assert!(!effects.is_empty());
+        let expected = Color::from_rgb_u8(tint.red(), tint.green(), tint.blue());
+        let effect = effects
+            .first()
+            .expect("at least one spawn effect should be generated");
+        assert!((effect.color.red - expected.red).abs() <= f32::EPSILON);
+        assert!((effect.color.green - expected.green).abs() <= f32::EPSILON);
+        assert!((effect.color.blue - expected.blue).abs() <= f32::EPSILON);
+    }
 }
 
 #[cfg_attr(test, allow(dead_code))]
@@ -934,8 +1015,6 @@ impl Simulation {
                 bug_step,
                 SPAWN_RNG_SEED,
             )),
-            // PressureTuning is the sole supported knob surface for wave behaviour; adjust fields here.
-            pressure_v2: PressureV2::new(PressureTuning::default()),
             tower_targeting: TowerTargeting::new(),
             tower_combat: TowerCombat::new(),
             tower_cooldowns: TowerCooldownView::default(),
@@ -950,6 +1029,7 @@ impl Simulation {
             gold,
             difficulty_level,
             pending_wave_difficulty,
+            pending_wave_launch: None,
             last_placement_rejection: None,
             last_removal_rejection: None,
             bug_step_duration: bug_step,
@@ -963,6 +1043,8 @@ impl Simulation {
             last_advance_profile: AdvanceProfile::default(),
             last_announced_play_mode: initial_play_mode,
             active_wave: None,
+            active_wave_plan: None,
+            ready_wave_launches: VecDeque::new(),
             auto_spawn_enabled: false,
             pending_outcome_command: false,
             awaiting_round_resolution: false,
@@ -982,8 +1064,7 @@ impl Simulation {
 
     #[cfg(test)]
     fn active_wave_plan(&self) -> Option<&PressureWavePlan> {
-        let _ = self;
-        panic!("pressure v2 not implemented");
+        self.active_wave_plan.as_ref()
     }
 
     fn handle_input(&mut self, input: FrameInput) {
@@ -1009,38 +1090,94 @@ impl Simulation {
     }
 
     fn initiate_wave_launch(&mut self, difficulty: WaveDifficulty) {
-        let _ = &mut self.pressure_v2;
-        let _ = difficulty;
-        panic!("pressure v2 not implemented");
+        if query::play_mode(&self.world) != PlayMode::Attack {
+            return;
+        }
+
+        if self.pending_wave_launch.is_some()
+            || self.active_wave.is_some()
+            || self.awaiting_round_resolution
+        {
+            return;
+        }
+
+        let context = query::wave_seed_context(&self.world);
+        let level_id = query::level_id(&self.world);
+        let base_difficulty = context.difficulty_level();
+        let effective_level = match difficulty {
+            WaveDifficulty::Normal => base_difficulty,
+            WaveDifficulty::Hard => base_difficulty.saturating_add(1),
+        };
+
+        let inputs = PressureWaveInputs::new(
+            context.global_seed(),
+            level_id,
+            context.wave(),
+            DifficultyLevel::new(effective_level),
+        );
+
+        self.pending_wave_launch = Some(PendingWaveLaunch {
+            inputs: inputs.clone(),
+            wave: context.wave(),
+            difficulty,
+        });
+        self.queued_commands
+            .push(Command::GeneratePressureWave { inputs });
     }
 
-    fn record_attack_plan_events(
-        &mut self,
-        events: &[Event],
-    ) -> Vec<(WaveId, WaveDifficulty, PressureWavePlan)> {
-        if events
-            .iter()
-            .any(|event| matches!(event, Event::PressureWaveReady { .. }))
-        {
-            panic!("pressure v2 not implemented");
+    fn record_attack_plan_events(&mut self, events: &[Event]) -> Vec<ReadyWaveLaunch> {
+        for event in events {
+            if let Event::PressureWaveReady { inputs, plan } = event {
+                if let Some(pending) = &self.pending_wave_launch {
+                    if pending.inputs == *inputs {
+                        let launch = ReadyWaveLaunch {
+                            inputs: inputs.clone(),
+                            wave: pending.wave,
+                            difficulty: pending.difficulty,
+                            plan: plan.clone(),
+                        };
+                        self.ready_wave_launches.push_back(launch);
+                        self.pending_wave_launch = None;
+                    }
+                }
+            }
         }
+
         Vec::new()
     }
 
-    fn take_ready_wave_launch(&mut self) -> Option<(WaveId, WaveDifficulty, PressureWavePlan)> {
-        panic!("pressure v2 not implemented");
+    fn take_ready_wave_launch(&mut self) -> Option<ReadyWaveLaunch> {
+        self.ready_wave_launches.pop_front()
     }
 
     fn activate_wave(
         &mut self,
-        wave: WaveId,
-        difficulty: WaveDifficulty,
-        plan: PressureWavePlan,
+        launch: ReadyWaveLaunch,
         emitted_events: &mut Vec<Event>,
         next_events: &mut Vec<Event>,
     ) {
-        let _ = (wave, difficulty, plan, emitted_events, next_events);
-        panic!("pressure v2 not implemented");
+        let ReadyWaveLaunch {
+            inputs,
+            wave,
+            difficulty,
+            plan,
+        } = launch;
+
+        self.active_wave_plan = Some(plan);
+        let plan_ref = self
+            .active_wave_plan
+            .as_ref()
+            .expect("wave plan should be stored before activation");
+
+        let spawners = query::bug_spawners(&self.world);
+        let band_seed = spawn_band_seed(&inputs);
+        let wave_state = WaveState::new(plan_ref, &self.species_prototypes, &spawners, band_seed);
+        self.active_wave = Some(wave_state);
+        self.awaiting_round_resolution = true;
+        self.pending_outcome_command = false;
+
+        self.apply_command(Command::StartWave { wave, difficulty }, emitted_events);
+        next_events.append(emitted_events);
     }
 
     fn queue_round_outcome(&mut self, outcome: RoundOutcome) -> bool {
@@ -1232,8 +1369,8 @@ impl Simulation {
                 self.refresh_species_and_patches();
             }
             Command::GeneratePressureWave { inputs } => {
-                let _ = inputs;
-                panic!("pressure v2 not implemented");
+                let command = Command::GeneratePressureWave { inputs };
+                world::apply(&mut self.world, command, out_events);
             }
             other => {
                 world::apply(&mut self.world, other, out_events);
@@ -1443,11 +1580,15 @@ impl Simulation {
     }
 
     fn spawn_effects(&self) -> Vec<SpawnEffect> {
-        let Some(wave) = &self.active_wave else {
-            return Vec::new();
+        let effect_sources = if let Some(wave) = &self.active_wave {
+            wave.pending_spawn_effects()
+        } else if let Some(launch) = self.ready_wave_launches.front() {
+            self.spawn_effect_cells_for_plan(&launch.plan, &launch.inputs)
+        } else {
+            Vec::new()
         };
 
-        wave.pending_spawn_effects()
+        effect_sources
             .into_iter()
             .map(|(cell, color)| {
                 SpawnEffect::new(
@@ -1457,6 +1598,25 @@ impl Simulation {
                 )
             })
             .collect()
+    }
+
+    fn spawn_effect_cells_for_plan(
+        &self,
+        plan: &PressureWavePlan,
+        inputs: &PressureWaveInputs,
+    ) -> Vec<(CellCoord, BugColor)> {
+        if plan.spawns().is_empty() {
+            return Vec::new();
+        }
+
+        let spawners = query::bug_spawners(&self.world);
+        if spawners.is_empty() {
+            return Vec::new();
+        }
+
+        let seed = spawn_band_seed(inputs);
+        let preview = WaveState::new(plan, &self.species_prototypes, &spawners, seed);
+        preview.pending_spawn_effects()
     }
 
     fn difficulty_selection_presentation(&self) -> DifficultySelectionPresentation {
@@ -1520,7 +1680,7 @@ impl Simulation {
             }
 
             let mut launches = self.record_attack_plan_events(&events);
-            if let Some(launch) = self.take_ready_wave_launch() {
+            while let Some(launch) = self.take_ready_wave_launch() {
                 launches.push(launch);
             }
             self.handle_bug_motion_events(&events);
@@ -1530,14 +1690,8 @@ impl Simulation {
             self.update_pending_wave_difficulty_from_events(&events);
             self.update_pressure_configuration_from_events(&events);
 
-            for (wave, difficulty, plan) in launches {
-                self.activate_wave(
-                    wave,
-                    difficulty,
-                    plan,
-                    &mut emitted_events,
-                    &mut next_events,
-                );
+            for launch in launches {
+                self.activate_wave(launch, &mut emitted_events, &mut next_events);
             }
 
             if events
@@ -1545,6 +1699,7 @@ impl Simulation {
                 .any(|event| matches!(event, Event::RoundLost { .. }))
             {
                 self.active_wave = None;
+                self.active_wave_plan = None;
                 self.awaiting_round_resolution = false;
                 let _ = self.queue_round_outcome(RoundOutcome::Loss);
             }
@@ -1581,6 +1736,7 @@ impl Simulation {
             }
             if wave_complete {
                 self.active_wave = None;
+                self.active_wave_plan = None;
                 if query::bug_view(&self.world).iter().next().is_none() {
                     if self.queue_round_outcome(RoundOutcome::Win) || self.pending_outcome_command {
                         self.awaiting_round_resolution = false;
