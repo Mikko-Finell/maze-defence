@@ -1272,6 +1272,10 @@ impl World {
             return;
         };
 
+        let refund = state.kind.build_cost();
+        let updated = self.gold.saturating_add(refund);
+        self.update_gold(updated, out_events);
+
         self.mark_tower_region(state.region, false);
         self.mark_navigation_dirty();
         self.rebuild_navigation_field_if_dirty();
@@ -2326,8 +2330,8 @@ fn advance_cell(
 mod tests {
     use super::*;
     use maze_defence_core::{
-        BugColor, DifficultyLevel, Health, LevelId, PlayMode, PressureSpawnRecord,
-        PressureWaveInputs, PressureWavePlan, SpeciesPrototype, WaveDifficulty, WaveId,
+        BugColor, CellCoord, DifficultyLevel, Health, LevelId, PlayMode, PressureSpawnRecord,
+        PressureWaveInputs, PressureWavePlan, SpeciesPrototype, TowerKind, WaveDifficulty, WaveId,
     };
     use std::num::NonZeroU32;
 
@@ -2497,5 +2501,61 @@ mod tests {
         assert_eq!(plan_species_table_version, &world.species_table_version);
         assert_eq!(*plan_burst_count, 1);
         assert!(world.active_wave.is_some());
+    }
+
+    #[test]
+    fn removing_tower_refunds_build_cost() {
+        let mut world = World::new();
+        let mut events = Vec::new();
+
+        let initial_gold = query::gold(&world);
+
+        let origin = CellCoord::new(2, 2);
+        apply(
+            &mut world,
+            Command::PlaceTower {
+                kind: TowerKind::Basic,
+                origin,
+            },
+            &mut events,
+        );
+
+        let tower_id = events
+            .iter()
+            .find_map(|event| {
+                if let Event::TowerPlaced { tower, .. } = event {
+                    Some(*tower)
+                } else {
+                    None
+                }
+            })
+            .expect("tower should be placed");
+        assert!(query::gold(&world).get() < initial_gold.get());
+        events.clear();
+
+        apply(
+            &mut world,
+            Command::RemoveTower { tower: tower_id },
+            &mut events,
+        );
+
+        let refunded_gold = events.iter().find_map(|event| {
+            if let Event::GoldChanged { amount } = event {
+                Some(*amount)
+            } else {
+                None
+            }
+        });
+        assert_eq!(
+            refunded_gold,
+            Some(initial_gold),
+            "removal should emit gold refund",
+        );
+
+        let removed = events
+            .iter()
+            .any(|event| matches!(event, Event::TowerRemoved { tower, .. } if *tower == tower_id));
+        assert!(removed, "removal should emit tower removed event");
+        assert_eq!(query::gold(&world), initial_gold);
     }
 }
