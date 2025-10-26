@@ -97,7 +97,7 @@ no-merge cases.
 
 **Deliverables:**
 
-- [ ] Implement the bisection scaling loop that enforces total pressure alignment, emitting
+- [x] Implement the bisection scaling loop that enforces total pressure alignment, emitting
   `eta_scaling` telemetry with pre/post pressure values and clamp flags.
 - [ ] Sample per-species cadence and start offsets (document which tuning fields control
   ranges), generate arithmetic progression spawn times, and store them in per-species
