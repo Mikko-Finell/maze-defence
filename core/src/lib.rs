@@ -897,6 +897,11 @@ pub enum Command {
         /// Minimum simulated time required between successive bug steps.
         step_duration: Duration,
     },
+    /// Overrides the defending player's gold amount.
+    SetGold {
+        /// Gold amount that should be stored in the world.
+        amount: Gold,
+    },
     /// Advances the simulation clock by the provided delta time.
     Tick {
         /// Duration of simulated time that elapsed since the previous tick.
