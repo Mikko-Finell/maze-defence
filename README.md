@@ -33,6 +33,7 @@ The CLI exposes the following arguments:
 | `--bug-step-ms MILLISECONDS` | Sets how long each bug waits before taking another step. Accepts values from `1` to `60_000`. | `250` |
 | `--bug-spawn-interval-ms MILLISECONDS` | Controls the interval between automatic spawns while in attack mode. Accepts values from `1` to `60_000`. | `1_000` |
 | `--difficulty LEVEL` | Starts the simulation at the specified non-negative base difficulty level so you can skip earlier promotions. | `0` |
+| `--gold AMOUNT` | Overrides the starting gold so you can practice with a larger or smaller reserve. | `100` |
 | `--vsync on\|off` | Requests enabling (`on`) or disabling (`off`) vertical sync. | Platform default |
 | `--layout LAYOUT` | Restores a serialized tower layout before launching the renderer. | None |
 | `--show-fps on\|off` | Prints per-second frame timing metrics to stdout when set to `on`. | `off` |

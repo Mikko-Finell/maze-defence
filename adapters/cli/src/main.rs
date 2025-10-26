@@ -197,6 +197,9 @@ struct CliArgs {
     /// Sets the base difficulty level active when the simulation launches.
     #[arg(long = "difficulty", value_name = "LEVEL", value_parser = parse_difficulty_level)]
     difficulty: Option<DifficultyLevel>,
+    /// Sets the gold amount available when the simulation launches.
+    #[arg(long = "gold", value_name = "AMOUNT", value_parser = clap::value_parser!(u32))]
+    gold: Option<u32>,
     /// Requests that the renderer either synchronise presentation with the display refresh rate or run uncapped.
     #[arg(long, value_enum, value_name = "on|off")]
     vsync: Option<VsyncMode>,
@@ -319,6 +322,7 @@ fn main() -> Result<()> {
     let bug_step_duration = Duration::from_millis(args.bug_step_ms);
     let bug_spawn_interval = Duration::from_millis(args.bug_spawn_interval_ms);
     let initial_difficulty = args.difficulty;
+    let initial_gold = args.gold.map(Gold::new);
     let mut simulation = Simulation::new(
         columns,
         rows,
@@ -328,6 +332,7 @@ fn main() -> Result<()> {
         bug_spawn_interval,
         args.visual_style,
         initial_difficulty,
+        initial_gold,
     );
     if let Some(snapshot) = layout_snapshot.as_ref() {
         simulation
@@ -976,6 +981,7 @@ mod tests {
             Duration::from_millis(1_000),
             VisualStyle::Primitives,
             None,
+            None,
         );
         simulation.ready_wave_launches.clear();
         simulation.active_wave = None;
@@ -1027,6 +1033,7 @@ mod tests {
             Duration::from_millis(DEFAULT_BUG_SPAWN_INTERVAL_MS),
             VisualStyle::Primitives,
             None,
+            None,
         );
 
         let initial_gold = query::gold(simulation.world());
@@ -1047,6 +1054,27 @@ mod tests {
     }
 
     #[test]
+    fn initial_gold_applies_immediately() {
+        let simulation = Simulation::new(
+            4,
+            4,
+            48.0,
+            1,
+            Duration::from_millis(400),
+            Duration::from_millis(1_000),
+            VisualStyle::Primitives,
+            None,
+            Some(Gold::new(450)),
+        );
+
+        assert_eq!(simulation.gold, Gold::new(450));
+        let emitted = simulation.last_frame_events.iter().any(
+            |event| matches!(event, Event::GoldChanged { amount } if *amount == Gold::new(450)),
+        );
+        assert!(emitted, "gold change should emit an event");
+    }
+
+    #[test]
     fn initial_difficulty_level_applies_immediately() {
         let simulation = Simulation::new(
             4,
@@ -1057,6 +1085,7 @@ mod tests {
             Duration::from_millis(1_000),
             VisualStyle::Primitives,
             Some(DifficultyLevel::new(7)),
+            None,
         );
 
         assert_eq!(simulation.difficulty_level, DifficultyLevel::new(7));
@@ -1079,6 +1108,7 @@ impl Simulation {
         bug_spawn_interval: Duration,
         visual_style: VisualStyle,
         initial_difficulty: Option<DifficultyLevel>,
+        initial_gold: Option<Gold>,
     ) -> Self {
         let mut world = World::new();
         let mut pending_events = Vec::new();
@@ -1106,6 +1136,10 @@ impl Simulation {
                 Command::SetDifficultyLevel { level },
                 &mut pending_events,
             );
+        }
+
+        if let Some(amount) = initial_gold {
+            world::apply(&mut world, Command::SetGold { amount }, &mut pending_events);
         }
 
         let initial_play_mode = query::play_mode(&world);

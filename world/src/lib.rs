@@ -841,6 +841,9 @@ pub fn apply(world: &mut World, command: Command, out_events: &mut Vec<Event>) {
             let clamped = step_duration.max(MIN_STEP_QUANTUM);
             world.step_quantum = clamped;
         }
+        Command::SetGold { amount } => {
+            world.update_gold(amount, out_events);
+        }
         Command::StepBug { bug_id, direction } => {
             if world.play_mode == PlayMode::Builder {
                 return;
