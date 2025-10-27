@@ -923,6 +923,10 @@ pub fn apply(world: &mut World, command: Command, out_events: &mut Vec<Event>) {
         Command::StartWave { wave, difficulty } => {
             world.launch_wave(wave, difficulty, out_events);
         }
+        Command::RequestAnalyticsRefresh => {
+            // Analytics recomputation runs in a dedicated system; the world
+            // acknowledges the request without mutating authoritative state.
+        }
         Command::ResolveRound { outcome } => {
             let active_wave = world.active_wave.take();
             match outcome {
@@ -1506,7 +1510,7 @@ pub mod query {
         BugSnapshot, BugView, CellCoord, DifficultyLevel, Goal, Gold, LevelId, NavigationFieldView,
         OccupancyView, PendingWaveDifficulty, PlayMode, PressureConfig, PressureWaveInputs,
         PressureWavePlan, ProjectileSnapshot, ReservationLedgerView, SpawnPatchTableView,
-        SpeciesTableView, Target, TileGrid, WaveSeedContext,
+        SpeciesTableView, StatsReport, Target, TileGrid, WaveSeedContext,
     };
 
     use maze_defence_core::structures::{Wall as CellWall, WallView as CellWallView};
@@ -1693,6 +1697,16 @@ pub mod query {
     #[must_use]
     pub fn reservation_ledger(world: &World) -> ReservationLedgerView<'_> {
         ReservationLedgerView::from_slice(world.reservations.claims())
+    }
+
+    /// Returns the most recent analytics report published by the analytics system, if any.
+    ///
+    /// Until analytics storage lands, this helper returns `None`. Once the analytics
+    /// system publishes reports, callers receive the immutable snapshot captured during
+    /// the last recompute.
+    #[must_use]
+    pub fn analytics(_world: &World) -> Option<&StatsReport> {
+        None
     }
 
     /// Captures a read-only view of the cell-sized walls stored in the world.

@@ -869,6 +869,114 @@ impl PressureWavePlan {
     }
 }
 
+/// Deterministic analytics snapshot derived from the world state.
+///
+/// A [`StatsReport`] is emitted whenever analytics recompute. The payload is
+/// immutable consumer-facing data: once constructed it may be cloned or
+/// serialised freely, but no API exposes mutation. Every field relies on
+/// integer math so repeated runs with identical world state produce identical
+/// reports.
+///
+/// Coverage and firing metrics use basis points (`1/100` of a percent). The
+/// analytics system samples the canonical shortest spawner-to-target path,
+/// measuring tower coverage per cell before averaging. Firing progress tracks
+/// the path percentage completed when every tower has fired at least once,
+/// saturating at `10_000` (100%) if some towers never gain line-of-sight. Path
+/// length is measured in navigation cells so the metric stays aligned with the
+/// movement grid, and DPS is the deterministic per-second total derived from
+/// the combat rules.
+///
+/// Analytics recomputation must derive solely from authoritative world state.
+/// Systems trigger updates via deterministic messages (see
+/// [`Command::RequestAnalyticsRefresh`]), never through wall-clock timers or
+/// adapter-side heuristics.
+///
+/// ```
+/// use maze_defence_core::StatsReport;
+///
+/// let report = StatsReport::new(4_200, 3_500, 48, 6, 1_800);
+///
+/// assert_eq!(report.tower_coverage_mean_bps(), 4_200);
+/// assert_eq!(report.firing_complete_percent_bps(), 3_500);
+/// assert_eq!(report.shortest_path_length_cells(), 48);
+/// assert_eq!(report.tower_count(), 6);
+/// assert_eq!(report.total_tower_dps(), 1_800);
+/// ```
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StatsReport {
+    tower_coverage_mean_bps: u32,
+    firing_complete_percent_bps: u32,
+    shortest_path_length_cells: u32,
+    tower_count: u32,
+    total_tower_dps: u32,
+}
+
+impl StatsReport {
+    /// Creates a new analytics snapshot using deterministic integer metrics.
+    #[must_use]
+    pub const fn new(
+        tower_coverage_mean_bps: u32,
+        firing_complete_percent_bps: u32,
+        shortest_path_length_cells: u32,
+        tower_count: u32,
+        total_tower_dps: u32,
+    ) -> Self {
+        Self {
+            tower_coverage_mean_bps,
+            firing_complete_percent_bps,
+            shortest_path_length_cells,
+            tower_count,
+            total_tower_dps,
+        }
+    }
+
+    /// Mean percentage (in basis points) of path cells covered by at least one tower.
+    #[must_use]
+    pub const fn tower_coverage_mean_bps(&self) -> u32 {
+        self.tower_coverage_mean_bps
+    }
+
+    /// Path percentage (in basis points) completed when every tower has fired once.
+    #[must_use]
+    pub const fn firing_complete_percent_bps(&self) -> u32 {
+        self.firing_complete_percent_bps
+    }
+
+    /// Length of the canonical shortest path measured in navigation cells.
+    #[must_use]
+    pub const fn shortest_path_length_cells(&self) -> u32 {
+        self.shortest_path_length_cells
+    }
+
+    /// Total number of towers considered when producing the report.
+    #[must_use]
+    pub const fn tower_count(&self) -> u32 {
+        self.tower_count
+    }
+
+    /// Aggregate tower DPS derived from the deterministic combat configuration.
+    #[must_use]
+    pub const fn total_tower_dps(&self) -> u32 {
+        self.total_tower_dps
+    }
+}
+
+#[cfg(test)]
+mod stats_tests {
+    use super::StatsReport;
+
+    #[test]
+    fn stats_report_preserves_values() {
+        let report = StatsReport::new(8_750, 2_500, 32, 5, 900);
+
+        assert_eq!(report.tower_coverage_mean_bps(), 8_750);
+        assert_eq!(report.firing_complete_percent_bps(), 2_500);
+        assert_eq!(report.shortest_path_length_cells(), 32);
+        assert_eq!(report.tower_count(), 5);
+        assert_eq!(report.total_tower_dps(), 900);
+    }
+}
+
 /// Outcome emitted when resolving a round.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum RoundOutcome {
@@ -990,6 +1098,13 @@ pub enum Command {
         /// Difficulty level selection used for the wave launch.
         difficulty: WaveDifficulty,
     },
+    /// Requests that analytics recompute using the current authoritative layout.
+    ///
+    /// Builder-mode flows emit this command after structural edits so analytics
+    /// stay in sync without adapters reaching into system internals. Recomputes
+    /// must remain deterministic and depend solely on the world snapshot
+    /// observed when the request is applied.
+    RequestAnalyticsRefresh,
 }
 
 /// Events broadcast by the world after processing commands.
@@ -1025,6 +1140,15 @@ pub enum Event {
     PlayModeChanged {
         /// Mode that became active after processing commands.
         mode: PlayMode,
+    },
+    /// Publishes the latest analytics snapshot emitted after a recompute.
+    ///
+    /// Analytics updates are deterministic: the report depends solely on the
+    /// authoritative world state captured at recompute time. Consumers treat the
+    /// payload as immutable data for UI and telemetry.
+    AnalyticsUpdated {
+        /// Immutable analytics snapshot reflecting the recompute output.
+        report: StatsReport,
     },
     /// Reports that the player's gold balance changed.
     GoldChanged {
