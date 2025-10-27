@@ -86,7 +86,7 @@ math and bounded iteration.
   track. Cache this path as a vector of cell indices for reuse during coverage
   sampling.
 * [ ] Implement the invulnerable bug sweep:
-  * [ ] For each cell on the path, gather towers whose range covers the cell and
+  * [x] For each cell on the path, gather towers whose range covers the cell and
     accumulate the per-cell coverage ratio (`towers_in_range / total_towers`);
     return the mean percentage as a fixed-point integer or rational documented
     in the spec.

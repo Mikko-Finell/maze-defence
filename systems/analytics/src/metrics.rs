@@ -1,6 +1,9 @@
 use std::collections::VecDeque;
 
-use maze_defence_core::{AnalyticsLayoutSnapshot, CellCoord, NavigationFieldView};
+use maze_defence_core::{
+    AnalyticsLayoutSnapshot, CellCoord, NavigationFieldView, TowerAnalyticsSnapshot,
+    TowerAnalyticsView,
+};
 
 use crate::AnalyticsScratch;
 
@@ -47,6 +50,84 @@ pub fn select_shortest_navigation_path<'a>(
     } else {
         path_buffer.clear();
         None
+    }
+}
+
+/// Computes the mean tower coverage along the provided path expressed in basis points.
+///
+/// Each cell contributes the ratio of towers whose range covers that cell divided by the
+/// total number of towers. The accumulated ratios are averaged across the entire path and
+/// scaled to basis points (`1/100` of a percent). An empty tower list or path returns
+/// zero coverage.
+#[must_use]
+pub fn tower_coverage_mean_bps(path: &[CellCoord], towers: &TowerAnalyticsView) -> u32 {
+    let total_towers = towers.iter().count() as u32;
+
+    if total_towers == 0 || path.is_empty() {
+        return 0;
+    }
+
+    let cached: Vec<_> = towers
+        .iter()
+        .filter_map(TowerRangeCache::from_snapshot)
+        .collect();
+
+    let mut covered_sum: u128 = 0;
+
+    for cell in path {
+        let cell_center_column = i64::from(cell.column()) * 2 + 1;
+        let cell_center_row = i64::from(cell.row()) * 2 + 1;
+
+        let mut towers_in_range = 0_u32;
+
+        for tower in &cached {
+            let dx = i128::from(cell_center_column).saturating_sub(i128::from(tower.center_column));
+            let dy = i128::from(cell_center_row).saturating_sub(i128::from(tower.center_row));
+            let distance_sq = dx.saturating_mul(dx).saturating_add(dy.saturating_mul(dy));
+
+            if distance_sq <= tower.range_squared_half {
+                towers_in_range = towers_in_range.saturating_add(1);
+            }
+        }
+
+        covered_sum = covered_sum.saturating_add(u128::from(towers_in_range));
+    }
+
+    let denominator = u128::from(path.len() as u64) * u128::from(total_towers);
+
+    if denominator == 0 {
+        return 0;
+    }
+
+    let numerator = covered_sum.saturating_mul(10_000);
+    (numerator / denominator) as u32
+}
+
+#[derive(Clone, Copy, Debug)]
+struct TowerRangeCache {
+    center_column: i64,
+    center_row: i64,
+    range_squared_half: i128,
+}
+
+impl TowerRangeCache {
+    fn from_snapshot(snapshot: &TowerAnalyticsSnapshot) -> Option<Self> {
+        let size = snapshot.region.size();
+        if size.width() == 0 || size.height() == 0 {
+            return None;
+        }
+
+        let origin = snapshot.region.origin();
+        let center_column = i64::from(origin.column()) * 2 + i64::from(size.width());
+        let center_row = i64::from(origin.row()) * 2 + i64::from(size.height());
+        let radius_half = i128::from(snapshot.range_cells) * 2;
+        let range_squared_half = radius_half * radius_half;
+
+        Some(Self {
+            center_column,
+            center_row,
+            range_squared_half,
+        })
     }
 }
 
@@ -124,9 +205,12 @@ fn neighbors(cell: CellCoord, width: u32, height: u32) -> impl Iterator<Item = C
 
 #[cfg(test)]
 mod tests {
-    use super::select_shortest_navigation_path;
+    use super::{select_shortest_navigation_path, tower_coverage_mean_bps};
     use crate::AnalyticsScratch;
-    use maze_defence_core::{AnalyticsLayoutSnapshot, CellCoord, NavigationFieldView};
+    use maze_defence_core::{
+        AnalyticsLayoutSnapshot, CellCoord, CellRect, CellRectSize, NavigationFieldView,
+        TowerAnalyticsSnapshot, TowerAnalyticsView, TowerId, TowerKind,
+    };
     use std::collections::VecDeque;
 
     #[test]
@@ -188,5 +272,51 @@ mod tests {
         let mut scratch = AnalyticsScratch::new(&mut path, &mut working);
 
         assert!(select_shortest_navigation_path(&navigation, &layout, &mut scratch).is_none());
+    }
+
+    #[test]
+    fn tower_coverage_returns_mean_basis_points() {
+        let path = vec![
+            CellCoord::new(0, 0),
+            CellCoord::new(1, 0),
+            CellCoord::new(2, 0),
+        ];
+
+        let towers = TowerAnalyticsView::from_snapshots(vec![
+            TowerAnalyticsSnapshot {
+                tower: TowerId::new(1),
+                kind: TowerKind::Basic,
+                region: CellRect::from_origin_and_size(
+                    CellCoord::new(0, 0),
+                    CellRectSize::new(1, 1),
+                ),
+                range_cells: 2,
+                damage_per_second: 10,
+            },
+            TowerAnalyticsSnapshot {
+                tower: TowerId::new(2),
+                kind: TowerKind::Basic,
+                region: CellRect::from_origin_and_size(
+                    CellCoord::new(2, 0),
+                    CellRectSize::new(1, 1),
+                ),
+                range_cells: 1,
+                damage_per_second: 10,
+            },
+        ]);
+
+        let coverage = tower_coverage_mean_bps(&path, &towers);
+        assert_eq!(coverage, 8_333);
+    }
+
+    #[test]
+    fn tower_coverage_zero_when_no_towers_or_path() {
+        let empty_path: Vec<CellCoord> = Vec::new();
+        let towers = TowerAnalyticsView::default();
+
+        assert_eq!(tower_coverage_mean_bps(&empty_path, &towers), 0);
+
+        let path = vec![CellCoord::new(0, 0)];
+        assert_eq!(tower_coverage_mean_bps(&path, &towers), 0);
     }
 }
