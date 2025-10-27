@@ -51,23 +51,23 @@ simulation authority layers.
 **Exit checks:** World crate compiles, analytics queries are read-only, and
 layout mutations reliably publish the layout-changed event.
 
-# 3) [TODO] Analytics runtime (`systems/analytics`)
+# 3) [DONE] Analytics runtime (`systems/analytics`)
 
 **Goal:** Build a dedicated pure system that listens for layout changes and
 recomputes metrics on demand, keeping CPU usage predictable.
 
 **Deliverables:**
 
-* [ ] Add a new `systems::analytics` module with an `Analytics` struct storing the
+* [x] Add a new `systems::analytics` module with an `Analytics` struct storing the
   last `StatsReport`, a queue of pending recompute requests, and reusable scratch
   buffers for path traversal.
-* [ ] Implement `ConsumesEvents` to watch for `MazeLayoutChanged` and
+* [x] Implement `ConsumesEvents` to watch for `MazeLayoutChanged` and
   `Command::RequestAnalyticsRefresh`, coalescing multiple signals into a single
   recompute per tick.
-* [ ] Ensure `Ticks` (or equivalent update trait) runs at normal game cadence but
+* [x] Ensure `Ticks` (or equivalent update trait) runs at normal game cadence but
   performs recomputation only when dirty, so analytics update in the background
   while remaining deterministic and CPU-friendly.
-* [ ] Write system-level tests verifying that tower edits enqueue a recompute and
+* [x] Write system-level tests verifying that tower edits enqueue a recompute and
   that the report is published via `Event::AnalyticsUpdated` without touching
   other systems.
 
