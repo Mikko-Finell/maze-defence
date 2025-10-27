@@ -422,13 +422,15 @@ impl RenderingBackend for MacroquadBackend {
                 draw_ground(&scene, &metrics, sprite_atlas.as_ref());
                 if scene.play_mode == PlayMode::Builder {
                     let grid_color = to_macroquad_color(tile_grid.line_color);
-                    let subgrid_color = to_macroquad_color(tile_grid.line_color.lighten(0.6));
 
-                    draw_subgrid(&metrics, &tile_grid, subgrid_color);
                     draw_tile_grid(&metrics, &tile_grid, grid_color);
                 }
                 draw_cell_walls(&scene, &metrics);
                 draw_spawn_effects(&scene.spawn_effects, &metrics);
+
+                if scene.play_mode == PlayMode::Builder {
+                    draw_tower_builder_highlights(&scene.towers, &metrics);
+                }
 
                 let builder_preview = active_builder_preview(&scene);
                 if let Some(preview) = builder_preview {
@@ -546,8 +548,6 @@ struct SceneMetrics {
     grid_offset_y: f32,
     grid_width_scaled: f32,
     grid_height_scaled: f32,
-    bordered_grid_width_scaled: f32,
-    bordered_grid_height_scaled: f32,
     tile_step: f32,
     cell_step: f32,
 }
@@ -581,8 +581,6 @@ impl SceneMetrics {
 
         let grid_width_scaled = tile_grid.width() * scale;
         let grid_height_scaled = tile_grid.height() * scale;
-        let bordered_grid_width_scaled = tile_grid.bordered_width() * scale;
-        let bordered_grid_height_scaled = tile_grid.bordered_height() * scale;
         let tile_step = tile_grid.tile_length * scale;
         let cell_step = if tile_grid.cells_per_tile == 0 {
             0.0
@@ -602,8 +600,6 @@ impl SceneMetrics {
             grid_offset_y,
             grid_width_scaled,
             grid_height_scaled,
-            bordered_grid_width_scaled,
-            bordered_grid_height_scaled,
             tile_step,
             cell_step,
         }
@@ -798,41 +794,6 @@ fn draw_ground(scene: &Scene, metrics: &SceneMetrics, sprite_atlas: Option<&Spri
             let base_position = Vec2::new(column_base, row_base);
             draw_sprite_instance(atlas, sprite, base_position, metrics, None, None);
         }
-    }
-}
-
-fn draw_subgrid(
-    metrics: &SceneMetrics,
-    tile_grid: &TileGridPresentation,
-    subgrid_color: macroquad::color::Color,
-) {
-    let total_subcolumns = tile_grid.columns * tile_grid.cells_per_tile
-        + 2 * TileGridPresentation::SIDE_BORDER_CELL_LAYERS;
-    for column in 0..=total_subcolumns {
-        let x = metrics.offset_x + column as f32 * metrics.cell_step;
-        macroquad::shapes::draw_line(
-            x,
-            metrics.offset_y,
-            x,
-            metrics.offset_y + metrics.bordered_grid_height_scaled,
-            0.5,
-            subgrid_color,
-        );
-    }
-
-    let total_subrows = tile_grid.rows * tile_grid.cells_per_tile
-        + TileGridPresentation::TOP_BORDER_CELL_LAYERS
-        + TileGridPresentation::BOTTOM_BORDER_CELL_LAYERS;
-    for row in 0..=total_subrows {
-        let y = metrics.offset_y + row as f32 * metrics.cell_step;
-        macroquad::shapes::draw_line(
-            metrics.offset_x,
-            y,
-            metrics.offset_x + metrics.bordered_grid_width_scaled,
-            y,
-            0.5,
-            subgrid_color,
-        );
     }
 }
 
@@ -1129,6 +1090,65 @@ fn draw_towers(
                 }
             }
         }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct BuilderHighlightPalette {
+    fill: macroquad::color::Color,
+    outline: macroquad::color::Color,
+}
+
+fn builder_highlight_palette() -> BuilderHighlightPalette {
+    let base_color = Color::from_rgb_u8(96, 164, 255);
+    let outline_color = base_color.lighten(0.3);
+
+    BuilderHighlightPalette {
+        fill: to_macroquad_color(Color::new(
+            base_color.red,
+            base_color.green,
+            base_color.blue,
+            0.35,
+        )),
+        outline: to_macroquad_color(Color::new(
+            outline_color.red,
+            outline_color.green,
+            outline_color.blue,
+            1.0,
+        )),
+    }
+}
+
+fn draw_tower_builder_highlights(towers: &[SceneTower], metrics: &SceneMetrics) {
+    if metrics.cell_step <= f32::EPSILON {
+        return;
+    }
+
+    let palette = builder_highlight_palette();
+
+    for tower in towers {
+        let region = tower.region;
+        let size = region.size();
+        if size.width() == 0 || size.height() == 0 {
+            continue;
+        }
+
+        let origin = region.origin();
+        let x = metrics.offset_x + origin.column() as f32 * metrics.cell_step;
+        let y = metrics.offset_y + origin.row() as f32 * metrics.cell_step;
+        let width = size.width() as f32 * metrics.cell_step;
+        let height = size.height() as f32 * metrics.cell_step;
+        let outline_thickness = (metrics.cell_step * 0.1).max(1.0);
+
+        macroquad::shapes::draw_rectangle(x, y, width, height, palette.fill);
+        macroquad::shapes::draw_rectangle_lines(
+            x,
+            y,
+            width,
+            height,
+            outline_thickness,
+            palette.outline,
+        );
     }
 }
 
@@ -1688,8 +1708,12 @@ mod tests {
         let scene = base_scene(PlayMode::Attack, None);
         let metrics = SceneMetrics::from_scene(&scene, 640.0, 480.0);
         let expected_height = scene.tile_grid.bordered_height() * metrics.scale;
+        let bordered_height_scaled = metrics.grid_height_scaled
+            + metrics.cell_step
+                * (TileGridPresentation::TOP_BORDER_CELL_LAYERS
+                    + TileGridPresentation::BOTTOM_BORDER_CELL_LAYERS) as f32;
 
-        assert!((metrics.bordered_grid_height_scaled - expected_height).abs() <= f32::EPSILON);
+        assert!((bordered_height_scaled - expected_height).abs() <= f32::EPSILON);
     }
 
     #[test]
@@ -1728,8 +1752,12 @@ mod tests {
             );
             let metrics = SceneMetrics::from_scene(&scene, screen_width, screen_height);
 
-            let total_border_height_scaled =
-                metrics.bordered_grid_height_scaled - metrics.grid_height_scaled;
+            let bordered_height_scaled = metrics.grid_height_scaled
+                + metrics.cell_step
+                    * (TileGridPresentation::TOP_BORDER_CELL_LAYERS
+                        + TileGridPresentation::BOTTOM_BORDER_CELL_LAYERS)
+                        as f32;
+            let total_border_height_scaled = bordered_height_scaled - metrics.grid_height_scaled;
             let expected_border_height_scaled = tile_grid.cell_length()
                 * (TileGridPresentation::TOP_BORDER_CELL_LAYERS
                     + TileGridPresentation::BOTTOM_BORDER_CELL_LAYERS) as f32
@@ -1740,7 +1768,7 @@ mod tests {
                 "bordered height mismatch for cells_per_tile {cells_per_tile}: {total_delta}"
             );
 
-            let bottom_border_scaled = (metrics.offset_y + metrics.bordered_grid_height_scaled)
+            let bottom_border_scaled = (metrics.offset_y + bordered_height_scaled)
                 - (metrics.grid_offset_y + metrics.grid_height_scaled);
             let expected_bottom_scaled = tile_grid.cell_length()
                 * TileGridPresentation::BOTTOM_BORDER_CELL_LAYERS as f32
@@ -1965,8 +1993,6 @@ mod tests {
             grid_offset_y: 0.0,
             grid_width_scaled: 0.0,
             grid_height_scaled: 0.0,
-            bordered_grid_width_scaled: 0.0,
-            bordered_grid_height_scaled: 0.0,
             tile_step: 0.0,
             cell_step: 0.0,
         };
