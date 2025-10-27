@@ -7,22 +7,22 @@ its own, respects the message-passing architecture, and keeps analytics
 computation fully decoupled from the gameplay hot path. Nothing has landed yet,
 so every checkpoint below is marked `[TODO]`.
 
-# 1) [TODO] Analytics contracts (`core`)
+# 1) [DONE] Analytics contracts (`core`)
 
 **Goal:** Introduce an explicit stats surface so systems can publish analytics
 without leaking internal helpers.
 
 **Deliverables:**
 
-* [ ] Define a `StatsReport` DTO that exposes the five metrics (tower coverage mean,
+* [x] Define a `StatsReport` DTO that exposes the five metrics (tower coverage mean,
   firing-complete percentage, shortest path length, tower count, total DPS) plus
   doc comments describing sampling rules and invariants.
-* [ ] Add a `Event::AnalyticsUpdated { report: StatsReport }` (or similar) emitted
+* [x] Add a `Event::AnalyticsUpdated { report: StatsReport }` (or similar) emitted
   whenever analytics recompute, and a `Query::analytics()` helper returning the
   latest report for adapters.
-* [ ] Introduce a `Command::RequestAnalyticsRefresh` so build-mode tools can nudge
+* [x] Introduce a `Command::RequestAnalyticsRefresh` so build-mode tools can nudge
   recomputation without reaching into the analytics system directly.
-* [ ] Document determinism expectations: analytics recomputation must derive solely
+* [x] Document determinism expectations: analytics recomputation must derive solely
   from authoritative world state, never wall-clock timers.
 
 **Exit checks:** `core` compiles, analytics types have documentation, and unit
