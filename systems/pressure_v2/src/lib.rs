@@ -94,16 +94,18 @@ pub struct HpTuning {
     pub soft_boost_fraction: f32,
     /// Exponential decay rate k_h for the soft boost; higher values make the boost kick in sooner.
     pub soft_boost_rate: f32,
-    /// Multiplicative growth g_h applied beyond the pivot; raising this accelerates HP growth at high difficulty.
-    pub post_pivot_growth: f32,
-    /// Difficulty pivot D_h after which multiplicative scaling applies.
+    /// Logarithmic post-pivot growth scale λ_h applied after `growth_pivot`.
+    pub log_growth_scale: f32,
+    /// Logarithmic growth rate κ_h controlling how quickly the post-pivot term increases.
+    pub log_growth_rate: f32,
+    /// Difficulty pivot D_h after which logarithmic scaling applies.
     pub growth_pivot: f32,
     /// Standard deviation of the truncated normal draw around μ_HPmul(D).
     pub deviation: f32,
     /// Minimum allowed HP multiplier clamp.
     pub min_multiplier: f32,
-    /// Maximum allowed HP multiplier clamp.
-    pub max_multiplier: f32,
+    /// Number of deviations allowed above the mean when sampling the HP latent.
+    pub max_standard_deviations: f32,
 }
 
 impl Default for HpTuning {
@@ -111,11 +113,12 @@ impl Default for HpTuning {
         Self {
             soft_boost_fraction: 0.6,
             soft_boost_rate: 1.0,
-            post_pivot_growth: 1.08,
+            log_growth_scale: 1.25,
+            log_growth_rate: 0.8,
             growth_pivot: 4.0,
             deviation: 0.05,
             min_multiplier: 0.6,
-            max_multiplier: 2.2,
+            max_standard_deviations: 4.0,
         }
     }
 }
@@ -174,8 +177,8 @@ pub struct ComponentTuning {
     pub log_correlation: f32,
     /// Minimum HP multiplier allowed for component centres before scaling.
     pub hp_multiplier_min: f32,
-    /// Maximum HP multiplier allowed for component centres before scaling.
-    pub hp_multiplier_max: f32,
+    /// Maximum fractional spread applied to the mean HP multiplier when clamping component centres.
+    pub hp_multiplier_spread: f32,
     /// Minimum speed multiplier allowed for component centres before scaling.
     pub speed_multiplier_min: f32,
     /// Maximum speed multiplier allowed for component centres before scaling.
@@ -194,7 +197,7 @@ impl Default for ComponentTuning {
             log_speed_sigma: 0.10,
             log_correlation: -0.5,
             hp_multiplier_min: 0.6,
-            hp_multiplier_max: 2.2,
+            hp_multiplier_spread: 1.6,
             speed_multiplier_min: 0.6,
             speed_multiplier_max: 1.7,
         }
@@ -316,14 +319,17 @@ impl PressureV2 {
         //   1: `draw_bug_count` pulls a truncated normal using
         //      `PressureTuning::count.{deviation_ratio,floor,cap}`.
         //   2: `draw_hp_multiplier` pulls a truncated normal using
-        //      `PressureTuning::hp.{deviation,min_multiplier,max_multiplier}`.
+        //      `PressureTuning::hp.{deviation,min_multiplier}` and the
+        //      difficulty-aware upper bound derived from
+        //      `hp.max_standard_deviations`.
         //   3: `draw_speed_multiplier` pulls a truncated normal using
         //      `PressureTuning::speed.{deviation,min_multiplier,max_multiplier}`.
         //   4: `draw_raw_component_count` samples the Poisson proposal with
         //      `PressureTuning::components.{poisson_intercept,poisson_slope}`.
         //   5-6 per provisional component: `populate_component_centres` consumes
         //      two `StandardNormal` draws to build log-space HP/speed using the
-        //      `components.log_*` sigmas, correlation, and multiplier clamps.
+        //      `components.log_*` sigmas, correlation, and dynamic multiplier
+        //      clamps.
         //   7+ per provisional component: `allocate_dirichlet_counts` draws
         //      Gammas parameterised by `components.dirichlet_concentration`.
         //   Cadence realisation: for each surviving component,
@@ -394,6 +400,10 @@ impl PressureV2 {
         self.work.speed_wave = speed_wave;
         self.work.per_bug_pressure = per_bug_pressure;
         debug_assert!(self.work.hp_wave >= BASE_HP * self.tuning.hp.min_multiplier);
+        debug_assert!(
+            self.work.hp_wave
+                <= BASE_HP * self.hp_multiplier_upper_bound_from_mean(hp_latent.mean_multiplier)
+        );
         debug_assert!(self.work.speed_wave >= self.tuning.speed.min_multiplier);
         debug_assert!(self.work.per_bug_pressure >= 0.0);
     }
@@ -421,14 +431,16 @@ impl PressureV2 {
 
     fn draw_hp_multiplier(&mut self, difficulty: f32) -> HpLatent {
         let mean_multiplier = self.hp_mean_multiplier(difficulty);
+        let max_multiplier = self.hp_multiplier_upper_bound_from_mean(mean_multiplier);
         // RNG draw #2: HP multiplier truncated normal sample controlled by
-        // `hp.deviation` and clamped to `hp.min_multiplier`/`hp.max_multiplier`.
+        // `hp.deviation` and clamped to `hp.min_multiplier` and the dynamic
+        // upper bound produced by `hp.max_standard_deviations`.
         let sampled_multiplier = draw_truncated_normal(
             &mut self.rng,
             mean_multiplier,
             self.tuning.hp.deviation,
             self.tuning.hp.min_multiplier,
-            self.tuning.hp.max_multiplier,
+            max_multiplier,
         );
 
         HpLatent {
@@ -736,6 +748,13 @@ impl PressureV2 {
         mean.max(0.1)
     }
 
+    fn component_hp_multiplier_upper_bound(&self, mean_multiplier: f32) -> f32 {
+        let tuning = &self.tuning.components;
+        let spread = tuning.hp_multiplier_spread.max(0.0);
+        let candidate = mean_multiplier * (1.0 + spread);
+        candidate.max(tuning.hp_multiplier_min)
+    }
+
     fn populate_component_centres(&mut self, difficulty: f32, count: usize) {
         self.work.provisional_species.clear();
         self.work.provisional_species.reserve(count);
@@ -745,6 +764,7 @@ impl PressureV2 {
         let tuning = &self.tuning.components;
         let rho = tuning.log_correlation.clamp(-0.999, 0.999);
         let orthogonal_scale = (1.0 - rho * rho).max(0.0).sqrt();
+        let hp_cap = self.component_hp_multiplier_upper_bound(mean_hp_multiplier);
 
         for _ in 0..count {
             // RNG draws #5-6: bivariate log-space component centre using
@@ -757,9 +777,7 @@ impl PressureV2 {
             let log_speed = mean_speed_multiplier.ln()
                 + tuning.log_speed_sigma * (rho * z_hp + orthogonal_scale * z_speed);
 
-            let hp_multiplier = log_hp
-                .exp()
-                .clamp(tuning.hp_multiplier_min, tuning.hp_multiplier_max);
+            let hp_multiplier = log_hp.exp().clamp(tuning.hp_multiplier_min, hp_cap);
             let speed_multiplier = log_speed
                 .exp()
                 .clamp(tuning.speed_multiplier_min, tuning.speed_multiplier_max);
@@ -1033,14 +1051,23 @@ impl PressureV2 {
         let tuning = &self.tuning.hp;
         let delta = (difficulty - 1.0).max(0.0);
         // `soft_boost_fraction`/`soft_boost_rate` deliver the early additive
-        // HP padding, while `post_pivot_growth` + `growth_pivot` set the
-        // multiplicative ramp beyond the pivot.
+        // HP padding, while the logarithmic term grows without a hard ceiling
+        // once `growth_pivot` is exceeded.
         let soft_boost =
             tuning.soft_boost_fraction * (1.0 - (-tuning.soft_boost_rate * delta).exp());
-        let multiplicative = tuning
-            .post_pivot_growth
-            .powf((difficulty - tuning.growth_pivot).max(0.0));
-        (1.0 + soft_boost) * multiplicative
+        let post_pivot = (difficulty - tuning.growth_pivot).max(0.0);
+        let log_argument = (1.0 + tuning.log_growth_rate * post_pivot).max(1.0);
+        let logarithmic = 1.0 + tuning.log_growth_scale * log_argument.ln();
+        (1.0 + soft_boost) * logarithmic
+    }
+
+    fn hp_multiplier_upper_bound_from_mean(&self, mean_multiplier: f32) -> f32 {
+        let tuning = &self.tuning.hp;
+        let deviations = tuning.max_standard_deviations.max(0.0);
+        let spread = tuning.deviation * deviations;
+        let candidate = mean_multiplier + spread;
+        let fallback = mean_multiplier.max(tuning.min_multiplier);
+        candidate.max(fallback)
     }
 
     fn speed_mean_multiplier(&self, difficulty: f32) -> f32 {
@@ -1754,6 +1781,36 @@ mod tests {
     }
 
     #[test]
+    fn difficulty_ten_waves_cross_fifty_hp() {
+        let mut generator = PressureV2::default();
+        let inputs = PressureWaveInputs::new(
+            11,
+            LevelId::new(7),
+            WaveId::new(4),
+            DifficultyLevel::new(10),
+        );
+
+        generator.reseed_rng(&inputs);
+        generator.work.reset();
+        generator.compute_difficulty_latents(&inputs);
+
+        let hp_wave = generator.work_state().hp_wave;
+        assert!(hp_wave > 48.0);
+        assert!(hp_wave < 55.0);
+
+        let difficulty = inputs.difficulty().get() as f32;
+        let mean_multiplier = generator.hp_mean_multiplier(difficulty);
+        let mean_hp = mean_multiplier * BASE_HP;
+        assert!(mean_hp > 48.0);
+        assert!(mean_hp < 55.0);
+
+        let upper_multiplier = generator.hp_multiplier_upper_bound_from_mean(mean_multiplier);
+        let upper = upper_multiplier * BASE_HP;
+        assert!(upper > mean_hp);
+        assert!(upper >= hp_wave);
+    }
+
+    #[test]
     fn difficulty_latents_populate_telemetry_and_respect_bounds() {
         let mut generator = PressureV2::default();
         let inputs =
@@ -1766,6 +1823,7 @@ mod tests {
         let work = generator.difficulty_work();
         let work_state = generator.work_state();
         let telemetry = generator.telemetry.difficulty_latents();
+        let difficulty = inputs.difficulty().get() as f32;
 
         assert!(telemetry.is_recorded());
         assert_eq!(telemetry.bug_count_sampled, work.bug_count);
@@ -1774,7 +1832,7 @@ mod tests {
         assert_eq!(telemetry.speed_multiplier, work.speed_multiplier);
         assert_eq!(
             telemetry.hp_mean_multiplier,
-            generator.hp_mean_multiplier(inputs.difficulty().get() as f32)
+            generator.hp_mean_multiplier(difficulty)
         );
         assert_eq!(
             telemetry.speed_mean_multiplier,
@@ -1788,7 +1846,9 @@ mod tests {
         let tuning = generator.tuning();
         assert!(work.bug_count >= tuning.count.floor);
         assert!(work.hp_multiplier >= tuning.hp.min_multiplier);
-        assert!(work.hp_multiplier <= tuning.hp.max_multiplier);
+        let mean = generator.hp_mean_multiplier(difficulty);
+        let hp_upper = generator.hp_multiplier_upper_bound_from_mean(mean);
+        assert!(work.hp_multiplier <= hp_upper);
         assert!(work.speed_multiplier >= tuning.speed.min_multiplier);
         assert!(work.speed_multiplier <= tuning.speed.max_multiplier);
         assert!((work_state.hp_wave - work.hp_multiplier * BASE_HP).abs() < f32::EPSILON);
@@ -1838,8 +1898,10 @@ mod tests {
         assert!(!components.is_empty());
 
         let tuning = &generator.tuning().components;
+        let difficulty = inputs.difficulty().get() as f32;
+        let mean_hp_multiplier = generator.hp_mean_multiplier(difficulty);
         let hp_min = tuning.hp_multiplier_min * BASE_HP;
-        let hp_max = tuning.hp_multiplier_max * BASE_HP;
+        let hp_max = generator.component_hp_multiplier_upper_bound(mean_hp_multiplier) * BASE_HP;
         let speed_min = tuning.speed_multiplier_min;
         let speed_max = tuning.speed_multiplier_max;
         let bug_count = generator.difficulty_work().bug_count;
