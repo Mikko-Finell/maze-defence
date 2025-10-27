@@ -13,6 +13,10 @@ use std::collections::VecDeque;
 
 use maze_defence_core::{CellCoord, Command, Event, StatsReport};
 
+mod metrics;
+
+pub use metrics::select_shortest_navigation_path;
+
 /// Pure analytics system that queues recompute requests and emits published reports.
 #[derive(Debug, Default)]
 pub struct Analytics {
@@ -122,6 +126,14 @@ impl<'a> AnalyticsScratch<'a> {
     #[must_use]
     pub fn frontier(&mut self) -> &mut VecDeque<CellCoord> {
         self.frontier
+    }
+
+    /// Provides simultaneous mutable access to the reusable path and frontier buffers.
+    #[must_use]
+    pub fn buffers(&mut self) -> (&mut Vec<CellCoord>, &mut VecDeque<CellCoord>) {
+        let path = &mut *self.path;
+        let frontier = &mut *self.frontier;
+        (path, frontier)
     }
 }
 
