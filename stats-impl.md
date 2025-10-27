@@ -81,7 +81,7 @@ math and bounded iteration.
 
 **Deliverables:**
 
-* [ ] Reuse the navigation field/pathfinding gradient to extract the shortest path
+* [x] Reuse the navigation field/pathfinding gradient to extract the shortest path
   from every spawner to the goal, selecting the overall shortest as the analysis
   track. Cache this path as a vector of cell indices for reuse during coverage
   sampling.
