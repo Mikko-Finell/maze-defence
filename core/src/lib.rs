@@ -1150,6 +1150,13 @@ pub enum Event {
         /// Immutable analytics snapshot reflecting the recompute output.
         report: StatsReport,
     },
+    /// Signals that the maze layout changed and cached analytics should refresh.
+    ///
+    /// Builder-mode edits that alter tower placements or wall geometry emit this
+    /// event deterministically. Analytics systems treat it as a hint that their
+    /// cached inputs are stale and should be re-sampled from the authoritative
+    /// world state the next time they recompute.
+    MazeLayoutChanged,
     /// Reports that the player's gold balance changed.
     GoldChanged {
         /// Total gold owned after the adjustment.
@@ -2261,6 +2268,112 @@ impl TowerCooldownView {
     #[must_use]
     pub fn into_vec(self) -> Vec<TowerCooldownSnapshot> {
         self.snapshots
+    }
+}
+
+/// Immutable metrics describing a tower for analytics calculations.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TowerAnalyticsSnapshot {
+    /// Identifier allocated to the tower by the world.
+    pub tower: TowerId,
+    /// Kind of tower represented by the snapshot.
+    pub kind: TowerKind,
+    /// Region of cells occupied by the tower footprint.
+    pub region: CellRect,
+    /// Targeting range expressed in whole navigation cells.
+    pub range_cells: u32,
+    /// Deterministic damage-per-second derived from combat configuration.
+    pub damage_per_second: u32,
+}
+
+/// Read-only view over tower analytics snapshots collected from the world.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct TowerAnalyticsView {
+    snapshots: Vec<TowerAnalyticsSnapshot>,
+}
+
+impl TowerAnalyticsView {
+    /// Builds a deterministic view from the provided tower analytics snapshots.
+    #[must_use]
+    pub fn from_snapshots(mut snapshots: Vec<TowerAnalyticsSnapshot>) -> Self {
+        snapshots.sort_by_key(|snapshot| snapshot.tower);
+        Self { snapshots }
+    }
+
+    /// Iterator over the captured tower analytics snapshots in deterministic order.
+    #[must_use = "iterators are lazy and do nothing unless consumed"]
+    pub fn iter(&self) -> impl Iterator<Item = &TowerAnalyticsSnapshot> {
+        self.snapshots.iter()
+    }
+
+    /// Consumes the view, yielding the underlying analytics snapshots.
+    #[must_use]
+    pub fn into_vec(self) -> Vec<TowerAnalyticsSnapshot> {
+        self.snapshots
+    }
+}
+
+/// Snapshot of static maze layout inputs consumed by analytics recomputation.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AnalyticsLayoutSnapshot {
+    spawners: Vec<CellCoord>,
+    targets: Vec<CellCoord>,
+}
+
+impl AnalyticsLayoutSnapshot {
+    /// Creates a layout snapshot from the provided spawner and target coordinates.
+    #[must_use]
+    pub fn new(mut spawners: Vec<CellCoord>, mut targets: Vec<CellCoord>) -> Self {
+        spawners.sort_by_key(|coord| (coord.column(), coord.row()));
+        spawners.dedup_by_key(|coord| (coord.column(), coord.row()));
+        targets.sort_by_key(|coord| (coord.column(), coord.row()));
+        targets.dedup_by_key(|coord| (coord.column(), coord.row()));
+        Self { spawners, targets }
+    }
+
+    /// Ordered list of bug spawners bordering the maze.
+    #[must_use]
+    pub fn spawners(&self) -> &[CellCoord] {
+        &self.spawners
+    }
+
+    /// Ordered list of goal cells carved into the maze exit.
+    #[must_use]
+    pub fn targets(&self) -> &[CellCoord] {
+        &self.targets
+    }
+}
+
+/// Aggregated analytics inputs pulled from the authoritative world state.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AnalyticsInputs {
+    layout: AnalyticsLayoutSnapshot,
+    towers: TowerAnalyticsView,
+}
+
+impl AnalyticsInputs {
+    /// Creates a new analytics input bundle from the provided layout and towers.
+    #[must_use]
+    pub fn new(layout: AnalyticsLayoutSnapshot, towers: TowerAnalyticsView) -> Self {
+        Self { layout, towers }
+    }
+
+    /// Read-only view of the maze layout (spawners and targets).
+    #[must_use]
+    pub fn layout(&self) -> &AnalyticsLayoutSnapshot {
+        &self.layout
+    }
+
+    /// Read-only view of tower analytics data.
+    #[must_use]
+    pub fn towers(&self) -> &TowerAnalyticsView {
+        &self.towers
+    }
+
+    /// Consumes the inputs, yielding the layout snapshot and tower analytics view.
+    #[must_use]
+    pub fn into_parts(self) -> (AnalyticsLayoutSnapshot, TowerAnalyticsView) {
+        (self.layout, self.towers)
     }
 }
 

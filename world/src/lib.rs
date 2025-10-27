@@ -9,6 +9,7 @@
 
 //! Authoritative world state management for Maze Defence.
 
+mod analytics;
 mod navigation;
 
 use std::{
@@ -781,6 +782,7 @@ pub fn apply(world: &mut World, command: Command, out_events: &mut Vec<Event>) {
                 species_table_version: world.species_table_version,
                 pressure: pressure_config,
             });
+            out_events.push(Event::MazeLayoutChanged);
         }
         Command::Tick { dt } => {
             if world.play_mode == PlayMode::Builder {
@@ -1259,6 +1261,7 @@ impl World {
             kind,
             region,
         });
+        out_events.push(Event::MazeLayoutChanged);
     }
 
     #[cfg(any(test, feature = "tower_scaffolding"))]
@@ -1290,6 +1293,7 @@ impl World {
             tower: state.id,
             region: state.region,
         });
+        out_events.push(Event::MazeLayoutChanged);
     }
 
     #[cfg(any(test, feature = "tower_scaffolding"))]
@@ -1505,12 +1509,13 @@ fn cell_rect_contains(region: CellRect, cell: CellCoord) -> bool {
 
 /// Query functions that provide read-only access to the world state.
 pub mod query {
-    use super::{Bug, World};
+    use super::{analytics, Bug, World};
     use maze_defence_core::{
-        BugSnapshot, BugView, CellCoord, DifficultyLevel, Goal, Gold, LevelId, NavigationFieldView,
-        OccupancyView, PendingWaveDifficulty, PlayMode, PressureConfig, PressureWaveInputs,
-        PressureWavePlan, ProjectileSnapshot, ReservationLedgerView, SpawnPatchTableView,
-        SpeciesTableView, StatsReport, Target, TileGrid, WaveSeedContext,
+        AnalyticsInputs, AnalyticsLayoutSnapshot, BugSnapshot, BugView, CellCoord, DifficultyLevel,
+        Goal, Gold, LevelId, NavigationFieldView, OccupancyView, PendingWaveDifficulty, PlayMode,
+        PressureConfig, PressureWaveInputs, PressureWavePlan, ProjectileSnapshot,
+        ReservationLedgerView, SpawnPatchTableView, SpeciesTableView, StatsReport, Target,
+        TileGrid, TowerAnalyticsView, WaveSeedContext,
     };
 
     use maze_defence_core::structures::{Wall as CellWall, WallView as CellWallView};
@@ -1697,6 +1702,24 @@ pub mod query {
     #[must_use]
     pub fn reservation_ledger(world: &World) -> ReservationLedgerView<'_> {
         ReservationLedgerView::from_slice(world.reservations.claims())
+    }
+
+    /// Snapshots authoritative layout and tower metrics for analytics recomputation.
+    #[must_use]
+    pub fn analytics_inputs(world: &World) -> AnalyticsInputs {
+        analytics::snapshot(world)
+    }
+
+    /// Captures the static maze layout (spawners and targets) for analytics sampling.
+    #[must_use]
+    pub fn analytics_layout(world: &World) -> AnalyticsLayoutSnapshot {
+        analytics::layout_snapshot(world)
+    }
+
+    /// Provides deterministic tower metrics (range and DPS) for analytics consumers.
+    #[must_use]
+    pub fn analytics_towers(world: &World) -> TowerAnalyticsView {
+        analytics::tower_view(world)
     }
 
     /// Returns the most recent analytics report published by the analytics system, if any.
@@ -2348,7 +2371,8 @@ mod tests {
     use super::*;
     use maze_defence_core::{
         BugColor, CellCoord, DifficultyLevel, Health, LevelId, PlayMode, PressureSpawnRecord,
-        PressureWaveInputs, PressureWavePlan, SpeciesPrototype, TowerKind, WaveDifficulty, WaveId,
+        PressureWaveInputs, PressureWavePlan, SpeciesPrototype, TileCoord, TowerKind,
+        WaveDifficulty, WaveId,
     };
     use std::num::NonZeroU32;
 
@@ -2574,5 +2598,124 @@ mod tests {
             .any(|event| matches!(event, Event::TowerRemoved { tower, .. } if *tower == tower_id));
         assert!(removed, "removal should emit tower removed event");
         assert_eq!(query::gold(&world), initial_gold);
+    }
+
+    #[test]
+    fn placing_tower_emits_layout_changed_and_updates_analytics_snapshot() {
+        let mut world = World::new();
+        let mut events = Vec::new();
+        let origin = CellCoord::new(2, 2);
+
+        apply(
+            &mut world,
+            Command::PlaceTower {
+                kind: TowerKind::Basic,
+                origin,
+            },
+            &mut events,
+        );
+
+        let layout_changed = events
+            .iter()
+            .any(|event| matches!(event, Event::MazeLayoutChanged));
+        assert!(
+            layout_changed,
+            "placement should broadcast layout change event"
+        );
+
+        let placed_tower = events.iter().find_map(|event| {
+            if let Event::TowerPlaced { tower, .. } = event {
+                Some(*tower)
+            } else {
+                None
+            }
+        });
+        let tower_id = placed_tower.expect("tower placement should emit tower identifier");
+
+        let inputs = query::analytics_inputs(&world);
+        let layout = inputs.layout();
+        let spawners: Vec<_> = world.bug_spawners.iter().collect();
+        assert_eq!(layout.spawners(), spawners.as_slice());
+        assert_eq!(layout.targets(), world.targets.as_slice());
+
+        let towers: Vec<_> = inputs.towers().iter().collect();
+        assert_eq!(towers.len(), 1);
+        let snapshot = towers[0];
+        assert_eq!(snapshot.tower, tower_id);
+        assert_eq!(snapshot.kind, TowerKind::Basic);
+
+        let expected_range = TowerKind::Basic.range_in_cells(world.cells_per_tile);
+        assert_eq!(snapshot.range_cells, expected_range);
+
+        let expected_dps = {
+            let damage = TowerKind::Basic.projectile_damage().get();
+            let cooldown = TowerKind::Basic.fire_cooldown_ms().max(1);
+            (damage * 1_000) / cooldown
+        };
+        assert_eq!(snapshot.damage_per_second, expected_dps);
+    }
+
+    #[test]
+    fn removing_tower_emits_layout_changed_event() {
+        let mut world = World::new();
+        let mut events = Vec::new();
+
+        let origin = CellCoord::new(2, 2);
+        apply(
+            &mut world,
+            Command::PlaceTower {
+                kind: TowerKind::Basic,
+                origin,
+            },
+            &mut events,
+        );
+        let tower_id = events
+            .iter()
+            .find_map(|event| {
+                if let Event::TowerPlaced { tower, .. } = event {
+                    Some(*tower)
+                } else {
+                    None
+                }
+            })
+            .expect("tower placement should emit tower identifier");
+        events.clear();
+
+        apply(
+            &mut world,
+            Command::RemoveTower { tower: tower_id },
+            &mut events,
+        );
+
+        assert!(events
+            .iter()
+            .any(|event| matches!(event, Event::MazeLayoutChanged)));
+        let tower_view = query::analytics_towers(&world);
+        let towers: Vec<_> = tower_view.iter().collect();
+        assert!(
+            towers.is_empty(),
+            "removal should clear analytics tower snapshots"
+        );
+    }
+
+    #[test]
+    fn configure_tile_grid_emits_layout_changed_event() {
+        let mut world = World::new();
+        let mut events = Vec::new();
+
+        apply(
+            &mut world,
+            Command::ConfigureTileGrid {
+                columns: TileCoord::new(8),
+                rows: TileCoord::new(8),
+                tile_length: 120.0,
+                cells_per_tile: 2,
+            },
+            &mut events,
+        );
+
+        assert!(events
+            .iter()
+            .any(|event| matches!(event, Event::MazeLayoutChanged)));
     }
 }

@@ -28,24 +28,24 @@ without leaking internal helpers.
 **Exit checks:** `core` compiles, analytics types have documentation, and unit
 tests/doctests illustrate that the report is immutable consumer-facing data.
 
-# 2) [TODO] World data taps (`world`)
+# 2) [DONE] World data taps (`world`)
 
 **Goal:** Expose the authoritative data analytics need without cross-cutting the
 simulation authority layers.
 
 **Deliverables:**
 
-* [ ] Add a `world::analytics` module that snapshots tower placements, spawner
+* [x] Add a `world::analytics` module that snapshots tower placements, spawner
   indices, target tiles, and cached tower DPS values without mutating gameplay
   state.
-* [ ] Extend `world::query` with read-only accessors that provide:
-  * [ ] the static navigation field/path gradient already stored for movement; and
-  * [ ] a lightweight iterator over tower entities yielding cell coordinates,
+* [x] Extend `world::query` with read-only accessors that provide:
+  * [x] the static navigation field/path gradient already stored for movement; and
+  * [x] a lightweight iterator over tower entities yielding cell coordinates,
     targeting range, and DPS.
-* [ ] Emit `Event::MazeLayoutChanged` (if not already available) whenever build-mode
+* [x] Emit `Event::MazeLayoutChanged` (if not already available) whenever build-mode
   adds/removes towers or modifies walls, keeping that emission inside world
   mutation handlers so gameplay systems stay untouched.
-* [ ] Backfill world tests ensuring layout edits set the dirty flag and that
+* [x] Backfill world tests ensuring layout edits set the dirty flag and that
   analytics queries match the authoritative state (tower counts, DPS sums).
 
 **Exit checks:** World crate compiles, analytics queries are read-only, and
