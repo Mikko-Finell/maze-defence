@@ -9,6 +9,7 @@ members = [
     "systems/pressure_v2",
     "systems/tower_targeting",
     "systems/tower_combat",
+    "systems/analytics",
     "adapters/rendering",
     "adapters/rendering_macroquad",
     "adapters/cli",
