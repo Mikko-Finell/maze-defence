@@ -90,10 +90,12 @@ math and bounded iteration.
     accumulate the per-cell coverage ratio (`towers_in_range / total_towers`);
     return the mean percentage as a fixed-point integer or rational documented
     in the spec.
-  * [ ] Track the first tick each tower would fire by simulating projectile cooldown
-    using deterministic step size (reuse tower rate-of-fire from stats). Output
-    the path-length percentage when all towers have fired at least once;
-    saturate at 100% if some towers never gain line-of-sight.
+  * [ ] Measure the earliest firing opportunities for towers:
+    * [ ] Traverse the cached path in order, and for each tower record the first
+      path cell where the bug is within range.
+    * [ ] Report the path-length percentage corresponding to the furthest "first
+      opportunity" among all towers. If any tower never gains line-of-sight,
+      clamp the metric to 100%.
 * [ ] Compute supporting metrics directly from the tower iterator: total count and
   sum of DPS (damage per second), ensuring the DPS calculation mirrors the
   authoritative combat system (document the formula source).
