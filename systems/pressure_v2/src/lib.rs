@@ -151,7 +151,7 @@ impl Default for SpeedTuning {
             growth_pivot: 3.5,
             deviation: 0.05,
             min_multiplier: 0.6,
-            max_multiplier: 1.7,
+            max_multiplier: 2.4,
         }
     }
 }
@@ -199,7 +199,7 @@ impl Default for ComponentTuning {
             hp_multiplier_min: 0.6,
             hp_multiplier_spread: 1.6,
             speed_multiplier_min: 0.6,
-            speed_multiplier_max: 1.7,
+            speed_multiplier_max: 2.4,
         }
     }
 }
@@ -228,16 +228,16 @@ impl Default for PressureWeightTuning {
 /// Cadence, start offset, and duration tuning parameters.
 #[derive(Clone, Debug)]
 pub struct CadenceTuning {
-    /// Hard minimum cadence cad_min enforced even after compression.
-    pub cadence_min_ms: u32,
+    /// Asymptotic minimum cadence cad_floor enforced before and after compression.
+    pub cadence_floor_ms: u32,
     /// Hard maximum cadence cad_max allowed before compression.
     pub cadence_max_ms: u32,
     /// Ratio applied to μ_cad(D) to derive the truncated normal deviation.
     pub cadence_deviation_ratio: f32,
     /// Base cadence at D=1 (μ_cad intercept); lowering this quickens every wave.
     pub cadence_base_ms: f32,
-    /// Linear cadence decrease per difficulty step; larger negative slope accelerates high-D waves.
-    pub cadence_slope_ms: f32,
+    /// Exponential decay rate steering μ_cad(D) toward `cadence_floor_ms`.
+    pub cadence_decay_rate: f32,
     /// Base start delay at D=1 (μ_start intercept).
     pub start_base_ms: f32,
     /// Linear start-delay decrease per difficulty step; more negative slope launches waves sooner.
@@ -255,11 +255,11 @@ pub struct CadenceTuning {
 impl Default for CadenceTuning {
     fn default() -> Self {
         Self {
-            cadence_min_ms: 120,
+            cadence_floor_ms: 100,
             cadence_max_ms: 2_000,
             cadence_deviation_ratio: 0.08,
             cadence_base_ms: 600.0,
-            cadence_slope_ms: -40.0,
+            cadence_decay_rate: 0.18,
             start_base_ms: 1_000.0,
             start_slope_ms: -120.0,
             start_deviation_ratio: 0.15,
@@ -334,7 +334,7 @@ impl PressureV2 {
         //      Gammas parameterised by `components.dirichlet_concentration`.
         //   Cadence realisation: for each surviving component,
         //      `sample_cadence_and_start_offsets` pulls a cadence draw bounded
-        //      by `cadence_min_ms`/`cadence_max_ms` and a start-offset draw
+        //      by `cadence_floor_ms`/`cadence_max_ms` and a start-offset draw
         //      capped by `start_max_ms` with deviations derived from
         //      `cadence_deviation_ratio`/`start_deviation_ratio`.
         //   Tint assignment: `draw_unique_tint` consumes hue, saturation, then
@@ -405,6 +405,7 @@ impl PressureV2 {
                 <= BASE_HP * self.hp_multiplier_upper_bound_from_mean(hp_latent.mean_multiplier)
         );
         debug_assert!(self.work.speed_wave >= self.tuning.speed.min_multiplier);
+        debug_assert!(self.work.speed_wave <= self.tuning.speed.max_multiplier);
         debug_assert!(self.work.per_bug_pressure >= 0.0);
     }
 
@@ -562,14 +563,15 @@ impl PressureV2 {
         let cadence_mean = self.cadence_mean_ms(difficulty);
         let start_mean = self.start_offset_mean_ms(difficulty);
         let tuning = &self.tuning.cadence;
-        let cadence_min = tuning.cadence_min_ms as f32;
+        let cadence_min = tuning.cadence_floor_ms as f32;
         let cadence_max = tuning.cadence_max_ms as f32;
         let start_max = tuning.start_max_ms as f32;
 
         for component in self.work.provisional_species.iter_mut() {
-            // RNG draw: per-species cadence sample; `cadence_base_ms` +
-            // `cadence_slope_ms` set the mean while `cadence_deviation_ratio`
-            // expands/shrinks the spread before the min/max clamps.
+            // RNG draw: per-species cadence sample; the exponential mean
+            // shaped by `cadence_base_ms`, `cadence_decay_rate`, and the
+            // difficulty level is widened/narrowed by
+            // `cadence_deviation_ratio` before the floor/max clamps.
             let cadence_sample = draw_truncated_normal(
                 &mut self.rng,
                 cadence_mean,
@@ -578,7 +580,7 @@ impl PressureV2 {
                 cadence_max,
             );
             let cadence_ms = cadence_sample.round().clamp(cadence_min, cadence_max) as u32;
-            component.cadence_ms = cadence_ms.max(tuning.cadence_min_ms);
+            component.cadence_ms = cadence_ms.max(tuning.cadence_floor_ms);
 
             // RNG draw: per-species start offset sample centred on
             // `start_base_ms` + `start_slope_ms` * (D-1) with spread controlled
@@ -622,7 +624,7 @@ impl PressureV2 {
             let factor = f64::from(t_end_before) / f64::from(target_duration);
             compression_factor = factor as f32;
             t_end_after = 0;
-            let cadence_min = self.tuning.cadence.cadence_min_ms;
+            let cadence_min = self.tuning.cadence.cadence_floor_ms;
             for component in self.work.provisional_species.iter_mut() {
                 let divided = (f64::from(component.cadence_ms) / factor).floor();
                 let mut cadence = if divided.is_finite() {
@@ -648,7 +650,7 @@ impl PressureV2 {
             }
         }
 
-        let cadence_min = self.tuning.cadence.cadence_min_ms;
+        let cadence_min = self.tuning.cadence.cadence_floor_ms;
         let hit_cadence_min = self
             .work
             .provisional_species
@@ -1086,10 +1088,14 @@ impl PressureV2 {
 
     fn cadence_mean_ms(&self, difficulty: f32) -> f32 {
         let tuning = &self.tuning.cadence;
-        // `cadence_base_ms` establishes the D=1 cadence and `cadence_slope_ms`
-        // shifts it per difficulty before the min/max clamps apply.
-        let raw = tuning.cadence_base_ms + tuning.cadence_slope_ms * (difficulty - 1.0);
-        raw.clamp(tuning.cadence_min_ms as f32, tuning.cadence_max_ms as f32)
+        let floor = tuning.cadence_floor_ms as f32;
+        let base = tuning.cadence_base_ms.max(floor);
+        let decay = tuning.cadence_decay_rate.max(0.0);
+        let delta = (difficulty - 1.0).max(0.0);
+        // Exponential decay toward the configured floor keeps high difficulties
+        // near `cadence_floor_ms` while preserving the low-D intercept.
+        let mean = floor + (base - floor) * (-decay * delta).exp();
+        mean.clamp(floor, tuning.cadence_max_ms as f32)
     }
 
     fn start_offset_mean_ms(&self, difficulty: f32) -> f32 {
@@ -1165,6 +1171,10 @@ impl PressureV2 {
 
     fn sample_cadence_for_test(&mut self, inputs: &PressureWaveInputs) {
         self.sample_cadence_and_start_offsets(inputs);
+    }
+
+    fn cadence_mean_ms_for_test(&self, difficulty: f32) -> f32 {
+        self.cadence_mean_ms(difficulty)
     }
 
     fn enforce_duration_caps_for_test(&mut self, inputs: &PressureWaveInputs) {
@@ -2011,7 +2021,7 @@ mod tests {
             let start = generator.component_start_offset_ms(index);
             let times = generator.component_spawn_times(index);
 
-            assert!(cadence >= tuning.cadence_min_ms);
+            assert!(cadence >= tuning.cadence_floor_ms);
             assert!(cadence <= tuning.cadence_max_ms);
             assert!(start <= tuning.start_max_ms);
             assert_eq!(times.len(), component.bug_count as usize);
@@ -2058,6 +2068,22 @@ mod tests {
                 generator_b.component_spawn_times(index)
             );
         }
+    }
+
+    #[test]
+    fn cadence_mean_targets_level_ten_decay_point() {
+        let generator = PressureV2::default();
+        let mean = generator.cadence_mean_ms_for_test(10.0);
+        assert!((mean - 200.0).abs() < 2.0);
+    }
+
+    #[test]
+    fn cadence_mean_stays_near_floor_late_game() {
+        let generator = PressureV2::default();
+        let floor = generator.tuning().cadence.cadence_floor_ms as f32;
+        let mean = generator.cadence_mean_ms_for_test(30.0);
+        assert!(mean >= floor);
+        assert!(mean - floor <= 3.0);
     }
 
     #[test]
@@ -2402,7 +2428,7 @@ mod tests {
     }
 
     #[test]
-    fn duration_caps_hits_cadence_min_when_target_too_low() {
+    fn duration_caps_hits_cadence_floor_when_target_too_low() {
         let mut generator = PressureV2::default();
         {
             let tuning = generator.tuning_mut();
@@ -2430,18 +2456,18 @@ mod tests {
         generator.enforce_duration_caps_for_test(&inputs);
 
         let component = &generator.work.provisional_species[0];
-        let expected_times = vec![0, 120, 240];
+        let expected_times = vec![0, 100, 200];
         assert_eq!(component.spawn_times, expected_times);
         assert_eq!(
             component.cadence_ms,
-            generator.tuning().cadence.cadence_min_ms
+            generator.tuning().cadence.cadence_floor_ms
         );
 
         let telemetry = generator.telemetry().cadence_compression();
         assert!(telemetry.is_recorded());
         assert_eq!(telemetry.t_end_before, 300);
         assert_eq!(telemetry.t_target, 100);
-        assert_eq!(telemetry.t_end_after, 240);
+        assert_eq!(telemetry.t_end_after, 200);
         assert!((telemetry.compression_factor - 3.0).abs() < 1e-3);
         assert!(telemetry.hit_cadence_min);
         assert!(telemetry.t_end_after > telemetry.t_target);
