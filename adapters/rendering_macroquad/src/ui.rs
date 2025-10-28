@@ -11,11 +11,12 @@ use macroquad::{
 };
 use maze_defence_core::{PlayMode, WaveDifficulty};
 use maze_defence_rendering::{
-    DifficultyPresentation, DifficultySelectionPresentation, GoldPresentation,
+    AnalyticsPresentation, DifficultyPresentation, DifficultySelectionPresentation,
+    GoldPresentation,
 };
 
 /// Snapshot of the control panel's UI layout and data for the current frame.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub(crate) struct ControlPanelUiContext {
     /// Top-left corner of the panel in screen coordinates.
     pub origin: Vec2,
@@ -32,6 +33,8 @@ pub(crate) struct ControlPanelUiContext {
     pub difficulty: Option<DifficultyPresentation>,
     /// Presentation data for the difficulty selection buttons.
     pub difficulty_selection: Option<DifficultySelectionPresentation>,
+    /// Most recent analytics snapshot published by the simulation, if any.
+    pub analytics: Option<AnalyticsPresentation>,
 }
 
 /// Captures the UI interactions emitted while drawing the control panel.
@@ -116,6 +119,54 @@ pub(crate) fn draw_control_panel_ui(
             PlayMode::Builder => "Mode: Builder",
         };
         ui.label(None, mode_label);
+        if context.play_mode == PlayMode::Builder {
+            match context.analytics {
+                Some(analytics) => {
+                    let report = analytics.report();
+                    ui.label(None, "Analytics:");
+                    label_wrapped(
+                        ui,
+                        format!(
+                            "Path coverage: {}",
+                            format_basis_points(report.tower_coverage_mean_bps())
+                        )
+                        .as_str(),
+                        max_label_width,
+                    );
+                    label_wrapped(
+                        ui,
+                        format!(
+                            "Firing completion: {}",
+                            format_basis_points(report.firing_complete_percent_bps())
+                        )
+                        .as_str(),
+                        max_label_width,
+                    );
+                    label_wrapped(
+                        ui,
+                        format!(
+                            "Shortest path: {} cells",
+                            report.shortest_path_length_cells()
+                        )
+                        .as_str(),
+                        max_label_width,
+                    );
+                    label_wrapped(
+                        ui,
+                        format!("Tower count: {}", report.tower_count()).as_str(),
+                        max_label_width,
+                    );
+                    label_wrapped(
+                        ui,
+                        format!("Total DPS: {}", report.total_tower_dps()).as_str(),
+                        max_label_width,
+                    );
+                }
+                None => {
+                    label_wrapped(ui, "Analytics: waiting for first report…", max_label_width);
+                }
+            }
+        }
         label_wrapped(ui, "Select the next wave difficulty.", max_label_width);
 
         let mut normal_label = "Normal".to_string();
@@ -180,6 +231,12 @@ fn label_wrapped(ui: &mut Ui, text: &str, max_width: f32) {
     for line in wrap_text(ui, text, max_width) {
         ui.label(None, line.as_str());
     }
+}
+
+fn format_basis_points(value: u32) -> String {
+    let whole = value / 100;
+    let fractional = value % 100;
+    format!("{whole}.{fractional:02}%")
 }
 
 fn wrap_text(ui: &mut Ui, text: &str, max_width: f32) -> Vec<String> {

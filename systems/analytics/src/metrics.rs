@@ -394,7 +394,11 @@ mod tests {
 
         assert_eq!(
             selected,
-            &[CellCoord::new(0, 2), CellCoord::new(1, 2), CellCoord::new(2, 2)]
+            &[
+                CellCoord::new(0, 2),
+                CellCoord::new(1, 2),
+                CellCoord::new(2, 2)
+            ]
         );
     }
 
@@ -451,10 +455,7 @@ mod tests {
         let towers = TowerAnalyticsView::from_snapshots(vec![TowerAnalyticsSnapshot {
             tower: TowerId::new(1),
             kind: TowerKind::Basic,
-            region: CellRect::from_origin_and_size(
-                CellCoord::new(0, 0),
-                CellRectSize::new(1, 1),
-            ),
+            region: CellRect::from_origin_and_size(CellCoord::new(0, 0), CellRectSize::new(1, 1)),
             range_cells: 2,
             damage_per_second: 0,
         }]);
@@ -610,10 +611,7 @@ mod tests {
         let towers = TowerAnalyticsView::from_snapshots(vec![TowerAnalyticsSnapshot {
             tower: TowerId::new(1),
             kind: TowerKind::Basic,
-            region: CellRect::from_origin_and_size(
-                CellCoord::new(0, 0),
-                CellRectSize::new(1, 1),
-            ),
+            region: CellRect::from_origin_and_size(CellCoord::new(0, 0), CellRectSize::new(1, 1)),
             range_cells: 3,
             damage_per_second: 0,
         }]);

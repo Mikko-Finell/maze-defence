@@ -218,6 +218,21 @@ This proposal:
 **Goal**
 
 * The architecture enforces its own correctness.
+
+---
+
+## Builder analytics flow
+
+* Build-mode adapters emit `Command::RequestAnalyticsRefresh` immediately after a placement or removal succeeds. The command is
+  queued alongside the placement/removal so the analytics system receives both the manual request and the world’s
+  `Event::MazeLayoutChanged` in the same frame.
+* The analytics system coalesces refresh requests and waits for the next `Event::TimeAdvanced` before recomputing. Expect a one
+  tick delay between the player action and the updated stats so background work never blocks the UI thread.
+* When recomputation finishes the analytics system publishes `Event::AnalyticsUpdated { report }`. The simulation caches the
+  latest immutable `StatsReport` while Builder mode is active and projects it through `Scene.analytics` so adapters can render
+  coverage, firing, path length, tower count, and DPS without consulting world state directly.
+* Because the recompute happens inside the normal system tick, build-mode interactions stay responsive: placement feedback and
+  previews update immediately while the refreshed analytics arrive with the next frame’s event batch.
   If someone tries to cheat in the future — it breaks immediately.
 
 ---

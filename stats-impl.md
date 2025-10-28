@@ -113,10 +113,10 @@ internals, and document usage for future maintainers.
 
 **Deliverables:**
 
-* [ ] Update build-mode adapters to issue `Command::RequestAnalyticsRefresh` whenever
+* [x] Update build-mode adapters to issue `Command::RequestAnalyticsRefresh` whenever
   the player confirms a tower placement/removal, and subscribe to
   `Event::AnalyticsUpdated` to display the latest report.
-* [ ] Document the analytics flow in `build-mode.md` (or a dedicated `stats-spec.md`)
+* [x] Document the analytics flow in `build-mode.md` (or a dedicated `stats-spec.md`)
   covering recompute triggers, expected latency, and background execution
   guarantees.
 * [ ] Extend replay/tests to ensure analytics events appear deterministically given

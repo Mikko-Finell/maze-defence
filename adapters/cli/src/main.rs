@@ -29,16 +29,16 @@ use maze_defence_core::{
     BugColor, BugId, BugView, CellCoord, CellPointHalf, CellRect, CellRectSize, Command,
     DifficultyLevel, Event, Gold, Health, PendingWaveDifficulty, PlacementError, PlayMode,
     PressureWaveInputs, PressureWavePlan, ProjectileSnapshot, RemovalError, RoundOutcome,
-    SpawnPatchId, SpeciesId, SpeciesPrototype, SpeciesTableVersion, TileCoord, TowerCooldownView,
-    TowerId, TowerKind, TowerTarget, WaveDifficulty, WaveId,
+    SpawnPatchId, SpeciesId, SpeciesPrototype, SpeciesTableVersion, StatsReport, TileCoord,
+    TowerCooldownView, TowerId, TowerKind, TowerTarget, WaveDifficulty, WaveId,
 };
 use maze_defence_rendering::{
-    visuals, BugHealthPresentation, BugPresentation, BugVisual, Color, ControlPanelView,
-    DifficultyButtonPresentation, DifficultyPresentation, DifficultySelectionPresentation,
-    FrameInput, FrameSimulationBreakdown, GoldPresentation, GroundKind, GroundSpriteTiles,
-    Presentation, RenderingBackend, Scene, SceneProjectile, SceneTower, SceneWall, SpawnEffect,
-    SpriteKey, TileGridPresentation, TileSpacePosition, TowerInteractionFeedback, TowerPreview,
-    TowerTargetLine,
+    visuals, AnalyticsPresentation, BugHealthPresentation, BugPresentation, BugVisual, Color,
+    ControlPanelView, DifficultyButtonPresentation, DifficultyPresentation,
+    DifficultySelectionPresentation, FrameInput, FrameSimulationBreakdown, GoldPresentation,
+    GroundKind, GroundSpriteTiles, Presentation, RenderingBackend, Scene, SceneProjectile,
+    SceneTower, SceneWall, SpawnEffect, SpriteKey, TileGridPresentation, TileSpacePosition,
+    TowerInteractionFeedback, TowerPreview, TowerTargetLine,
 };
 use maze_defence_rendering_macroquad::MacroquadBackend;
 use maze_defence_system_bootstrap::Bootstrap;
@@ -377,6 +377,7 @@ fn main() -> Result<()> {
             query::difficulty_level(simulation.world()).get(),
         )),
         None,
+        None,
     );
     simulation.populate_scene(&mut scene);
 
@@ -423,6 +424,7 @@ struct Simulation {
     pending_input: FrameInput,
     builder_preview: Option<BuilderPlacementPreview>,
     tower_feedback: Option<TowerInteractionFeedback>,
+    analytics_report: Option<StatsReport>,
     gold: Gold,
     difficulty_level: DifficultyLevel,
     pending_wave_difficulty: PendingWaveDifficulty,
@@ -1179,6 +1181,7 @@ impl Simulation {
             pending_input: FrameInput::default(),
             builder_preview: None,
             tower_feedback: None,
+            analytics_report: None,
             gold,
             difficulty_level,
             pending_wave_difficulty,
@@ -1572,6 +1575,38 @@ impl Simulation {
                 );
                 self.refresh_species_and_patches();
             }
+            Command::PlaceTower { kind, origin } => {
+                let before = out_events.len();
+                world::apply(
+                    &mut self.world,
+                    Command::PlaceTower { kind, origin },
+                    out_events,
+                );
+                if out_events[before..]
+                    .iter()
+                    .any(|event| matches!(event, Event::TowerPlaced { .. }))
+                {
+                    world::apply(
+                        &mut self.world,
+                        Command::RequestAnalyticsRefresh,
+                        out_events,
+                    );
+                }
+            }
+            Command::RemoveTower { tower } => {
+                let before = out_events.len();
+                world::apply(&mut self.world, Command::RemoveTower { tower }, out_events);
+                if out_events[before..]
+                    .iter()
+                    .any(|event| matches!(event, Event::TowerRemoved { .. }))
+                {
+                    world::apply(
+                        &mut self.world,
+                        Command::RequestAnalyticsRefresh,
+                        out_events,
+                    );
+                }
+            }
             Command::GeneratePressureWave { inputs } => {
                 let command = Command::GeneratePressureWave { inputs };
                 world::apply(&mut self.world, command, out_events);
@@ -1787,6 +1822,14 @@ impl Simulation {
         scene.gold = Some(GoldPresentation::new(self.gold));
         scene.difficulty = Some(DifficultyPresentation::new(self.difficulty_level.get()));
         scene.difficulty_selection = Some(self.difficulty_selection_presentation());
+        if scene.play_mode == PlayMode::Builder {
+            scene.analytics = self
+                .analytics_report
+                .clone()
+                .map(AnalyticsPresentation::new);
+        } else {
+            scene.analytics = None;
+        }
     }
 
     fn spawn_effects(&self) -> Vec<SpawnEffect> {
@@ -1897,6 +1940,7 @@ impl Simulation {
             self.record_tower_feedback(&events);
             self.update_gold_from_events(&events);
             self.update_difficulty_level_from_events(&events);
+            self.update_analytics_report_from_events(&events);
             self.update_pending_wave_difficulty_from_events(&events);
             self.update_pressure_configuration_from_events(&events);
 
@@ -2148,6 +2192,14 @@ impl Simulation {
         for event in events {
             if let Event::DifficultyLevelChanged { level } = event {
                 self.difficulty_level = *level;
+            }
+        }
+    }
+
+    fn update_analytics_report_from_events(&mut self, events: &[Event]) {
+        for event in events {
+            if let Event::AnalyticsUpdated { report } = event {
+                self.analytics_report = Some(report.clone());
             }
         }
     }
