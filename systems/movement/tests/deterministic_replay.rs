@@ -18,27 +18,27 @@ const SLOW_STEP_MS: u32 = 450;
 
 #[test]
 fn deterministic_replay_produces_expected_snapshot() {
-    assert_stable_replay(baseline_commands(), 0x4358_d43d_e556_cbf2);
+    assert_stable_replay(baseline_commands(), 0x16eb_e4fe_d2c5_4093);
 }
 
 #[test]
 fn dense_corridor_replay_is_stable() {
-    assert_stable_replay(dense_corridor_commands(), 0x6eff_f25b_28b5_2816);
+    assert_stable_replay(dense_corridor_commands(), 0xe080_3721_b425_d361);
 }
 
 #[test]
 fn side_hallway_diversion_replay_is_stable() {
-    assert_stable_replay(side_hallway_diversion_commands(), 0xd5de_ab2f_0d36_c9f8);
+    assert_stable_replay(side_hallway_diversion_commands(), 0x52ec_3a31_e295_0b7a);
 }
 
 #[test]
 fn stall_regression_replay_is_stable() {
-    assert_stable_replay(stall_regression_commands(), 0x91a5_ddba_d487_5324);
+    assert_stable_replay(stall_regression_commands(), 0x913e_1ce3_e476_deec);
 }
 
 #[test]
 fn mixed_cadence_replay_is_stable() {
-    assert_stable_replay(mixed_cadence_commands(), 0x5bce_9e0b_7737_4231);
+    assert_stable_replay(mixed_cadence_commands(), 0xc533_0072_0935_9a63);
 }
 
 fn assert_stable_replay(commands: Vec<Command>, expected: u64) {
@@ -552,6 +552,14 @@ enum EventRecord {
     RoundLost {
         bug: BugId,
     },
+    AnalyticsUpdated {
+        coverage_bps: u32,
+        firing_bps: u32,
+        path_cells: u32,
+        tower_count: u32,
+        total_dps: u32,
+    },
+    MazeLayoutChanged,
 }
 
 impl From<&Event> for EventRecord {
@@ -624,6 +632,14 @@ impl From<&Event> for EventRecord {
             },
             Event::GoldChanged { amount } => Self::GoldChanged { amount: *amount },
             Event::RoundLost { bug } => Self::RoundLost { bug: *bug },
+            Event::AnalyticsUpdated { report } => Self::AnalyticsUpdated {
+                coverage_bps: report.tower_coverage_mean_bps(),
+                firing_bps: report.firing_complete_percent_bps(),
+                path_cells: report.shortest_path_length_cells(),
+                tower_count: report.tower_count(),
+                total_dps: report.total_tower_dps(),
+            },
+            Event::MazeLayoutChanged => Self::MazeLayoutChanged,
             Event::TowerRemoved { .. }
             | Event::TowerPlacementRejected { .. }
             | Event::TowerRemovalRejected { .. }

@@ -22,7 +22,7 @@ fn deterministic_replay_handles_equidistant_bugs_and_builder_mode() {
     assert_eq!(first.assignments.len(), script_len);
 
     let fingerprint = first.fingerprint();
-    let expected = 0x2cb7_7569_1b43_0c73;
+    let expected = 0x4b30_a91f_5799_920e;
     assert_eq!(
         fingerprint, expected,
         "fingerprint mismatch: {fingerprint:#x}"
@@ -314,6 +314,14 @@ enum EventRecord {
         plan_species_table_version: u32,
         plan_burst_count: u32,
     },
+    AnalyticsUpdated {
+        coverage_bps: u32,
+        firing_bps: u32,
+        path_cells: u32,
+        tower_count: u32,
+        total_dps: u32,
+    },
+    MazeLayoutChanged,
 }
 
 impl From<Event> for EventRecord {
@@ -373,6 +381,14 @@ impl From<Event> for EventRecord {
                 plan_species_table_version: plan_species_table_version.get(),
                 plan_burst_count,
             },
+            Event::AnalyticsUpdated { report } => Self::AnalyticsUpdated {
+                coverage_bps: report.tower_coverage_mean_bps(),
+                firing_bps: report.firing_complete_percent_bps(),
+                path_cells: report.shortest_path_length_cells(),
+                tower_count: report.tower_count(),
+                total_dps: report.total_tower_dps(),
+            },
+            Event::MazeLayoutChanged => Self::MazeLayoutChanged,
             other => panic!("unexpected event during targeting replay: {other:?}"),
         }
     }

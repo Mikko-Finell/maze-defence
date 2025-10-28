@@ -13,7 +13,7 @@ use anyhow::Result as AnyResult;
 use glam::Vec2;
 use maze_defence_core::{
     BugId, CellCoord, CellRect, Gold, PlacementError, PlayMode, ProjectileId, RemovalError,
-    TowerId, TowerKind, WaveDifficulty,
+    StatsReport, TowerId, TowerKind, WaveDifficulty,
 };
 use std::{error::Error, fmt, time::Duration};
 
@@ -917,6 +917,26 @@ impl DifficultyPresentation {
     }
 }
 
+/// Snapshot of the most recent analytics report for UI presentation.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AnalyticsPresentation {
+    report: StatsReport,
+}
+
+impl AnalyticsPresentation {
+    /// Creates a new analytics descriptor for presentation purposes.
+    #[must_use]
+    pub const fn new(report: StatsReport) -> Self {
+        Self { report }
+    }
+
+    /// Returns the analytics report captured for presentation.
+    #[must_use]
+    pub const fn report(&self) -> &StatsReport {
+        &self.report
+    }
+}
+
 /// Snapshot describing how a specific difficulty option should be presented to the player.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct DifficultyButtonPresentation {
@@ -1037,6 +1057,8 @@ pub struct Scene {
     pub difficulty: Option<DifficultyPresentation>,
     /// Presentation state for the Normal/Hard difficulty buttons.
     pub difficulty_selection: Option<DifficultySelectionPresentation>,
+    /// Latest analytics report available to the adapter, if any.
+    pub analytics: Option<AnalyticsPresentation>,
 }
 
 impl Scene {
@@ -1062,6 +1084,7 @@ impl Scene {
         gold: Option<GoldPresentation>,
         difficulty: Option<DifficultyPresentation>,
         difficulty_selection: Option<DifficultySelectionPresentation>,
+        analytics: Option<AnalyticsPresentation>,
     ) -> Self {
         Self {
             tile_grid,
@@ -1082,6 +1105,7 @@ impl Scene {
             gold,
             difficulty,
             difficulty_selection,
+            analytics,
         }
     }
 
@@ -1555,6 +1579,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
 
         assert_eq!(scene.tile_grid, tile_grid);
@@ -1574,6 +1599,7 @@ mod tests {
         assert!(scene.gold.is_none());
         assert!(scene.difficulty.is_none());
         assert!(scene.difficulty_selection.is_none());
+        assert!(scene.analytics.is_none());
     }
 
     #[test]
@@ -1632,6 +1658,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
 
         assert_eq!(scene.play_mode, PlayMode::Builder);
@@ -1657,6 +1684,7 @@ mod tests {
         assert!(scene.gold.is_none());
         assert!(scene.difficulty.is_none());
         assert!(scene.difficulty_selection.is_none());
+        assert!(scene.analytics.is_none());
     }
 
     #[test]
@@ -1689,10 +1717,12 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
 
         assert_eq!(scene.total_height(), tile_grid.bordered_height());
         assert!(scene.difficulty_selection.is_none());
+        assert!(scene.analytics.is_none());
     }
 
     #[test]

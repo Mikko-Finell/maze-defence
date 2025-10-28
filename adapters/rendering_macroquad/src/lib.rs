@@ -719,6 +719,7 @@ fn draw_control_panel(
         gold: scene.gold,
         difficulty: scene.difficulty,
         difficulty_selection: scene.difficulty_selection,
+        analytics: scene.analytics.clone(),
     })
 }
 
@@ -1614,6 +1615,7 @@ mod tests {
             Some(GoldPresentation::new(Gold::new(0))),
             Some(DifficultyPresentation::new(0)),
             None,
+            None,
         )
     }
 
@@ -1748,6 +1750,7 @@ mod tests {
                 Some(ControlPanelView::new(200.0, Color::from_rgb_u8(0, 0, 0))),
                 Some(GoldPresentation::new(Gold::new(0))),
                 Some(DifficultyPresentation::new(0)),
+                None,
                 None,
             );
             let metrics = SceneMetrics::from_scene(&scene, screen_width, screen_height);
