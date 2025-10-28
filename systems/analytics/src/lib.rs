@@ -45,7 +45,7 @@ impl Analytics {
     /// Consumes world events and applied commands to publish analytics updates.
     ///
     /// The provided `recompute` closure is invoked at most once per call and only when a
-    /// recompute request is pending *and* a tick (`Event::TimeAdvanced`) has been observed.
+    /// recompute request is pending.
     /// The closure receives mutable access to reusable scratch buffers so metric
     /// computation can avoid repeated allocations.
     pub fn handle<F>(
@@ -57,14 +57,9 @@ impl Analytics {
     ) where
         F: FnMut(&mut AnalyticsScratch<'_>) -> Option<StatsReport>,
     {
-        let mut tick_observed = false;
-
         for event in events {
             match event {
                 Event::MazeLayoutChanged => self.enqueue_request(RecomputeRequest::LayoutChanged),
-                Event::TimeAdvanced { .. } => {
-                    tick_observed = true;
-                }
                 _ => {}
             }
         }
@@ -73,10 +68,6 @@ impl Analytics {
             if matches!(command, Command::RequestAnalyticsRefresh) {
                 self.enqueue_request(RecomputeRequest::ManualRefresh);
             }
-        }
-
-        if !tick_observed {
-            return;
         }
 
         if self.pending_requests.pop_front().is_none() {
