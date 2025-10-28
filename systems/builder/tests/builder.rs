@@ -33,10 +33,13 @@ fn confirm_emits_place_command_in_builder_mode() {
 
     assert_eq!(
         commands,
-        vec![Command::PlaceTower {
-            kind: TowerKind::Basic,
-            origin: CellCoord::new(2, 2),
-        }],
+        vec![
+            Command::PlaceTower {
+                kind: TowerKind::Basic,
+                origin: CellCoord::new(2, 2),
+            },
+            Command::RequestAnalyticsRefresh,
+        ],
         "builder should emit a placement command when confirming a valid preview",
     );
 }
@@ -115,9 +118,12 @@ fn remove_emits_command_when_tower_present() {
     assert_eq!(looked_up, Some(hovered_cell));
     assert_eq!(
         commands,
-        vec![Command::RemoveTower {
-            tower: returned_tower,
-        }],
+        vec![
+            Command::RemoveTower {
+                tower: returned_tower,
+            },
+            Command::RequestAnalyticsRefresh,
+        ],
         "remove action should target the tower under the cursor",
     );
 }
