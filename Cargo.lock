@@ -350,6 +350,7 @@ dependencies = [
  "maze-defence-pressure-v2",
  "maze-defence-rendering",
  "maze-defence-rendering-macroquad",
+ "maze-defence-system-analytics",
  "maze-defence-system-bootstrap",
  "maze-defence-system-builder",
  "maze-defence-system-movement",
