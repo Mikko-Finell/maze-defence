@@ -135,7 +135,6 @@ impl Builder {
                         kind: preview.kind,
                         origin: preview.origin,
                     });
-                    out.push(Command::RequestAnalyticsRefresh);
                 }
             }
         }
@@ -144,7 +143,6 @@ impl Builder {
             if let Some(cell) = input.cursor_cell {
                 if let Some(tower) = tower_at(cell) {
                     out.push(Command::RemoveTower { tower });
-                    out.push(Command::RequestAnalyticsRefresh);
                 }
             }
         }
