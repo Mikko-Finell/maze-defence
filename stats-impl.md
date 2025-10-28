@@ -96,7 +96,7 @@ math and bounded iteration.
     * [x] Report the path-length percentage corresponding to the furthest "first
       opportunity" among all towers. If any tower never gains line-of-sight,
       clamp the metric to 100%.
-* [ ] Compute supporting metrics directly from the tower iterator: total count and
+* [x] Compute supporting metrics directly from the tower iterator: total count and
   sum of DPS (damage per second), ensuring the DPS calculation mirrors the
   authoritative combat system (document the formula source).
 * [ ] Add focused unit tests on synthetic mazes covering corner cases: no towers,
