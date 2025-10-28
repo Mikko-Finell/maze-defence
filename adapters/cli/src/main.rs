@@ -41,6 +41,10 @@ use maze_defence_rendering::{
     TowerInteractionFeedback, TowerPreview, TowerTargetLine,
 };
 use maze_defence_rendering_macroquad::MacroquadBackend;
+use maze_defence_system_analytics::{
+    select_shortest_navigation_path, total_tower_dps, tower_count, tower_coverage_mean_bps,
+    tower_firing_completion_percent_bps, Analytics, AnalyticsScratch,
+};
 use maze_defence_system_bootstrap::Bootstrap;
 use maze_defence_system_builder::{
     Builder as TowerBuilder, BuilderInput as TowerBuilderInput,
@@ -425,6 +429,8 @@ struct Simulation {
     builder_preview: Option<BuilderPlacementPreview>,
     tower_feedback: Option<TowerInteractionFeedback>,
     analytics_report: Option<StatsReport>,
+    analytics: Analytics,
+    applied_commands: Vec<Command>,
     gold: Gold,
     difficulty_level: DifficultyLevel,
     pending_wave_difficulty: PendingWaveDifficulty,
@@ -1182,6 +1188,8 @@ impl Simulation {
             builder_preview: None,
             tower_feedback: None,
             analytics_report: None,
+            analytics: Analytics::new(),
+            applied_commands: Vec::new(),
             gold,
             difficulty_level,
             pending_wave_difficulty,
@@ -1207,6 +1215,9 @@ impl Simulation {
             #[cfg(test)]
             last_frame_events: Vec::new(),
         };
+        let mut analytics_events = Vec::new();
+        simulation.apply_command(Command::RequestAnalyticsRefresh, &mut analytics_events);
+        simulation.pending_events.append(&mut analytics_events);
         simulation.refresh_species_and_patches();
         let _ = simulation.process_pending_events(None, TowerBuilderInput::default());
         simulation.builder_preview = simulation.compute_builder_preview();
@@ -1563,6 +1574,7 @@ impl Simulation {
     }
 
     fn apply_command(&mut self, command: Command, out_events: &mut Vec<Event>) {
+        self.applied_commands.push(command.clone());
         match command {
             Command::ConfigureBugStep { step_duration } => {
                 self.bug_step_duration = step_duration;
@@ -1586,11 +1598,7 @@ impl Simulation {
                     .iter()
                     .any(|event| matches!(event, Event::TowerPlaced { .. }))
                 {
-                    world::apply(
-                        &mut self.world,
-                        Command::RequestAnalyticsRefresh,
-                        out_events,
-                    );
+                    self.apply_command(Command::RequestAnalyticsRefresh, out_events);
                 }
             }
             Command::RemoveTower { tower } => {
@@ -1600,11 +1608,7 @@ impl Simulation {
                     .iter()
                     .any(|event| matches!(event, Event::TowerRemoved { .. }))
                 {
-                    world::apply(
-                        &mut self.world,
-                        Command::RequestAnalyticsRefresh,
-                        out_events,
-                    );
+                    self.apply_command(Command::RequestAnalyticsRefresh, out_events);
                 }
             }
             Command::GeneratePressureWave { inputs } => {
@@ -1822,14 +1826,10 @@ impl Simulation {
         scene.gold = Some(GoldPresentation::new(self.gold));
         scene.difficulty = Some(DifficultyPresentation::new(self.difficulty_level.get()));
         scene.difficulty_selection = Some(self.difficulty_selection_presentation());
-        if scene.play_mode == PlayMode::Builder {
-            scene.analytics = self
-                .analytics_report
-                .clone()
-                .map(AnalyticsPresentation::new);
-        } else {
-            scene.analytics = None;
-        }
+        scene.analytics = self
+            .analytics_report
+            .clone()
+            .map(AnalyticsPresentation::new);
     }
 
     fn spawn_effects(&self) -> Vec<SpawnEffect> {
@@ -2056,6 +2056,21 @@ impl Simulation {
                 }
             }
 
+            let mut analytics_events = Vec::new();
+            let world = &self.world;
+            self.analytics.handle(
+                &events,
+                &self.applied_commands,
+                |scratch: &mut AnalyticsScratch<'_>| {
+                    Self::recompute_analytics_report(world, scratch)
+                },
+                &mut analytics_events,
+            );
+            if !analytics_events.is_empty() {
+                next_events.extend(analytics_events);
+            }
+            self.applied_commands.clear();
+
             events.clear();
         }
 
@@ -2068,6 +2083,37 @@ impl Simulation {
         }
 
         profile
+    }
+
+    fn recompute_analytics_report(
+        world: &World,
+        scratch: &mut AnalyticsScratch<'_>,
+    ) -> Option<StatsReport> {
+        let navigation = query::navigation_field(world);
+        let inputs = query::analytics_inputs(world);
+        let (layout, towers) = inputs.into_parts();
+
+        let path = select_shortest_navigation_path(&navigation, &layout, scratch);
+        let (coverage_bps, firing_bps, path_length) = if let Some(path) = path {
+            (
+                tower_coverage_mean_bps(path, &towers),
+                tower_firing_completion_percent_bps(path, &towers),
+                u32::try_from(path.len()).unwrap_or(u32::MAX),
+            )
+        } else {
+            (0, 0, 0)
+        };
+
+        let tower_count = tower_count(&towers);
+        let total_dps = total_tower_dps(&towers);
+
+        Some(StatsReport::new(
+            coverage_bps,
+            firing_bps,
+            path_length,
+            tower_count,
+            total_dps,
+        ))
     }
 
     fn handle_bug_motion_events(&mut self, events: &[Event]) {
