@@ -399,11 +399,14 @@ impl World {
         difficulty: WaveDifficulty,
     ) -> ActiveWaveContext {
         let expected = self.next_wave_id;
+        let previous = WaveId::new(expected.get().saturating_sub(1));
         debug_assert!(
-            wave.get() >= expected.get(),
-            "wave identifiers must be monotonic"
+            wave.get() >= previous.get(),
+            "wave identifiers must not regress more than one step"
         );
-        self.next_wave_id = WaveId::new(wave.get().saturating_add(1));
+        if wave.get() >= expected.get() {
+            self.next_wave_id = WaveId::new(wave.get().saturating_add(1));
+        }
         let effective_difficulty = match difficulty {
             WaveDifficulty::Normal => self.difficulty_level,
             WaveDifficulty::Hard => self.difficulty_level.saturating_add(1),

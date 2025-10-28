@@ -233,6 +233,8 @@ pub struct FrameInput {
     pub mode_toggle: bool,
     /// Difficulty selection requested for the next wave launch, if any.
     pub start_wave: Option<WaveDifficulty>,
+    /// Whether the adapter requested a replay of the last attack plan.
+    pub replay_wave: bool,
     /// Cursor position expressed in world units, clamped to the playable grid bounds.
     pub cursor_world_space: Option<Vec2>,
     /// Cursor position snapped to tile coordinates with adapter-provided subdivision resolution.
@@ -1059,6 +1061,8 @@ pub struct Scene {
     pub difficulty_selection: Option<DifficultySelectionPresentation>,
     /// Latest analytics report available to the adapter, if any.
     pub analytics: Option<AnalyticsPresentation>,
+    /// Whether the control panel should enable the replay button.
+    pub replay_available: bool,
 }
 
 impl Scene {
@@ -1085,6 +1089,7 @@ impl Scene {
         difficulty: Option<DifficultyPresentation>,
         difficulty_selection: Option<DifficultySelectionPresentation>,
         analytics: Option<AnalyticsPresentation>,
+        replay_available: bool,
     ) -> Self {
         Self {
             tile_grid,
@@ -1106,6 +1111,7 @@ impl Scene {
             difficulty,
             difficulty_selection,
             analytics,
+            replay_available,
         }
     }
 
@@ -1580,6 +1586,7 @@ mod tests {
             None,
             None,
             None,
+            false,
         );
 
         assert_eq!(scene.tile_grid, tile_grid);
@@ -1600,6 +1607,9 @@ mod tests {
         assert!(scene.difficulty.is_none());
         assert!(scene.difficulty_selection.is_none());
         assert!(scene.analytics.is_none());
+        assert!(!scene.replay_available);
+        assert!(!scene.replay_available);
+        assert!(!scene.replay_available);
     }
 
     #[test]
@@ -1659,6 +1669,7 @@ mod tests {
             None,
             None,
             None,
+            false,
         );
 
         assert_eq!(scene.play_mode, PlayMode::Builder);
@@ -1718,6 +1729,7 @@ mod tests {
             None,
             None,
             None,
+            false,
         );
 
         assert_eq!(scene.total_height(), tile_grid.bordered_height());
