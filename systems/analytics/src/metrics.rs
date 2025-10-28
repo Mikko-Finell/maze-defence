@@ -378,6 +378,27 @@ mod tests {
     }
 
     #[test]
+    fn keeps_first_spawner_when_paths_are_tied() {
+        let navigation = NavigationFieldView::from_owned(vec![4, 3, 2, 3, 2, 1, 2, 1, 0], 3, 3);
+        let layout = AnalyticsLayoutSnapshot::new(
+            vec![CellCoord::new(0, 2), CellCoord::new(2, 0)],
+            vec![CellCoord::new(2, 2)],
+        );
+
+        let mut path = Vec::new();
+        let mut working = VecDeque::new();
+        let mut scratch = AnalyticsScratch::new(&mut path, &mut working);
+
+        let selected = select_shortest_navigation_path(&navigation, &layout, &mut scratch)
+            .expect("paths should be reachable");
+
+        assert_eq!(
+            selected,
+            &[CellCoord::new(0, 2), CellCoord::new(1, 2), CellCoord::new(2, 2)]
+        );
+    }
+
+    #[test]
     fn tower_coverage_returns_mean_basis_points() {
         let path = vec![
             CellCoord::new(0, 0),
@@ -421,6 +442,24 @@ mod tests {
 
         let path = vec![CellCoord::new(0, 0)];
         assert_eq!(tower_coverage_mean_bps(&path, &towers), 0);
+    }
+
+    #[test]
+    fn zero_dps_towers_still_contribute_to_coverage() {
+        let path = vec![CellCoord::new(0, 0), CellCoord::new(1, 0)];
+
+        let towers = TowerAnalyticsView::from_snapshots(vec![TowerAnalyticsSnapshot {
+            tower: TowerId::new(1),
+            kind: TowerKind::Basic,
+            region: CellRect::from_origin_and_size(
+                CellCoord::new(0, 0),
+                CellRectSize::new(1, 1),
+            ),
+            range_cells: 2,
+            damage_per_second: 0,
+        }]);
+
+        assert_eq!(tower_coverage_mean_bps(&path, &towers), 10_000);
     }
 
     #[test]
@@ -564,5 +603,21 @@ mod tests {
         ]);
 
         assert_eq!(total_tower_dps(&towers), u32::MAX);
+    }
+
+    #[test]
+    fn total_tower_dps_handles_zero_damage_towers() {
+        let towers = TowerAnalyticsView::from_snapshots(vec![TowerAnalyticsSnapshot {
+            tower: TowerId::new(1),
+            kind: TowerKind::Basic,
+            region: CellRect::from_origin_and_size(
+                CellCoord::new(0, 0),
+                CellRectSize::new(1, 1),
+            ),
+            range_cells: 3,
+            damage_per_second: 0,
+        }]);
+
+        assert_eq!(total_tower_dps(&towers), 0);
     }
 }
