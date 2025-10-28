@@ -53,6 +53,7 @@ use self::sprites::SpriteAtlas;
 pub struct ControlPanelInputState {
     mode_toggle_latched: bool,
     start_wave_latched: Option<WaveDifficulty>,
+    replay_wave_latched: bool,
 }
 
 impl ControlPanelInputState {
@@ -77,6 +78,18 @@ impl ControlPanelInputState {
     /// Records that the control-panel button requested a wave launch this frame.
     pub fn register_start_wave(&mut self, difficulty: WaveDifficulty) {
         self.start_wave_latched = Some(difficulty);
+    }
+
+    /// Returns whether the UI requested a wave replay and clears the latch so the action fires once.
+    pub fn take_replay_wave(&mut self) -> bool {
+        let latched = self.replay_wave_latched;
+        self.replay_wave_latched = false;
+        latched
+    }
+
+    /// Records that the control-panel button requested a wave replay this frame.
+    pub fn register_replay_wave(&mut self) {
+        self.replay_wave_latched = true;
     }
 }
 
@@ -403,8 +416,15 @@ impl RenderingBackend for MacroquadBackend {
                 let metrics_before = SceneMetrics::from_scene(&scene, screen_width, screen_height);
                 let mode_toggle = control_panel_input.take_mode_toggle();
                 let start_wave = control_panel_input.take_start_wave();
-                let frame_input =
-                    gather_frame_input(&scene, &metrics_before, mode_toggle, start_wave, keyboard);
+                let replay_wave = control_panel_input.take_replay_wave();
+                let frame_input = gather_frame_input(
+                    &scene,
+                    &metrics_before,
+                    mode_toggle,
+                    start_wave,
+                    replay_wave,
+                    keyboard,
+                );
 
                 let simulation_breakdown = update_scene(frame_dt, frame_input, &mut scene);
 
@@ -483,12 +503,16 @@ impl RenderingBackend for MacroquadBackend {
                     let ControlPanelUiResult {
                         mode_toggle,
                         start_wave,
+                        replay_wave,
                     } = draw_control_panel_ui(&mut control_panel_ui, panel_context);
                     if mode_toggle {
                         control_panel_input.register_mode_toggle();
                     }
                     if let Some(difficulty) = start_wave {
                         control_panel_input.register_start_wave(difficulty);
+                    }
+                    if replay_wave {
+                        control_panel_input.register_replay_wave();
                     }
                 }
 
@@ -618,6 +642,7 @@ fn gather_frame_input(
     metrics: &SceneMetrics,
     mode_toggle: bool,
     ui_start_wave: Option<WaveDifficulty>,
+    ui_replay_wave: bool,
     keyboard: KeyboardShortcuts,
 ) -> FrameInput {
     let (cursor_x, cursor_y) = mouse_position();
@@ -636,6 +661,7 @@ fn gather_frame_input(
         Vec2::new(cursor_x, cursor_y),
         mode_toggle,
         start_wave,
+        ui_replay_wave,
         confirm_click,
         remove_click,
         keyboard.delete_pressed,
@@ -648,6 +674,7 @@ fn gather_frame_input_from_observations(
     cursor_position: Vec2,
     mode_toggle: bool,
     start_wave: Option<WaveDifficulty>,
+    replay_wave: bool,
     confirm_click: bool,
     remove_click: bool,
     delete_pressed: bool,
@@ -655,6 +682,7 @@ fn gather_frame_input_from_observations(
     let mut input = FrameInput {
         mode_toggle,
         start_wave,
+        replay_wave,
         ..FrameInput::default()
     };
 
@@ -720,6 +748,7 @@ fn draw_control_panel(
         difficulty: scene.difficulty,
         difficulty_selection: scene.difficulty_selection,
         analytics: scene.analytics.clone(),
+        can_replay_wave: scene.can_replay_wave,
     })
 }
 
@@ -1616,6 +1645,7 @@ mod tests {
             Some(DifficultyPresentation::new(0)),
             None,
             None,
+            false,
         )
     }
 
@@ -1650,6 +1680,7 @@ mod tests {
             inside_cursor,
             false,
             None,
+            false,
             true,
             false,
             false,
@@ -1666,6 +1697,7 @@ mod tests {
             outside_cursor,
             false,
             None,
+            false,
             true,
             false,
             false,
@@ -1692,7 +1724,7 @@ mod tests {
             metrics.grid_offset_y + metrics.grid_height_scaled - 1.0,
         );
         let input = gather_frame_input_from_observations(
-            &scene, &metrics, cursor, false, None, false, false, false,
+            &scene, &metrics, cursor, false, None, false, false, false, false,
         );
 
         let tile = input
@@ -1752,6 +1784,7 @@ mod tests {
                 Some(DifficultyPresentation::new(0)),
                 None,
                 None,
+                false,
             );
             let metrics = SceneMetrics::from_scene(&scene, screen_width, screen_height);
 
