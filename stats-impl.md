@@ -91,9 +91,9 @@ math and bounded iteration.
     return the mean percentage as a fixed-point integer or rational documented
     in the spec.
   * [ ] Measure the earliest firing opportunities for towers:
-    * [ ] Traverse the cached path in order, and for each tower record the first
+    * [x] Traverse the cached path in order, and for each tower record the first
       path cell where the bug is within range.
-    * [ ] Report the path-length percentage corresponding to the furthest "first
+    * [x] Report the path-length percentage corresponding to the furthest "first
       opportunity" among all towers. If any tower never gains line-of-sight,
       clamp the metric to 100%.
 * [ ] Compute supporting metrics directly from the tower iterator: total count and
