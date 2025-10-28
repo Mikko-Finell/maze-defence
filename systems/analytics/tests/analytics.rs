@@ -8,7 +8,7 @@ fn sample_report(seed: u32) -> StatsReport {
 }
 
 #[test]
-fn layout_change_requires_tick_before_recompute() {
+fn layout_change_recomputes_without_tick() {
     let mut analytics = Analytics::new();
     let mut emitted = Vec::new();
     let mut recompute_calls = 0;
@@ -23,31 +23,18 @@ fn layout_change_requires_tick_before_recompute() {
         &mut emitted,
     );
 
-    assert_eq!(recompute_calls, 0, "recompute must wait for a tick");
-    assert!(emitted.is_empty());
-    assert!(analytics.last_report().is_none());
-
-    analytics.handle(
-        &[Event::TimeAdvanced {
-            dt: Duration::from_millis(16),
-        }],
-        &[],
-        |_scratch: &mut AnalyticsScratch<'_>| {
-            recompute_calls += 1;
-            Some(sample_report(20))
-        },
-        &mut emitted,
+    assert_eq!(
+        recompute_calls, 1,
+        "layout change should recompute immediately"
     );
-
-    assert_eq!(recompute_calls, 1, "exactly one recompute after tick");
     assert_eq!(emitted.len(), 1, "analytics update must be published");
 
     let report = match &emitted[0] {
         Event::AnalyticsUpdated { report } => report.clone(),
         other => panic!("unexpected event: {other:?}"),
     };
-    assert_eq!(report, sample_report(20));
-    assert_eq!(analytics.last_report(), Some(&sample_report(20)));
+    assert_eq!(report, sample_report(10));
+    assert_eq!(analytics.last_report(), Some(&sample_report(10)));
 }
 
 #[test]
@@ -57,9 +44,7 @@ fn manual_refresh_coalesces_duplicates() {
     let mut recompute_calls = 0;
 
     analytics.handle(
-        &[Event::TimeAdvanced {
-            dt: Duration::from_millis(16),
-        }],
+        &[],
         &[
             Command::RequestAnalyticsRefresh,
             Command::RequestAnalyticsRefresh,
@@ -77,19 +62,13 @@ fn manual_refresh_coalesces_duplicates() {
 }
 
 #[test]
-fn layout_and_manual_requests_coalesce_per_tick() {
+fn layout_and_manual_requests_coalesce_per_call() {
     let mut analytics = Analytics::new();
     let mut emitted = Vec::new();
     let mut recompute_calls = 0;
 
     analytics.handle(
-        &[
-            Event::MazeLayoutChanged,
-            Event::MazeLayoutChanged,
-            Event::TimeAdvanced {
-                dt: Duration::from_millis(8),
-            },
-        ],
+        &[Event::MazeLayoutChanged, Event::MazeLayoutChanged],
         &[Command::RequestAnalyticsRefresh],
         |scratch: &mut AnalyticsScratch<'_>| {
             recompute_calls += 1;
@@ -103,7 +82,7 @@ fn layout_and_manual_requests_coalesce_per_tick() {
 
     assert_eq!(
         recompute_calls, 1,
-        "multiple triggers must coalesce per tick"
+        "multiple triggers must coalesce per call"
     );
     assert_eq!(emitted.len(), 1);
     assert_eq!(analytics.last_report(), Some(&sample_report(60)));

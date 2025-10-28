@@ -20,13 +20,13 @@ fn analytics_events_are_deterministic_for_build_sequence() {
     assert_eq!(first, second, "analytics replay diverged");
     assert_eq!(
         first.reports.len(),
-        1,
-        "expected exactly one analytics report after recompute",
+        3,
+        "expected three analytics reports after recompute",
     );
 
     let fingerprint = first.fingerprint();
     assert_eq!(
-        fingerprint, 0x2a1d_e273_2c62_36da,
+        fingerprint, 0x7085_9fa3_a1e9_f11d,
         "fingerprint mismatch: {fingerprint:#x}",
     );
 }
