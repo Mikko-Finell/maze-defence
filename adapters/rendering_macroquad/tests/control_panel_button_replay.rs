@@ -16,6 +16,20 @@ fn run_sequence(sequence: &[bool]) -> Vec<bool> {
     toggles
 }
 
+fn run_replay_sequence(sequence: &[bool]) -> Vec<bool> {
+    let mut state = ControlPanelInputState::default();
+    let mut presses = Vec::new();
+    for &pressed in sequence {
+        let replay = state.take_replay_wave();
+        presses.push(replay);
+        if pressed {
+            state.register_replay_wave();
+        }
+    }
+    presses.push(state.take_replay_wave());
+    presses
+}
+
 #[test]
 fn control_panel_button_toggle_sequence_is_deterministic() {
     let button_sequence = [false, true, false, true, true, false];
@@ -23,6 +37,18 @@ fn control_panel_button_toggle_sequence_is_deterministic() {
 
     let first_run = run_sequence(&button_sequence);
     let second_run = run_sequence(&button_sequence);
+
+    assert_eq!(first_run, expected);
+    assert_eq!(first_run, second_run);
+}
+
+#[test]
+fn replay_button_sequence_is_deterministic() {
+    let button_sequence = [true, false, true, false, false, true];
+    let expected = vec![false, true, false, true, false, false, true];
+
+    let first_run = run_replay_sequence(&button_sequence);
+    let second_run = run_replay_sequence(&button_sequence);
 
     assert_eq!(first_run, expected);
     assert_eq!(first_run, second_run);
