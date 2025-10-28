@@ -74,7 +74,7 @@ recomputes metrics on demand, keeping CPU usage predictable.
 **Exit checks:** System crate compiles, analytics system introduces no new
 imports into gameplay modules, and unit tests confirm lazy recomputation.
 
-# 4) [TODO] Metric algorithms (`systems/analytics::metrics`)
+# 4) [DONE] Metric algorithms (`systems/analytics::metrics`)
 
 **Goal:** Implement the concrete metric calculations with deterministic integer
 math and bounded iteration.
@@ -85,12 +85,12 @@ math and bounded iteration.
   from every spawner to the goal, selecting the overall shortest as the analysis
   track. Cache this path as a vector of cell indices for reuse during coverage
   sampling.
-* [ ] Implement the invulnerable bug sweep:
+* [x] Implement the invulnerable bug sweep:
   * [x] For each cell on the path, gather towers whose range covers the cell and
     accumulate the per-cell coverage ratio (`towers_in_range / total_towers`);
     return the mean percentage as a fixed-point integer or rational documented
     in the spec.
-  * [ ] Measure the earliest firing opportunities for towers:
+  * [x] Measure the earliest firing opportunities for towers:
     * [x] Traverse the cached path in order, and for each tower record the first
       path cell where the bug is within range.
     * [x] Report the path-length percentage corresponding to the furthest "first
@@ -99,7 +99,7 @@ math and bounded iteration.
 * [x] Compute supporting metrics directly from the tower iterator: total count and
   sum of DPS (damage per second), ensuring the DPS calculation mirrors the
   authoritative combat system (document the formula source).
-* [ ] Add focused unit tests on synthetic mazes covering corner cases: no towers,
+* [x] Add focused unit tests on synthetic mazes covering corner cases: no towers,
   towers with zero DPS, spawners equidistant from the goal, and layouts where
   some towers never fire.
 
