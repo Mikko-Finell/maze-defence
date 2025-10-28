@@ -35,8 +35,6 @@ pub(crate) struct ControlPanelUiContext {
     pub difficulty_selection: Option<DifficultySelectionPresentation>,
     /// Most recent analytics snapshot published by the simulation, if any.
     pub analytics: Option<AnalyticsPresentation>,
-    /// Whether the previous wave can be replayed.
-    pub can_replay_wave: bool,
 }
 
 /// Captures the UI interactions emitted while drawing the control panel.
@@ -46,8 +44,6 @@ pub(crate) struct ControlPanelUiResult {
     pub mode_toggle: bool,
     /// Difficulty selected for the next wave launch, if any.
     pub start_wave: Option<WaveDifficulty>,
-    /// Whether the replay button was pressed this frame.
-    pub replay_wave: bool,
 }
 
 /// Renders the control panel's interactive elements for the current frame and
@@ -218,12 +214,6 @@ pub(crate) fn draw_control_panel_ui(
                 "Hard victory grants +1 permanent difficulty.",
                 max_label_width,
             );
-        }
-
-        if context.play_mode == PlayMode::Attack && context.can_replay_wave {
-            if ui.button(None, "Replay") {
-                result.replay_wave = true;
-            }
         }
 
         label_wrapped(ui, "Use the button below to switch modes.", max_label_width);
