@@ -408,6 +408,7 @@ name = "maze-defence-system-analytics"
 version = "0.1.0"
 dependencies = [
  "maze-defence-core",
+ "maze-defence-world",
 ]
 
 [[package]]
