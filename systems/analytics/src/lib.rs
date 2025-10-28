@@ -58,14 +58,10 @@ impl Analytics {
         F: FnMut(&mut AnalyticsScratch<'_>) -> Option<StatsReport>,
     {
         let mut tick_observed = false;
-        let mut layout_changed = false;
 
         for event in events {
             match event {
-                Event::MazeLayoutChanged => {
-                    layout_changed = true;
-                    self.enqueue_request(RecomputeRequest::LayoutChanged);
-                }
+                Event::MazeLayoutChanged => self.enqueue_request(RecomputeRequest::LayoutChanged),
                 Event::TimeAdvanced { .. } => {
                     tick_observed = true;
                 }
@@ -79,28 +75,8 @@ impl Analytics {
             }
         }
 
-        let has_non_tick_events = events
-            .iter()
-            .any(|event| !matches!(event, Event::TimeAdvanced { .. }));
-        let manual_refresh_requested = commands
-            .iter()
-            .any(|command| matches!(command, Command::RequestAnalyticsRefresh));
-        let manual_refresh_pending = self
-            .pending_requests
-            .iter()
-            .any(|request| matches!(request, RecomputeRequest::ManualRefresh));
-
         if !tick_observed {
-            if layout_changed && manual_refresh_requested {
-                // Allow immediate recompute; layout change already enqueued the request.
-            } else if manual_refresh_pending {
-                if !layout_changed && !has_non_tick_events {
-                    self.pending_requests.clear();
-                    return;
-                }
-            } else {
-                return;
-            }
+            return;
         }
 
         if self.pending_requests.pop_front().is_none() {
