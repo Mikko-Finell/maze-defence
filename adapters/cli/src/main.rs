@@ -382,7 +382,6 @@ fn main() -> Result<()> {
         )),
         None,
         None,
-        false,
     );
     simulation.populate_scene(&mut scene);
 
@@ -450,7 +449,6 @@ struct Simulation {
     last_announced_play_mode: PlayMode,
     active_wave: Option<WaveState>,
     active_wave_plan: Option<PressureWavePlan>,
-    last_replay_plan: Option<ReplayAttackPlan>,
     ready_wave_launches: VecDeque<ReadyWaveLaunch>,
     auto_spawn_enabled: bool,
     pending_outcome_command: bool,
@@ -808,7 +806,6 @@ struct PendingWaveLaunch {
     inputs: PressureWaveInputs,
     wave: WaveId,
     difficulty: WaveDifficulty,
-    band_seed: Option<u64>,
 }
 
 #[derive(Clone, Debug)]
@@ -817,15 +814,6 @@ struct ReadyWaveLaunch {
     wave: WaveId,
     difficulty: WaveDifficulty,
     plan: PressureWavePlan,
-    band_seed: u64,
-}
-
-#[derive(Clone, Debug)]
-struct ReplayAttackPlan {
-    plan: PressureWavePlan,
-    difficulty: WaveDifficulty,
-    effective_difficulty: DifficultyLevel,
-    band_seed: u64,
 }
 
 fn resolve_step_ms(base: NonZeroU32, speed_mult: f32) -> NonZeroU32 {
@@ -1021,13 +1009,11 @@ mod tests {
             DifficultyLevel::new(4),
         );
         let plan = build_plan(8, 1, 90, prototype);
-        let band_seed = spawn_band_seed(&inputs);
         simulation.ready_wave_launches.push_back(ReadyWaveLaunch {
             inputs,
             wave: WaveId::new(3),
             difficulty: WaveDifficulty::Normal,
             plan,
-            band_seed,
         });
 
         let effects = simulation.spawn_effects();
@@ -1039,76 +1025,6 @@ mod tests {
         assert!((effect.color.red - expected.red).abs() <= f32::EPSILON);
         assert!((effect.color.green - expected.green).abs() <= f32::EPSILON);
         assert!((effect.color.blue - expected.blue).abs() <= f32::EPSILON);
-    }
-
-    #[test]
-    fn replay_last_wave_caches_plan_with_original_seed() {
-        let mut simulation = Simulation::new(
-            4,
-            4,
-            48.0,
-            1,
-            Duration::from_millis(400),
-            Duration::from_millis(1_000),
-            VisualStyle::Primitives,
-            None,
-            None,
-        );
-        simulation.queued_commands.clear();
-
-        let mut emitted = Vec::new();
-        simulation.apply_command(
-            Command::SetPlayMode {
-                mode: PlayMode::Attack,
-            },
-            &mut emitted,
-        );
-
-        let prototype = species_proto(BugColor::from_rgb(0x44, 0x55, 0x66), 12, 360);
-        let plan = build_plan(6, 1, 120, prototype);
-        let inputs = PressureWaveInputs::new(
-            0x9abc_def0,
-            LevelId::new(1),
-            WaveId::new(2),
-            DifficultyLevel::new(3),
-        );
-        let band_seed = spawn_band_seed(&inputs);
-        let effective = inputs.difficulty();
-        simulation.last_replay_plan = Some(ReplayAttackPlan {
-            plan: plan.clone(),
-            difficulty: WaveDifficulty::Hard,
-            effective_difficulty: effective,
-            band_seed,
-        });
-
-        let context = query::wave_seed_context(simulation.world());
-        simulation.replay_last_wave();
-
-        let pending = simulation
-            .pending_wave_launch
-            .as_ref()
-            .expect("replay should queue a pending wave");
-        assert_eq!(pending.wave, context.wave());
-        assert_eq!(pending.difficulty, WaveDifficulty::Hard);
-        assert_eq!(pending.band_seed, Some(band_seed));
-        assert_eq!(pending.inputs.difficulty(), effective);
-        assert_eq!(pending.inputs.wave(), context.wave());
-
-        let command = simulation
-            .queued_commands
-            .last()
-            .expect("replay should queue a cache command");
-        match command {
-            Command::CachePressureWave {
-                inputs,
-                plan: cached_plan,
-            } => {
-                assert_eq!(inputs.wave(), context.wave());
-                assert_eq!(inputs.difficulty(), effective);
-                assert_eq!(cached_plan, &plan);
-            }
-            other => panic!("unexpected command queued: {:?}", other),
-        }
     }
 
     #[test]
@@ -1292,7 +1208,6 @@ impl Simulation {
             last_announced_play_mode: initial_play_mode,
             active_wave: None,
             active_wave_plan: None,
-            last_replay_plan: None,
             ready_wave_launches: VecDeque::new(),
             auto_spawn_enabled: false,
             pending_outcome_command: false,
@@ -1334,14 +1249,9 @@ impl Simulation {
             self.initiate_wave_launch(difficulty);
         }
 
-        if input.replay_wave {
-            self.replay_last_wave();
-        }
-
         self.pending_input = FrameInput {
             mode_toggle: false,
             start_wave: None,
-            replay_wave: false,
             ..input
         };
     }
@@ -1377,47 +1287,9 @@ impl Simulation {
             inputs: inputs.clone(),
             wave: context.wave(),
             difficulty,
-            band_seed: None,
         });
         self.queued_commands
             .push(Command::GeneratePressureWave { inputs });
-    }
-
-    fn replay_last_wave(&mut self) {
-        if query::play_mode(&self.world) != PlayMode::Attack {
-            return;
-        }
-
-        if self.pending_wave_launch.is_some()
-            || self.active_wave.is_some()
-            || self.awaiting_round_resolution
-        {
-            return;
-        }
-
-        let Some(replay) = self.last_replay_plan.clone() else {
-            return;
-        };
-
-        let context = query::wave_seed_context(&self.world);
-        let level_id = query::level_id(&self.world);
-        let inputs = PressureWaveInputs::new(
-            context.global_seed(),
-            level_id,
-            context.wave(),
-            replay.effective_difficulty,
-        );
-
-        self.pending_wave_launch = Some(PendingWaveLaunch {
-            inputs: inputs.clone(),
-            wave: context.wave(),
-            difficulty: replay.difficulty,
-            band_seed: Some(replay.band_seed),
-        });
-        self.queued_commands.push(Command::CachePressureWave {
-            inputs,
-            plan: replay.plan.clone(),
-        });
     }
 
     fn record_attack_plan_events(&mut self, events: &[Event]) -> Vec<ReadyWaveLaunch> {
@@ -1425,14 +1297,11 @@ impl Simulation {
             if let Event::PressureWaveReady { inputs, plan } = event {
                 if let Some(pending) = &self.pending_wave_launch {
                     if pending.inputs == *inputs {
-                        let band_seed =
-                            pending.band_seed.unwrap_or_else(|| spawn_band_seed(inputs));
                         let launch = ReadyWaveLaunch {
                             inputs: inputs.clone(),
                             wave: pending.wave,
                             difficulty: pending.difficulty,
                             plan: plan.clone(),
-                            band_seed,
                         };
                         self.ready_wave_launches.push_back(launch);
                         self.pending_wave_launch = None;
@@ -1460,16 +1329,9 @@ impl Simulation {
             wave,
             difficulty,
             plan,
-            band_seed,
         } = launch;
 
-        self.active_wave_plan = Some(plan.clone());
-        self.last_replay_plan = Some(ReplayAttackPlan {
-            plan,
-            difficulty,
-            effective_difficulty: inputs.difficulty(),
-            band_seed,
-        });
+        self.active_wave_plan = Some(plan);
         let plan_ref = self
             .active_wave_plan
             .as_ref()
@@ -1478,6 +1340,7 @@ impl Simulation {
         self.print_wave_launch_summary(wave, difficulty, plan_ref);
 
         let spawners = query::bug_spawners(&self.world);
+        let band_seed = spawn_band_seed(&inputs);
         let wave_state = WaveState::new(plan_ref, &self.species_prototypes, &spawners, band_seed);
         self.active_wave = Some(wave_state);
         self.awaiting_round_resolution = true;
@@ -1967,14 +1830,13 @@ impl Simulation {
             .analytics_report
             .clone()
             .map(AnalyticsPresentation::new);
-        scene.can_replay_wave = self.last_replay_plan.is_some();
     }
 
     fn spawn_effects(&self) -> Vec<SpawnEffect> {
         let effect_sources = if let Some(wave) = &self.active_wave {
             wave.pending_spawn_effects()
         } else if let Some(launch) = self.ready_wave_launches.front() {
-            self.spawn_effect_cells_for_plan(&launch.plan, launch.band_seed)
+            self.spawn_effect_cells_for_plan(&launch.plan, &launch.inputs)
         } else {
             Vec::new()
         };
@@ -1994,7 +1856,7 @@ impl Simulation {
     fn spawn_effect_cells_for_plan(
         &self,
         plan: &PressureWavePlan,
-        band_seed: u64,
+        inputs: &PressureWaveInputs,
     ) -> Vec<(CellCoord, BugColor)> {
         if plan.spawns().is_empty() {
             return Vec::new();
@@ -2005,7 +1867,8 @@ impl Simulation {
             return Vec::new();
         }
 
-        let preview = WaveState::new(plan, &self.species_prototypes, &spawners, band_seed);
+        let seed = spawn_band_seed(inputs);
+        let preview = WaveState::new(plan, &self.species_prototypes, &spawners, seed);
         preview.pending_spawn_effects()
     }
 
