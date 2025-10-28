@@ -382,6 +382,7 @@ fn main() -> Result<()> {
         )),
         None,
         None,
+        false,
     );
     simulation.populate_scene(&mut scene);
 
@@ -449,6 +450,7 @@ struct Simulation {
     last_announced_play_mode: PlayMode,
     active_wave: Option<WaveState>,
     active_wave_plan: Option<PressureWavePlan>,
+    last_attack_plan: Option<ReplayAttackPlan>,
     ready_wave_launches: VecDeque<ReadyWaveLaunch>,
     auto_spawn_enabled: bool,
     pending_outcome_command: bool,
@@ -563,7 +565,7 @@ impl BugMotion {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 struct ScheduledSpawn {
     at: Duration,
     spawner: CellCoord,
@@ -771,6 +773,18 @@ impl WaveState {
         }
     }
 
+    fn from_schedule(scheduled: Vec<ScheduledSpawn>) -> Self {
+        Self {
+            scheduled,
+            next_spawn: 0,
+            elapsed: Duration::ZERO,
+        }
+    }
+
+    fn scheduled(&self) -> &[ScheduledSpawn] {
+        &self.scheduled
+    }
+
     fn advance(&mut self, dt: Duration, out: &mut Vec<Command>) {
         self.elapsed = self.elapsed.saturating_add(dt);
         while let Some(spawn) = self.scheduled.get(self.next_spawn) {
@@ -814,6 +828,15 @@ struct ReadyWaveLaunch {
     wave: WaveId,
     difficulty: WaveDifficulty,
     plan: PressureWavePlan,
+    scheduled_spawns: Option<Vec<ScheduledSpawn>>,
+}
+
+#[derive(Clone, Debug)]
+struct ReplayAttackPlan {
+    inputs: PressureWaveInputs,
+    difficulty: WaveDifficulty,
+    plan: PressureWavePlan,
+    scheduled_spawns: Vec<ScheduledSpawn>,
 }
 
 fn resolve_step_ms(base: NonZeroU32, speed_mult: f32) -> NonZeroU32 {
@@ -847,7 +870,7 @@ fn spawn_band_seed(inputs: &PressureWaveInputs) -> u64 {
 mod tests {
     use super::*;
     use maze_defence_core::{DifficultyLevel, LevelId, PressureSpawnRecord, WaveDifficulty};
-    use std::{collections::HashSet, time::Duration};
+    use std::{collections::HashSet, num::NonZeroU32, time::Duration};
 
     fn species_proto(color: BugColor, health: u32, step_ms: u32) -> SpeciesPrototype {
         SpeciesPrototype::new(
@@ -1014,6 +1037,7 @@ mod tests {
             wave: WaveId::new(3),
             difficulty: WaveDifficulty::Normal,
             plan,
+            scheduled_spawns: None,
         });
 
         let effects = simulation.spawn_effects();
@@ -1102,6 +1126,69 @@ mod tests {
             .iter()
             .any(|event| matches!(event, Event::DifficultyLevelChanged { level } if *level == DifficultyLevel::new(7)));
         assert!(emitted, "difficulty change should emit an event");
+    }
+
+    #[test]
+    fn replay_last_attack_plan_enqueues_cached_launch() {
+        let mut simulation = Simulation::new(
+            4,
+            4,
+            48.0,
+            1,
+            Duration::from_millis(400),
+            Duration::from_millis(1_000),
+            VisualStyle::Primitives,
+            None,
+            None,
+        );
+
+        let inputs = PressureWaveInputs::new(
+            0xfeed_beef,
+            LevelId::new(1),
+            WaveId::new(2),
+            DifficultyLevel::new(3),
+        );
+        let color = BugColor::from_rgb(0xaa, 0xbb, 0xcc);
+        let prototype = species_proto(color, 5, 500);
+        let plan = build_plan(3, 0, 200, prototype);
+        let scheduled = vec![ScheduledSpawn::new(
+            Duration::from_millis(250),
+            CellCoord::new(0, 0),
+            color,
+            Health::new(5),
+            NonZeroU32::new(400).expect("non-zero step"),
+        )];
+
+        let mut emitted = Vec::new();
+        simulation.apply_command(Command::SetPlayMode { mode: PlayMode::Attack }, &mut emitted);
+        simulation.pending_events.extend(emitted);
+
+        simulation.last_attack_plan = Some(ReplayAttackPlan {
+            inputs: inputs.clone(),
+            difficulty: WaveDifficulty::Normal,
+            plan: plan.clone(),
+            scheduled_spawns: scheduled.clone(),
+        });
+
+        assert!(simulation.can_replay_last_attack_plan());
+
+        simulation.replay_last_attack_plan();
+
+        let launch = simulation
+            .take_ready_wave_launch()
+            .expect("replay should enqueue launch");
+        assert_eq!(launch.inputs, inputs);
+        assert_eq!(launch.plan, plan);
+        let scheduled_from_launch = launch
+            .scheduled_spawns
+            .expect("replay launch should include scheduled spawns");
+        assert_eq!(scheduled_from_launch, scheduled);
+
+        let queued_cache = simulation
+            .queued_commands()
+            .iter()
+            .any(|command| matches!(command, Command::CachePressureWave { .. }));
+        assert!(queued_cache, "replay should queue cache command");
     }
 }
 
@@ -1208,6 +1295,7 @@ impl Simulation {
             last_announced_play_mode: initial_play_mode,
             active_wave: None,
             active_wave_plan: None,
+            last_attack_plan: None,
             ready_wave_launches: VecDeque::new(),
             auto_spawn_enabled: false,
             pending_outcome_command: false,
@@ -1249,9 +1337,14 @@ impl Simulation {
             self.initiate_wave_launch(difficulty);
         }
 
+        if input.replay_wave {
+            self.replay_last_attack_plan();
+        }
+
         self.pending_input = FrameInput {
             mode_toggle: false,
             start_wave: None,
+            replay_wave: false,
             ..input
         };
     }
@@ -1292,6 +1385,34 @@ impl Simulation {
             .push(Command::GeneratePressureWave { inputs });
     }
 
+    fn replay_last_attack_plan(&mut self) {
+        if !self.can_replay_last_attack_plan() {
+            return;
+        }
+
+        let Some(replay) = self.last_attack_plan.clone() else {
+            return;
+        };
+
+        let ReplayAttackPlan {
+            inputs,
+            difficulty,
+            plan,
+            scheduled_spawns,
+        } = replay;
+
+        let wave = inputs.wave();
+        self.ready_wave_launches.push_back(ReadyWaveLaunch {
+            inputs: inputs.clone(),
+            wave,
+            difficulty,
+            plan: plan.clone(),
+            scheduled_spawns: Some(scheduled_spawns),
+        });
+
+        self.queued_commands.push(Command::CachePressureWave { inputs, plan });
+    }
+
     fn record_attack_plan_events(&mut self, events: &[Event]) -> Vec<ReadyWaveLaunch> {
         for event in events {
             if let Event::PressureWaveReady { inputs, plan } = event {
@@ -1302,6 +1423,7 @@ impl Simulation {
                             wave: pending.wave,
                             difficulty: pending.difficulty,
                             plan: plan.clone(),
+                            scheduled_spawns: None,
                         };
                         self.ready_wave_launches.push_back(launch);
                         self.pending_wave_launch = None;
@@ -1329,6 +1451,7 @@ impl Simulation {
             wave,
             difficulty,
             plan,
+            scheduled_spawns,
         } = launch;
 
         self.active_wave_plan = Some(plan);
@@ -1339,9 +1462,22 @@ impl Simulation {
 
         self.print_wave_launch_summary(wave, difficulty, plan_ref);
 
-        let spawners = query::bug_spawners(&self.world);
-        let band_seed = spawn_band_seed(&inputs);
-        let wave_state = WaveState::new(plan_ref, &self.species_prototypes, &spawners, band_seed);
+        let wave_state = if let Some(schedule) = scheduled_spawns {
+            WaveState::from_schedule(schedule)
+        } else {
+            let spawners = query::bug_spawners(&self.world);
+            let band_seed = spawn_band_seed(&inputs);
+            WaveState::new(plan_ref, &self.species_prototypes, &spawners, band_seed)
+        };
+
+        let schedule_snapshot = wave_state.scheduled().to_vec();
+        self.last_attack_plan = Some(ReplayAttackPlan {
+            inputs: inputs.clone(),
+            difficulty,
+            plan: plan_ref.clone(),
+            scheduled_spawns: schedule_snapshot,
+        });
+
         self.active_wave = Some(wave_state);
         self.awaiting_round_resolution = true;
         self.pending_outcome_command = false;
@@ -1830,6 +1966,7 @@ impl Simulation {
             .analytics_report
             .clone()
             .map(AnalyticsPresentation::new);
+        scene.replay_available = self.can_replay_last_attack_plan();
     }
 
     fn spawn_effects(&self) -> Vec<SpawnEffect> {
@@ -1851,6 +1988,14 @@ impl Simulation {
                 )
             })
             .collect()
+    }
+
+    fn can_replay_last_attack_plan(&self) -> bool {
+        self.last_attack_plan.is_some()
+            && self.pending_wave_launch.is_none()
+            && self.active_wave.is_none()
+            && !self.awaiting_round_resolution
+            && query::play_mode(&self.world) == PlayMode::Attack
     }
 
     fn spawn_effect_cells_for_plan(
