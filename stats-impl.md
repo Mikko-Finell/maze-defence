@@ -106,7 +106,7 @@ math and bounded iteration.
 **Exit checks:** Metrics module compiles, tests cover edge cases, and all loops
 execute in O(path_length × tower_count) time with documented bounds.
 
-# 5) [TODO] Adapter integration & docs (`adapters` + guides)
+# 5) [DONE] Adapter integration & docs (`adapters` + guides)
 
 **Goal:** Surface analytics to build-mode UI without coupling adapters to system
 internals, and document usage for future maintainers.
@@ -119,11 +119,12 @@ internals, and document usage for future maintainers.
 * [x] Document the analytics flow in `build-mode.md` (or a dedicated `stats-spec.md`)
   covering recompute triggers, expected latency, and background execution
   guarantees.
-* [ ] Extend replay/tests to ensure analytics events appear deterministically given
+* [x] Extend replay/tests to ensure analytics events appear deterministically given
   a fixed build sequence.
-* [ ] Run the full guard suite (`cargo fmt --check`, `cargo clippy --deny warnings`,
-  `cargo test`, `cargo hack check --each-feature`, `cargo +nightly udeps`) to
-  establish a clean baseline once analytics land.
+* [x] Run the full guard suite (`cargo fmt --check`, `cargo clippy --deny warnings`,
+  `cargo test`, `cargo hack check --each-feature`; `cargo +nightly udeps` is
+  unavailable in this environment) to establish a clean baseline once analytics
+  land.
 
 **Exit checks:** UI receives analytics updates without new tight coupling,
 replay fixtures remain deterministic, and documentation explains the background
