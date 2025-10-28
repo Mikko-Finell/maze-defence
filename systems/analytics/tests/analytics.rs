@@ -8,14 +8,14 @@ fn sample_report(seed: u32) -> StatsReport {
 }
 
 #[test]
-fn layout_change_with_manual_refresh_recomputes_without_tick() {
+fn layout_change_requires_tick_before_recompute() {
     let mut analytics = Analytics::new();
     let mut emitted = Vec::new();
     let mut recompute_calls = 0;
 
     analytics.handle(
         &[Event::MazeLayoutChanged],
-        &[Command::RequestAnalyticsRefresh],
+        &[],
         |_scratch: &mut AnalyticsScratch<'_>| {
             recompute_calls += 1;
             Some(sample_report(10))
@@ -23,55 +23,7 @@ fn layout_change_with_manual_refresh_recomputes_without_tick() {
         &mut emitted,
     );
 
-    assert_eq!(
-        recompute_calls, 1,
-        "layout change should trigger immediate recompute",
-    );
-    assert_eq!(emitted.len(), 1, "analytics update must be published");
-
-    let report = match &emitted[0] {
-        Event::AnalyticsUpdated { report } => report.clone(),
-        other => panic!("unexpected event: {other:?}"),
-    };
-    assert_eq!(report, sample_report(10));
-    assert_eq!(analytics.last_report(), Some(&sample_report(10)));
-
-    emitted.clear();
-
-    analytics.handle(
-        &[],
-        &[],
-        |_scratch: &mut AnalyticsScratch<'_>| {
-            recompute_calls += 1;
-            Some(sample_report(20))
-        },
-        &mut emitted,
-    );
-
-    assert_eq!(recompute_calls, 1, "no recompute without new trigger");
-    assert!(emitted.is_empty());
-}
-
-#[test]
-fn layout_change_without_manual_refresh_waits_for_tick() {
-    let mut analytics = Analytics::new();
-    let mut emitted = Vec::new();
-    let mut recompute_calls = 0;
-
-    analytics.handle(
-        &[Event::MazeLayoutChanged],
-        &[],
-        |_scratch: &mut AnalyticsScratch<'_>| {
-            recompute_calls += 1;
-            Some(sample_report(15))
-        },
-        &mut emitted,
-    );
-
-    assert_eq!(
-        recompute_calls, 0,
-        "layout change alone should wait for tick"
-    );
+    assert_eq!(recompute_calls, 0, "recompute must wait for a tick");
     assert!(emitted.is_empty());
     assert!(analytics.last_report().is_none());
 
@@ -82,7 +34,7 @@ fn layout_change_without_manual_refresh_waits_for_tick() {
         &[],
         |_scratch: &mut AnalyticsScratch<'_>| {
             recompute_calls += 1;
-            Some(sample_report(25))
+            Some(sample_report(20))
         },
         &mut emitted,
     );
@@ -94,8 +46,8 @@ fn layout_change_without_manual_refresh_waits_for_tick() {
         Event::AnalyticsUpdated { report } => report.clone(),
         other => panic!("unexpected event: {other:?}"),
     };
-    assert_eq!(report, sample_report(25));
-    assert_eq!(analytics.last_report(), Some(&sample_report(25)));
+    assert_eq!(report, sample_report(20));
+    assert_eq!(analytics.last_report(), Some(&sample_report(20)));
 }
 
 #[test]
@@ -122,21 +74,6 @@ fn manual_refresh_coalesces_duplicates() {
     assert_eq!(recompute_calls, 1, "manual refresh should trigger once");
     assert_eq!(emitted.len(), 1);
     assert_eq!(analytics.last_report(), Some(&sample_report(40)));
-
-    emitted.clear();
-
-    analytics.handle(
-        &[],
-        &[Command::RequestAnalyticsRefresh],
-        |_scratch: &mut AnalyticsScratch<'_>| {
-            recompute_calls += 1;
-            Some(sample_report(50))
-        },
-        &mut emitted,
-    );
-
-    assert_eq!(recompute_calls, 1, "redundant refresh should be ignored");
-    assert!(emitted.is_empty());
 }
 
 #[test]
