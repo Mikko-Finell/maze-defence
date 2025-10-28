@@ -7,6 +7,12 @@ use maze_defence_core::{
 
 use crate::AnalyticsScratch;
 
+fn cell_center(cell: &CellCoord) -> (i64, i64) {
+    let column = i64::from(cell.column()) * 2 + 1;
+    let row = i64::from(cell.row()) * 2 + 1;
+    (column, row)
+}
+
 /// Selects the canonical shortest path from the provided spawners to the maze exits.
 ///
 /// The navigation field already stores monotonically decreasing distances seeded
@@ -75,17 +81,11 @@ pub fn tower_coverage_mean_bps(path: &[CellCoord], towers: &TowerAnalyticsView) 
     let mut covered_sum: u128 = 0;
 
     for cell in path {
-        let cell_center_column = i64::from(cell.column()) * 2 + 1;
-        let cell_center_row = i64::from(cell.row()) * 2 + 1;
-
+        let (cell_center_column, cell_center_row) = cell_center(cell);
         let mut towers_in_range = 0_u32;
 
         for tower in &cached {
-            let dx = i128::from(cell_center_column).saturating_sub(i128::from(tower.center_column));
-            let dy = i128::from(cell_center_row).saturating_sub(i128::from(tower.center_row));
-            let distance_sq = dx.saturating_mul(dx).saturating_add(dy.saturating_mul(dy));
-
-            if distance_sq <= tower.range_squared_half {
+            if tower.contains_cell(cell_center_column, cell_center_row) {
                 towers_in_range = towers_in_range.saturating_add(1);
             }
         }
@@ -100,6 +100,52 @@ pub fn tower_coverage_mean_bps(path: &[CellCoord], towers: &TowerAnalyticsView) 
     }
 
     let numerator = covered_sum.saturating_mul(10_000);
+    (numerator / denominator) as u32
+}
+
+/// Returns the path percentage (in basis points) completed when every tower has a firing
+/// opportunity.
+///
+/// The path is traversed in order, recording the first cell index each tower can reach. The
+/// furthest first opportunity determines when the entire defence is online. If any tower never
+/// gains line-of-sight this saturates at 100% (`10_000` basis points).
+#[must_use]
+pub fn tower_firing_completion_percent_bps(path: &[CellCoord], towers: &TowerAnalyticsView) -> u32 {
+    if towers.iter().count() == 0 || path.is_empty() {
+        return 0;
+    }
+
+    let mut furthest_index = 0_usize;
+    let mut unreachable_tower = false;
+
+    for snapshot in towers.iter() {
+        let Some(cache) = TowerRangeCache::from_snapshot(snapshot) else {
+            unreachable_tower = true;
+            continue;
+        };
+
+        match cache.first_path_index(path) {
+            Some(index) => {
+                if index > furthest_index {
+                    furthest_index = index;
+                }
+            }
+            None => unreachable_tower = true,
+        }
+    }
+
+    if unreachable_tower {
+        return 10_000;
+    }
+
+    let steps = path.len().saturating_sub(1) as u64;
+
+    if steps == 0 {
+        return 0;
+    }
+
+    let numerator = u128::from(furthest_index as u64).saturating_mul(10_000);
+    let denominator = u128::from(steps);
     (numerator / denominator) as u32
 }
 
@@ -127,6 +173,24 @@ impl TowerRangeCache {
             center_column,
             center_row,
             range_squared_half,
+        })
+    }
+
+    fn contains_cell(&self, cell_center_column: i64, cell_center_row: i64) -> bool {
+        let dx = i128::from(cell_center_column).saturating_sub(i128::from(self.center_column));
+        let dy = i128::from(cell_center_row).saturating_sub(i128::from(self.center_row));
+        let distance_sq = dx.saturating_mul(dx).saturating_add(dy.saturating_mul(dy));
+        distance_sq <= self.range_squared_half
+    }
+
+    fn first_path_index(&self, path: &[CellCoord]) -> Option<usize> {
+        path.iter().enumerate().find_map(|(index, cell)| {
+            let (column, row) = cell_center(cell);
+            if self.contains_cell(column, row) {
+                Some(index)
+            } else {
+                None
+            }
         })
     }
 }
@@ -205,7 +269,10 @@ fn neighbors(cell: CellCoord, width: u32, height: u32) -> impl Iterator<Item = C
 
 #[cfg(test)]
 mod tests {
-    use super::{select_shortest_navigation_path, tower_coverage_mean_bps};
+    use super::{
+        select_shortest_navigation_path, tower_coverage_mean_bps,
+        tower_firing_completion_percent_bps,
+    };
     use crate::AnalyticsScratch;
     use maze_defence_core::{
         AnalyticsLayoutSnapshot, CellCoord, CellRect, CellRectSize, NavigationFieldView,
@@ -318,5 +385,92 @@ mod tests {
 
         let path = vec![CellCoord::new(0, 0)];
         assert_eq!(tower_coverage_mean_bps(&path, &towers), 0);
+    }
+
+    #[test]
+    fn firing_completion_tracks_furthest_first_opportunity() {
+        let path = vec![
+            CellCoord::new(0, 0),
+            CellCoord::new(1, 0),
+            CellCoord::new(2, 0),
+            CellCoord::new(3, 0),
+        ];
+
+        let towers = TowerAnalyticsView::from_snapshots(vec![
+            TowerAnalyticsSnapshot {
+                tower: TowerId::new(1),
+                kind: TowerKind::Basic,
+                region: CellRect::from_origin_and_size(
+                    CellCoord::new(0, 0),
+                    CellRectSize::new(1, 1),
+                ),
+                range_cells: 1,
+                damage_per_second: 10,
+            },
+            TowerAnalyticsSnapshot {
+                tower: TowerId::new(2),
+                kind: TowerKind::Basic,
+                region: CellRect::from_origin_and_size(
+                    CellCoord::new(3, 0),
+                    CellRectSize::new(1, 1),
+                ),
+                range_cells: 1,
+                damage_per_second: 10,
+            },
+        ]);
+
+        let completion = tower_firing_completion_percent_bps(&path, &towers);
+        assert_eq!(completion, 6_666);
+    }
+
+    #[test]
+    fn firing_completion_saturates_when_tower_never_sees_path() {
+        let path = vec![CellCoord::new(0, 0), CellCoord::new(1, 0)];
+
+        let towers = TowerAnalyticsView::from_snapshots(vec![TowerAnalyticsSnapshot {
+            tower: TowerId::new(1),
+            kind: TowerKind::Basic,
+            region: CellRect::from_origin_and_size(CellCoord::new(5, 5), CellRectSize::new(1, 1)),
+            range_cells: 1,
+            damage_per_second: 10,
+        }]);
+
+        let completion = tower_firing_completion_percent_bps(&path, &towers);
+        assert_eq!(completion, 10_000);
+    }
+
+    #[test]
+    fn firing_completion_handles_single_cell_path() {
+        let path = vec![CellCoord::new(0, 0)];
+
+        let towers = TowerAnalyticsView::from_snapshots(vec![TowerAnalyticsSnapshot {
+            tower: TowerId::new(1),
+            kind: TowerKind::Basic,
+            region: CellRect::from_origin_and_size(CellCoord::new(0, 0), CellRectSize::new(1, 1)),
+            range_cells: 1,
+            damage_per_second: 10,
+        }]);
+
+        let completion = tower_firing_completion_percent_bps(&path, &towers);
+        assert_eq!(completion, 0);
+
+        let unreachable_tower = TowerAnalyticsView::from_snapshots(vec![TowerAnalyticsSnapshot {
+            tower: TowerId::new(2),
+            kind: TowerKind::Basic,
+            region: CellRect::from_origin_and_size(CellCoord::new(4, 4), CellRectSize::new(1, 1)),
+            range_cells: 1,
+            damage_per_second: 10,
+        }]);
+
+        let completion_unreachable = tower_firing_completion_percent_bps(&path, &unreachable_tower);
+        assert_eq!(completion_unreachable, 10_000);
+    }
+
+    #[test]
+    fn firing_completion_zero_when_no_towers() {
+        let path = vec![CellCoord::new(0, 0), CellCoord::new(1, 0)];
+        let towers = TowerAnalyticsView::default();
+
+        assert_eq!(tower_firing_completion_percent_bps(&path, &towers), 0);
     }
 }

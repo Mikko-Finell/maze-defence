@@ -15,7 +15,9 @@ use maze_defence_core::{CellCoord, Command, Event, StatsReport};
 
 mod metrics;
 
-pub use metrics::{select_shortest_navigation_path, tower_coverage_mean_bps};
+pub use metrics::{
+    select_shortest_navigation_path, tower_coverage_mean_bps, tower_firing_completion_percent_bps,
+};
 
 /// Pure analytics system that queues recompute requests and emits published reports.
 #[derive(Debug, Default)]
