@@ -149,6 +149,42 @@ pub fn tower_firing_completion_percent_bps(path: &[CellCoord], towers: &TowerAna
     (numerator / denominator) as u32
 }
 
+/// Counts the towers contained in the analytics snapshot, saturating on overflow.
+///
+/// The view already arrives sorted and deduplicated by the world snapshot logic, so
+/// counting the iterator yields the deterministic tower population. Saturating the
+/// cast protects against pathological editor scenarios that exceed `u32::MAX`
+/// towers, keeping the result bounded for `StatsReport` serialization.
+#[must_use]
+pub fn tower_count(towers: &TowerAnalyticsView) -> u32 {
+    let count = towers.iter().count();
+    if count > u32::MAX as usize {
+        u32::MAX
+    } else {
+        count as u32
+    }
+}
+
+/// Sums the precomputed tower DPS values provided by the world snapshot.
+///
+/// `TowerAnalyticsSnapshot::damage_per_second` is sourced from the authoritative
+/// combat configuration via `world::analytics::compute_tower_dps`, so analytics do
+/// not duplicate combat math. The sum saturates to `u32::MAX` to match the
+/// [`StatsReport`](maze_defence_core::StatsReport) contract even if editors inject
+/// extreme tower counts or damage overrides.
+#[must_use]
+pub fn total_tower_dps(towers: &TowerAnalyticsView) -> u32 {
+    let total = towers.iter().fold(0_u64, |acc, snapshot| {
+        acc.saturating_add(u64::from(snapshot.damage_per_second))
+    });
+
+    if total > u64::from(u32::MAX) {
+        u32::MAX
+    } else {
+        total as u32
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 struct TowerRangeCache {
     center_column: i64,
@@ -270,7 +306,7 @@ fn neighbors(cell: CellCoord, width: u32, height: u32) -> impl Iterator<Item = C
 #[cfg(test)]
 mod tests {
     use super::{
-        select_shortest_navigation_path, tower_coverage_mean_bps,
+        select_shortest_navigation_path, total_tower_dps, tower_count, tower_coverage_mean_bps,
         tower_firing_completion_percent_bps,
     };
     use crate::AnalyticsScratch;
@@ -472,5 +508,61 @@ mod tests {
         let towers = TowerAnalyticsView::default();
 
         assert_eq!(tower_firing_completion_percent_bps(&path, &towers), 0);
+    }
+
+    #[test]
+    fn tower_count_reflects_snapshot_population() {
+        let towers = TowerAnalyticsView::from_snapshots(vec![
+            TowerAnalyticsSnapshot {
+                tower: TowerId::new(1),
+                kind: TowerKind::Basic,
+                region: CellRect::from_origin_and_size(
+                    CellCoord::new(0, 0),
+                    CellRectSize::new(1, 1),
+                ),
+                range_cells: 1,
+                damage_per_second: 25,
+            },
+            TowerAnalyticsSnapshot {
+                tower: TowerId::new(2),
+                kind: TowerKind::Basic,
+                region: CellRect::from_origin_and_size(
+                    CellCoord::new(1, 0),
+                    CellRectSize::new(1, 1),
+                ),
+                range_cells: 2,
+                damage_per_second: 30,
+            },
+        ]);
+
+        assert_eq!(tower_count(&towers), 2);
+    }
+
+    #[test]
+    fn total_tower_dps_saturates_to_u32_max() {
+        let towers = TowerAnalyticsView::from_snapshots(vec![
+            TowerAnalyticsSnapshot {
+                tower: TowerId::new(1),
+                kind: TowerKind::Basic,
+                region: CellRect::from_origin_and_size(
+                    CellCoord::new(0, 0),
+                    CellRectSize::new(1, 1),
+                ),
+                range_cells: 1,
+                damage_per_second: u32::MAX,
+            },
+            TowerAnalyticsSnapshot {
+                tower: TowerId::new(2),
+                kind: TowerKind::Basic,
+                region: CellRect::from_origin_and_size(
+                    CellCoord::new(1, 0),
+                    CellRectSize::new(1, 1),
+                ),
+                range_cells: 1,
+                damage_per_second: 1,
+            },
+        ]);
+
+        assert_eq!(total_tower_dps(&towers), u32::MAX);
     }
 }
