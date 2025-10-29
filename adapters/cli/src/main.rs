@@ -629,23 +629,21 @@ impl WaveState {
             };
         }
 
+        let start_index = rng.gen_range(0..spawner_count);
+        ordered_spawners.rotate_left(start_index);
+
         let mut species_ids = BTreeSet::new();
         for spawn in plan.spawns() {
             let _ = species_ids.insert(SpeciesId::new(spawn.species_id()));
         }
-        if species_ids.is_empty() {
+        let species_order: Vec<SpeciesId> = species_ids.into_iter().collect();
+        if species_order.is_empty() {
             return Self {
                 scheduled: Vec::new(),
                 next_spawn: 0,
                 elapsed: Duration::ZERO,
             };
         }
-
-        let mut next_band_start = if spawner_count == 0 {
-            0
-        } else {
-            rng.gen_range(0..spawner_count)
-        };
 
         #[derive(Clone, Debug)]
         struct BandState {
@@ -654,31 +652,63 @@ impl WaveState {
         }
 
         let mut bands: HashMap<SpeciesId, BandState> = HashMap::new();
+        let total_spawners = ordered_spawners.len();
+        let mut assigned = 0usize;
 
-        for species_id in &species_ids {
-            let max_band = MAX_SPAWN_BAND.min(spawner_count).max(1);
-            let min_band = MIN_SPAWN_BAND.min(spawner_count).max(1);
-            let band_len = if min_band >= max_band {
+        for (index, species_id) in species_order.iter().enumerate() {
+            let remaining_cells = total_spawners.saturating_sub(assigned);
+            if remaining_cells == 0 {
+                let _ = bands.insert(
+                    *species_id,
+                    BandState {
+                        cells: Vec::new(),
+                        cursor: 0,
+                    },
+                );
+                continue;
+            }
+
+            let min_band = MIN_SPAWN_BAND.min(remaining_cells).max(1);
+            let max_band = MAX_SPAWN_BAND.min(remaining_cells).max(1);
+            let mut band_len = if min_band >= max_band {
                 min_band
             } else {
                 rng.gen_range(min_band..=max_band)
             };
 
-            let mut cells = Vec::with_capacity(band_len);
-            if spawner_count == band_len {
-                cells.extend(ordered_spawners.iter().copied());
+            let remaining_species = species_order.len().saturating_sub(index + 1);
+            let others = remaining_species;
+            let required_for_all = min_band
+                .checked_mul(others.saturating_add(1))
+                .unwrap_or(usize::MAX);
+            let enough_for_full_min = remaining_cells >= required_for_all;
+            let min_required = if enough_for_full_min {
+                min_band
             } else {
-                for offset in 0..band_len {
-                    let index = (next_band_start + offset) % spawner_count;
-                    cells.push(ordered_spawners[index]);
-                }
+                remaining_cells.saturating_sub(others).max(1)
+            };
+
+            let reserve_for_others = if enough_for_full_min {
+                min_band.checked_mul(others).unwrap_or(remaining_cells)
+            } else {
+                others
+            };
+            let mut max_for_current = remaining_cells
+                .saturating_sub(reserve_for_others)
+                .max(min_required);
+            max_for_current = max_for_current.min(remaining_cells);
+
+            band_len = band_len.clamp(min_required, max_for_current);
+            if index == species_order.len() - 1 {
+                band_len = remaining_cells;
             }
+
+            let end = assigned.saturating_add(band_len.min(remaining_cells));
+            let cells = ordered_spawners[assigned..end].to_vec();
+            assigned = end;
 
             let band_state = BandState { cells, cursor: 0 };
             let _ = bands.insert(*species_id, band_state);
-            if spawner_count > 0 {
-                next_band_start = (next_band_start + band_len) % spawner_count;
-            }
         }
 
         let mut availability: HashMap<CellCoord, Duration> = HashMap::new();
@@ -689,26 +719,16 @@ impl WaveState {
         let mut scheduled = Vec::with_capacity(plan.spawns().len());
         for (index, spawn) in plan.spawns().iter().enumerate() {
             let species_id = SpeciesId::new(spawn.species_id());
-            let band = if bands.contains_key(&species_id) {
-                bands
-                    .get_mut(&species_id)
-                    .expect("species band should exist once assigned")
-            } else {
-                let fallback_id = *bands
-                    .keys()
-                    .next()
-                    .expect("at least one band must be registered");
-                bands
-                    .get_mut(&fallback_id)
-                    .expect("fallback band should exist")
-            };
-            let cell = if band.cells.is_empty() {
-                ordered_spawners[index % spawner_count]
-            } else {
-                let cell = band.cells[band.cursor % band.cells.len()];
-                band.cursor = band.cursor.wrapping_add(1);
-                cell
-            };
+            let band = bands
+                .get_mut(&species_id)
+                .expect("species band should exist once assigned");
+            assert!(
+                !band.cells.is_empty(),
+                "species must have at least one assigned spawner"
+            );
+            let len = band.cells.len();
+            let cell = band.cells[band.cursor % len];
+            band.cursor = band.cursor.wrapping_add(1);
 
             let prototype = species
                 .get(&species_id)
@@ -964,6 +984,48 @@ mod tests {
     }
 
     #[test]
+    fn multi_species_spawns_use_disjoint_spawners() {
+        let proto_a = species_proto(BugColor::from_rgb(0x10, 0x20, 0x30), 8, 300);
+        let proto_b = species_proto(BugColor::from_rgb(0x90, 0xa0, 0xb0), 12, 300);
+
+        let mut species = HashMap::new();
+        let _ = species.insert(SpeciesId::new(0), proto_a);
+        let _ = species.insert(SpeciesId::new(1), proto_b);
+
+        let mut spawns = Vec::new();
+        for index in 0..4u32 {
+            spawns.push(PressureSpawnRecord::new(index * 200, 10, 1.0, 0));
+            spawns.push(PressureSpawnRecord::new(100 + index * 200, 9, 1.0, 1));
+        }
+
+        let plan = PressureWavePlan::new(spawns, vec![proto_a, proto_b]);
+
+        let spawner_count = u32::try_from(MIN_SPAWN_BAND + 1).unwrap_or(1);
+        let spawners = band_spawners(spawner_count);
+
+        let wave = WaveState::new(&plan, &species, &spawners, 0x1a2b_3c4d);
+        assert_eq!(wave.scheduled.len(), plan.spawns().len());
+
+        let mut per_cell_species: HashMap<CellCoord, SpeciesId> = HashMap::new();
+        for spawn in &wave.scheduled {
+            let species_id = if spawn.color == proto_a.color() {
+                SpeciesId::new(0)
+            } else if spawn.color == proto_b.color() {
+                SpeciesId::new(1)
+            } else {
+                panic!("unexpected spawn color: {:?}", spawn.color);
+            };
+
+            let entry = per_cell_species.entry(spawn.spawner).or_insert(species_id);
+            assert_eq!(
+                *entry, species_id,
+                "spawner {:?} reused across species",
+                spawn.spawner
+            );
+        }
+    }
+
+    #[test]
     fn deterministic_band_assignment() {
         let mut species = HashMap::new();
         let prototype = species_proto(BugColor::from_rgb(5, 6, 7), 9, 360);
@@ -1160,7 +1222,12 @@ mod tests {
         )];
 
         let mut emitted = Vec::new();
-        simulation.apply_command(Command::SetPlayMode { mode: PlayMode::Attack }, &mut emitted);
+        simulation.apply_command(
+            Command::SetPlayMode {
+                mode: PlayMode::Attack,
+            },
+            &mut emitted,
+        );
         simulation.pending_events.extend(emitted);
 
         simulation.last_attack_plan = Some(ReplayAttackPlan {
@@ -1410,7 +1477,8 @@ impl Simulation {
             scheduled_spawns: Some(scheduled_spawns),
         });
 
-        self.queued_commands.push(Command::CachePressureWave { inputs, plan });
+        self.queued_commands
+            .push(Command::CachePressureWave { inputs, plan });
     }
 
     fn record_attack_plan_events(&mut self, events: &[Event]) -> Vec<ReadyWaveLaunch> {
